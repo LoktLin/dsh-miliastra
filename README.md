@@ -285,12 +285,32 @@ node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄�
 node tests/lualint-test.mjs       # Lua 结构校验器：合法构造不误报 / 写坏的必须报对行号 / 15 个真文件回归（32 项）
 
 # —— 开发用小工具（不随包发布）——
-node tools/lint-probes.mjs        # 把 4 个探针模板渲染出来逐个校验，出错打印上下文行
+node tools/lint-probes.mjs         # 把 4 个探针模板渲染出来逐个校验，出错打印上下文行
 node tools/lint-all.mjs ../../code # 对整个 code/ 目录跑结构校验
+node tools/live-render-check.mjs   # **向运行中的 Host** 要模板渲染结果并校验（防「跑着的是旧版」）
+node tools/render-probe.mjs api-surface   # **从磁盘**渲染模板并落到 code/<玩法>/（Host 是旧版时用这个）
 
 # —— L4 真机（改完 Host 半边、重启 dsh web 之后）——
 node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 ```
+
+> `patchReload: live` **不会重新 import Host 模块**，所以「磁盘上是对的」≠「跑着的那份是对的」。
+> 部署探针前先跑 `tools/live-render-check.mjs`，免得把旧版模板投进沙箱。
+
+### 探针的硬边界（2026-09-23 实机结论，别再踩）
+
+| 想查 | 能不能 | 说明 |
+|---|---|---|
+| `Enum.*` 子表有哪些成员、值是什么 | ✅ | `pairs(Enum.某子表)` 正常；`Enum.KeyEventType` 实测 **164 项**，与离线文档抽取**逐项对上** |
+| `_G` / `game` / `script` 的成员 | ❌ | `pairs()` 全返回 **0 项**（宿主对象不暴露 raw 表），只能按名字取 |
+| 画布尺寸 | ✅ | `game.GetUICanvasSize()` 返回**浮点**（`1599.9998 x 999.9998`），比较要留容差 |
+| 场景里有哪些客户端控件 | ✅ | `game.GetClientUIRoots()` + `GetClientUIControl(id)` |
+| 某个 `prefabIndex` 能不能被创建 | ✅ | 见「关键知识」第 1 条，用 `instantiate` 模板 |
+| 控件真实渲染出来的像素 | ❌ | 探针只能打文本；观感要截图 |
+
+> ⚠️ **单条日志消息上限实测正好 10000 字符**，超出的部分**静默截断**（不报错、不提示）。
+> 写自己的探针时，长表格/长列表**务必分片打印** —— 否则会得出「枚举里没有这个键」这种反向结论。
+> 内置模板统一走 `pChunked()`（3500 字符一片、带 `(1/3)` 标记）。
 
 > `client-render-test.mjs` 需要 `react` / `react-dom`（已列为 devDependency，`npm install` 即可）。
 > 本机 dsh 把 react 内联进了前端 vendor 产物，没有独立的 react 包可 require，所以这一层用本包自带的真 React 渲染。

@@ -99,6 +99,34 @@
   逐行拆 token 才抓到（`L130:sylocal`）。现在换行占位保留，`tests/lualint-test.mjs` 有 4 条回归断言盯它。
 - **缺 `end` 时报的是「文件最后一行」**，对排障几乎没用。改为记开块栈，报**最内层没关上的那个块**的行号。
 - **`api-surface` 模板里的语法错**（`if … then … end else … end`）—— 由新加的模板结构校验抓出。
+- **探针长输出被日志静默截断**（2026-09-23 实机跑 `api-surface` 时发现）：
+  **单条日志消息上限实测正好 10000 字符**，超出的部分不报错、不提示，直接没了。
+  `Enum.KeyEventType`（164 项）那份刚好打满 10000，而排在字母表后面的
+  `KeyboardMoveLeftKeyDown` / `KeyboardJumpKeyDown` 恰好全被切掉 ——
+  **看日志的人会以为「枚举里没有这个键」**。现在所有长输出走 `pChunked()`，
+  按 3500 字符分片并标注 `(1/3)`；测试也加了守卫（模板必须有分片 helper 且 `CHUNK < 10000`）。
+
+### 2026-09-23 实机验证（首次把探针用在真实排障上）
+
+`api-surface` 探针在正式服关卡 `1073741832` 上跑通（部署 → 试玩 → collect → 还原），
+带回的运行时事实与**离线官方文档抽取结果逐项对上**：
+
+| 项 | 运行时（探针实测） | 离线文档（`tools/extract-key-enums.mjs`） |
+|---|---|---|
+| `Enum.KeyEventType` | 164 项 | 164 项 ✅ |
+| `Enum.KeyboardKeyCode` | 59 项 | 59 项 ✅ |
+| `Enum.ControllerKeyCode` | 25 项 | 25 项 ✅ |
+| 画布尺寸 | `1599.9998 x 999.9998` | 文档口径 1600×1000（**注意是浮点，比较要留容差**） |
+| 容器节点 | `prefab=1073741866` | 与已知常量一致 ✅ |
+
+同轮还确认：
+
+- **`Enum.KeyboardKeyCode` 里没有物理键名**（没有 `W` / `A` / `Space`），只有语义键
+  （`JumpKey` / `MoveLeftKey`…）。所以 `Enum.KeyboardKeyCode.W` **恒为 nil 且不报错**。
+  绑键只能用 `Enum.KeyEventType`。
+- **`_G` / `Enum` / `game` / `script` 用 `pairs()` 枚举全是 0 项**（宿主对象不暴露 raw 表），
+  但 `Enum.<子表>` 可以正常枚举 —— 所以「枚举 API 面」这条路只在 `Enum` 这一层有效。
+- `getmetatable(script).__index` 不可枚举；`script.object` 可用（`tostring` = `ClientUIContainerControl:4`）。
 
 ### 工程 / 仓库
 

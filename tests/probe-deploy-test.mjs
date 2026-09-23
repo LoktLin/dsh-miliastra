@@ -190,7 +190,17 @@ await check('★ 每个探针模板生成出来的 Lua 都通过结构校验（�
     sizes.push(t + ' ' + r.bytes + 'B');
   }
   assert(badTpl.length === 0, '模板结构有问题：' + badTpl.join(' | '));
-  return `${PROBE_TEMPLATES.length} 个模板全通过（${sizes.join(' / ')}）`;
+
+  // 单条日志消息上限**实测正好 10000 字符**，超了会被静默截断。模板必须走分片打印。
+  const noChunk = PROBE_TEMPLATES.filter((t) => !/local function pChunked\(/.test(renderProbe(t, { tag: 'SELFTEST' }).lua));
+  assert(noChunk.length === 0, '这些模板没有分片打印 helper（长输出会被静默截断）：' + noChunk.join(', '));
+  for (const t of PROBE_TEMPLATES) {
+    const lua = renderProbe(t, { tag: 'SELFTEST' }).lua;
+    const m = /local CHUNK = (\d+)/.exec(lua);
+    assert(m, `模板 ${t} 没有 CHUNK 常量`);
+    assert(Number(m[1]) > 0 && Number(m[1]) < 10000, `模板 ${t} 的 CHUNK=${m[1]} 必须小于日志上限 10000`);
+  }
+  return `${PROBE_TEMPLATES.length} 个模板全通过（${sizes.join(' / ')}；均为 ${/local CHUNK = (\d+)/.exec(renderProbe(PROBE_TEMPLATES[0], { tag: 'SELFTEST' }).lua)[1]} 字符分片）`;
 });
 
 console.log('');
