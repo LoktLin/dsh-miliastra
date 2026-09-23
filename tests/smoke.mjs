@@ -52,6 +52,7 @@ const CASES = [
   ['miliastra_health', {}],
   ['miliastra_health', { all: true }],
   ['miliastra_code', { op: 'inspect' }],
+  ['miliastra_code', { op: 'levels' }],                      // 只读：从活文件里抽关卡表算几何事实
   ['miliastra_map', { op: 'summary' }],
   ['miliastra_map', { op: 'clientui' }],
   ['miliastra_map', { op: 'script' }],

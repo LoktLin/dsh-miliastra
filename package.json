@@ -1,6 +1,6 @@
 {
   "name": "dsh-miliastra",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "原神·千星奇域（Miliastra Wonderland）UGC 工具链：活文件定位与部署、地图存档 .gil 读取、运行时日志 .gia 取证、画面截图、探针模板化，外加一个侧边栏状态面板。",
   "type": "module",
   "main": "./index.js",

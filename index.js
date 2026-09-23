@@ -24,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.5';
+const VERSION = '0.0.6';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -39,6 +39,7 @@ import {
   playtestSummary, shouldHit,
 } from './lib/playtest.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
+import { extractLevelTable, describeLevels, findCanvas } from './lib/leveldata.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
@@ -309,7 +310,7 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom'], description: '默认 inspect。' },
+        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels'], description: '默认 inspect。' },
         level: { type: 'string', description: '关卡 ID / 品牌 / 脚本名片段；省略=当前关卡。' },
         file: {
           type: 'string',
@@ -338,6 +339,8 @@ const TOOLS = [
           description: 'op=deploy：Lua 结构校验强度。strict（默认）=不通过就拒绝部署；warn=只带提示照投；off=不校验。',
         },
         head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。' },
+        which: { type: 'string', description: 'op=levels：只看第几关（序号）或名字片段；省略=全部关卡。' },
+        nearPx: { type: 'number', description: 'op=levels：「近似贴上」的筛选阈值（默认 48px）—— **这是筛选，不是判定**。' },
       },
       additionalProperties: false,
     },
@@ -459,6 +462,36 @@ const TOOLS = [
           ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
           error: r.error || null,
           restoreWith: r.restoreWith || restoreCommand(null, destPath),
+        };
+      }
+      if (op === 'levels') {
+        if (!destPath) throw new Error('没找到活文件路径。');
+        const src = fsMod.readFileSync(destPath, 'utf8');
+        const ex = extractLevelTable(src);
+        if (!ex.ok) {
+          return {
+            ok: false, op, file: destPath,
+            error: ex.error, line: ex.line || null, lineText: ex.lineText || null,
+            searchedFor: ex.searchedFor || null, constantsFound: (ex.constants || []).length,
+            hint: ex.hint || null,
+          };
+        }
+        return {
+          ok: true, op, file: destPath,
+          levelCount: ex.levels.length,
+          canvas: findCanvas(ex.constants),
+          blockLines: ex.blockLines,
+          constants: ex.constants,
+          levels: describeLevels(ex.levels, {
+            which: args.which == null || args.which === '' ? null : String(args.which),
+            nearPx: clampNum(args.nearPx, 48, 0, 2000),
+          }),
+          coordinateNote: '坐标**按表里怎么写就怎么报**（该表约定设计坐标 y 从顶向下）。'
+            + '脚本转控件坐标时会翻 y（实测 `canvasH / 2 - dy * sy`）—— **别拿这里的 y 直接和控件坐标比**。',
+          disclaimer: '本工具**只给几何数字，不给「跳得过去 / 不可达」的结论** —— '
+            + '那取决于跳跃初速、重力、移动平台相位，属于玩法。'
+            + '`adjacent` 按**声明顺序**（脚本注释说这是通关路径顺序）；'
+            + '`nearMiss` 的 `nearPx` 是**筛选阈值**，不是判定；`overlaps` 是两块矩形**真的相交**。',
         };
       }
       throw new Error('未知 op：' + op);
