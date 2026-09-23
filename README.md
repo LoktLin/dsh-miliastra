@@ -1,5 +1,7 @@
 # dsh-miliastra
 
+[中文](#30-秒上手不用读完全文) | [English](#english-overview)
+
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
@@ -36,6 +38,68 @@
 
 > 不知道自己该调哪条 → 看下一节的「[工具](#工具)」表（一屏导航），
 > 或者直接翻「[工具速查](#每个工具的完整说明自动生成别手改)」（每个工具的每个 op 与参数，**自动生成，不会过时**）。
+
+---
+
+## English overview
+
+> **In one sentence**: `dsh-miliastra` turns the file-level loop of *Miliastra Wonderland*
+> (Genshin Impact UGC) into native DSH tools — locate the live `levelScript`/client script, deploy it
+> safely, read the map archive and runtime logs, take screenshots, and run probes — so an AI agent
+> can debug a UGC level without you copy-pasting files and logs.
+> **8 tools + a sidebar panel**, Apache-2.0, Windows, DSH `0.1.2-rc.1+`.
+> The Chinese sections above/below are the full manual; this page is the one-screen entry point.
+
+**30-second quick start**
+
+| Step | Call | What you get |
+|---|---|---|
+| **① Locate** | `miliastra_health {}` | current level, absolute path of the live `.lua`, map `.gil`, log directory — **paths change; never hardcode them** |
+| **② Read / write code** | `miliastra_code {"op":"inspect"}` → `miliastra_code {"op":"deploy","source":"<absolute path to your .lua>"}` | health check (BOM / line count / SHA / whether the editor wrote back an older version); deploy **always backs up first, verifies SHA-256, and lints the Lua structure — a failure never touches the live file** |
+| **③ Verify** | `miliastra_playtest {"op":"status"}` → have a human click Playtest → `miliastra_log {"op":"tail","tag":"<your TAG>"}` | whether a playtest is running and for how long; the runtime text your script `print`ed (**runtime truth comes from `print` + evidence, never from guessing**) |
+
+**The 8 tools, one line each**
+
+| Tool | What it is for |
+|---|---|
+| **`miliastra_health`** | Where is everything? Scans all installs / levels / live files / maps / log dirs. **Call this first** |
+| **`miliastra_code`** | The only place that writes: read / deploy / inspect / backup / restore / `fixbom` / `levels` (level-table geometry facts) |
+| **`miliastra_map`** | Read `<level>.gil`: client-UI control hierarchy (which controls a script can instantiate) + script source snapshot |
+| **`miliastra_log`** | Read `.gia` runtime logs: sessions / tail / grep / tags / **`runs`** (split by run + diff) / **`metrics`** (distributions) |
+| **`miliastra_playtest`** | **Live** start/end detection from `output_log.txt` (measured 0.07–0.18 s). The only channel that sees the moment a run starts — `.gia` is written only after a run ends |
+| **`miliastra_shot`** | Screenshots: `capture` / **`burst`** (one call: wait for start → wait N s → shoot N frames) / `list` / `clean` / `targets` |
+| **`miliastra_probe`** | 5 read-only diagnostic templates (`ping` / `tree` / `instantiate` / `api-surface` / `api-check`): deploy → playtest → `collect` |
+| **`miliastra_echo`** | Echoes its arguments, to rule out "the plugin isn't loaded / the argument was dropped" |
+
+> **Full parameter reference** (every op, every argument, defaults and allowed values) is the
+> **generated** block under [工具](#工具) → **每个工具的完整说明**: it is rendered from the tool schema
+> itself and compared byte-for-byte by `tests/readme-test.mjs`, so it cannot go stale. It is in Chinese
+> because that is the text the model receives in the schema.
+
+**Install**
+
+```powershell
+# ① symlink the package into the web profile's node_modules
+# ② register it in bundles — without this the plugin is not loaded at all:
+#    edit %USERPROFILE%\.dsh\profiles\web\package.json and add "dsh-miliastra" to dsh.profile.bundles
+# ③ restart the Web GUI (`dsh web`)
+```
+
+> ⚠️ The **Host half (tools / routes / system prompt) is a snapshot taken at startup** — changing it
+> requires restarting `dsh web`; changing only `lib/client.js` (the panel) needs a page refresh.
+> The repo **hardcodes no absolute paths** (the save root is derived from `os.homedir()`,
+> overridable with `MILIASTRA_LOCALLOW`).
+
+**Ground rules**
+
+1. **Never hardcode paths** — they change with account / level / map.
+2. **Only `miliastra_code` and `miliastra_probe` write to disk**; both back up first and use double-key
+   confirmations for destructive actions. Every other tool writes nothing.
+3. **Nothing out of bounds** — no reading game memory, no connecting to game process ports, no
+   impersonating the editor. **Playtest can only be clicked by a human** (there is no automation channel,
+   and we do not build one).
+4. **Numbers, not verdicts** — geometry and metric tools report overlap px, headroom px, distributions;
+   whether a level is "fine" is the creator's call, never the tool's.
 
 ---
 
@@ -868,7 +932,7 @@ miliastra_code op=inspect file=角色B.lua    # 指定活文件体检（含 SHA-
 
 ```powershell
 # —— L1 契约 / 单元 ——
-node tests/readme-test.mjs        # 本文件与代码的一致性：工具/op/参数清单**逐字对比 TOOLS**、导航表覆盖 8/8、无幽灵工具名（10 项）
+node tests/readme-test.mjs        # 本文件与代码的一致性：工具/op/参数清单**逐字对比 TOOLS**、导航表与英文速览各覆盖 8/8、无幽灵工具名、语言锚点（13 项）
 node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例 + 截图删除双保险 + 四条 AI 不变量（46 项）
 node tests/deploy-test.mjs        # 部署与备份**安全**：备份失败不覆盖 / 原子写 / 固定名 / 回滚 / 双钥匙 / 自覆盖拦截（30 项，临时目录）
 node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（16 项）
@@ -924,11 +988,11 @@ node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 | 层 | 命令 | 证明了什么 | 证明不了什么 |
 |---|---|---|---|
 | L1 | 技能 `selftest.mjs`（16 项） | 两个半边的契约、工具注册形状、路由信封、cleanup 可回收 | 真实渲染、真实装配 |
-| L1 | 上面十个单元测试（**408** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过、**连拍不虚报帧距**，**试玩开跑判据不误触发也不连拍**，**按局切分不把两局揉成一局**，**关卡表认不出时如实报行号、几何事实不带判决**，**指标汇总不带判决**，**AI 调用四条不变量（典型调用 / 无 `which` / `summaryOnly` 真省且不丢数字 / 系统提示段覆盖每个工具）**，**本文件的工具清单与代码逐字一致** | 同上 |
+| L1 | 上面十个单元测试（**411** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过、**连拍不虚报帧距**，**试玩开跑判据不误触发也不连拍**，**按局切分不把两局揉成一局**，**关卡表认不出时如实报行号、几何事实不带判决**，**指标汇总不带判决**，**AI 调用四条不变量（典型调用 / 无 `which` / `summaryOnly` 真省且不丢数字 / 系统提示段覆盖每个工具）**，**本文件的工具清单与代码逐字一致** | 同上 |
 | L3 | `client-render-test.mjs`（31 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 开跑触发判据 / 备份卡片 / 读界面控件 / 截图卡片与缩略图 / 试玩卡片 讲清后果** | 壳会不会把它挂上去 |
 | L4 | `live-check.mjs`（9 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
 
-**合计 455 项**（408 + L3 31 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
+**合计 458 项**（411 + L3 31 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
 `shot-test.mjs` 里另有 2 项走**真实 `powershell` 调用**，但只走失败路径（进程不存在 / 脚本不存在），
 所以既不依赖游戏开着，也不产生图片。
 

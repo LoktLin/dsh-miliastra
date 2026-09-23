@@ -41,7 +41,8 @@ const assert = (cond, msg) => {
   if (!cond) throw new Error(msg);
 };
 
-const readme = fs.readFileSync(README_PATH, 'utf8');
+// 统一成 LF 再断言：文件在 Windows 上可能是 CRLF，而 `\n\n` 这种正则会被 `\r` 破坏（实测踩过）
+const readme = fs.readFileSync(README_PATH, 'utf8').replace(/\r\n/g, '\n');
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'));
 const toolNames = TOOLS.map((tool) => tool.name);
 const nameSet = new Set(toolNames);
@@ -145,6 +146,40 @@ t('README 有「30 秒上手」且第一步是 `miliastra_health`', () => {
   const at = readme.indexOf('miliastra_health {}');
   assert(at > 0, '「30 秒上手」里没有可照抄的第一步 `miliastra_health {}`');
   return '三步路径完整';
+});
+
+/* ---- 5b. 英文入口（照 DSH Release 的双语写法）---- */
+
+/** 取某个 `## ` 小节（到下一个小节为止）。找不到返回 null。 */
+const sectionOf = (text, heading) => {
+  const at = text.indexOf(heading);
+  if (at < 0) return null;
+  const next = text.indexOf('\n## ', at + 1);
+  return text.slice(at, next < 0 ? undefined : next);
+};
+
+t('README 顶部有中英语言锚点', () => {
+  const m = /\[中文\]\(#[^)]+\)\s*\|\s*\[English\]\(#english-overview\)/.exec(readme);
+  assert(m, '第一行下面应有 `[中文](#…) | [English](#english-overview)`（照 DSH Release 的写法）');
+  assert(/^# .+\n\n\[中文\]/.test(readme), '语言锚点要贴在标题下面第一行');
+  return m[0];
+});
+
+t('有 `English overview` 段（可照抄 + 安装要点）', () => {
+  const sec = sectionOf(readme, '## English overview');
+  assert(sec, '找不到 `## English overview` —— 英文读者没有一眼能懂的入口');
+  assert(/30-second quick start/i.test(sec), '英文速览里没有 30-second quick start');
+  assert(/miliastra_health \{\}/.test(sec), '英文速览里没有可照抄的第一步 `miliastra_health {}`');
+  assert(/dsh\.profile\.bundles/.test(sec), '英文速览没写「必须进 bundles，否则插件完全不加载」');
+  return `${sec.length} 字符`;
+});
+
+t('`English overview` 覆盖全部工具', () => {
+  const sec = sectionOf(readme, '## English overview');
+  assert(sec, '找不到 `## English overview`');
+  const missing = toolNames.filter((name) => !sec.includes(name));
+  assert(!missing.length, `英文速览里没有：${missing.join(' / ')}（加新工具要补一行英文说明）`);
+  return `${toolNames.length}/${toolNames.length}`;
 });
 
 t('README 第一段的版本号 = package.json', () => {
