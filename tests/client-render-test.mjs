@@ -390,23 +390,64 @@ check('★ 局面名与状态图标（面板上只显示 HH:MM:SS，不铺一长
   return 'HH:MM:SS 抽取 + 4 种状态图标齐备';
 });
 
-check('★ 探针默认**收起**：不展开就看不到它（它主要给 AI 用，不该占创作者视线）', () => {
+check('★ 高级诊断默认**收起**（只读的 UI 读取 + 会覆盖脚本的探针都关在里面）', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
     open: true, setOpen: () => {}, rootRef: { current: null },
   }));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert(/高级诊断/.test(flat), '找不到「高级诊断」折叠标题');
-  assert(/AI 专用/.test(flat) && /你最好别碰/.test(flat), '没在标题上写明「AI 专用 / 你最好别碰」');
   assert(/平时不用展开/.test(flat), '收起态没说明「平时不用展开」');
-  // 收起时：探针的按钮/正文都不该在 DOM 里（不是 width:0 藏起来，是真不渲染）
-  for (const nope of ['部署探针', '收回结论', '翻字典', '试钥匙']) {
-    assert(!flat.includes(nope), '收起态却渲染了探针内容：' + nope);
+  assert(/读界面控件/.test(flat), '折叠标题里没提「读界面控件」');
+  // 收起时：两块内容都不该在 DOM 里（不是 width:0 藏起来，是真不渲染）
+  for (const nope of ['部署探针', '收回结论', '翻字典', '试钥匙', '全部 37 条记录']) {
+    assert(!flat.includes(nope), '收起态却渲染了内部内容：' + nope);
   }
-  // 展开后必须真的出现
+  // 展开后两块都要出现，而且要分别标出风险（UI 读取 = 只读；探针 = 会覆盖）
   const open = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
   const openFlat = open.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert(/部署探针/.test(openFlat) && /翻字典/.test(openFlat), '展开后探针内容没出来');
-  return '收起：只有标题 + AI 专用标签；展开：内容才进 DOM';
+  assert(/① 读界面控件（只读/.test(openFlat), '没标出 UI 读取是只读的');
+  assert(/② 探针（⚠️ 会临时覆盖你的脚本/.test(openFlat), '没标出探针会覆盖脚本');
+  return '收起：只有标题；展开：① 只读 UI 读取 + ② 会覆盖脚本的探针，各自标了风险';
+});
+
+check('★ 读界面控件：给出可创建模板 / 容器节点 / 全部记录，并说明「无父节点只是候选」', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv({
+    __uiInfo: {
+      ok: true, count: 37,
+      likelyTemplates: [
+        { id: 1073741867, name: '文本框', parent: null },
+        { id: 1073741868, name: '图片', parent: null },
+        { id: 1073741863, name: '容器节点', parent: null },
+      ],
+      records: [
+        { id: 1073741867, name: '文本框', parent: null },
+        { id: 1073741868, name: '图片', parent: null },
+        { id: 1073741863, name: '容器节点', parent: null },
+        { id: 1073741864, name: '图片', parent: 1073741863 },
+      ],
+    },
+  })));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  assert(/读界面控件/.test(flat), '缺「读界面控件」入口');
+  assert(/可被脚本创建的控件模板（2 个）/.test(flat), '没把「可创建模板」单列出来（容器节点不该算进去）：' + flat.slice(0, 200));
+  assert(/1073741867/.test(flat) && /1073741868/.test(flat), '没列出可用的模板索引');
+  assert(/容器节点（1 个）/.test(flat), '没单列容器节点');
+  assert(/不能被脚本创建/.test(flat), '没说明容器实例不可创建');
+  assert(/无父节点/.test(flat) && /候选/.test(flat), '没说明「无父节点只是候选条件」');
+  assert(/试钥匙/.test(flat), '没指向「确证能不能创建」的办法');
+  assert(/全部 37 条记录/.test(flat), '缺「展开全部记录」');
+
+  // 模板库为空时要说清后果与去哪建模板（这是最常见的一步踩坑）
+  const empty = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv({
+    __uiInfo: { ok: true, count: 5, likelyTemplates: [], records: [{ id: 1, name: '容器节点', parent: null }] },
+  })));
+  const emptyFlat = empty.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/一个都没有/.test(emptyFlat), '模板为空时没报警');
+  assert(/返回 nil/.test(emptyFlat), '没说清后果（动态创建会返回 nil）');
+  assert(/添加客户端控件/.test(emptyFlat) && /存为模板|各存一条独立模板/.test(emptyFlat), '没给出「去哪建模板」的路径');
+  return '可创建模板 / 容器节点 / 全部记录 / 候选说明 / 空库告警 都在';
 });
 
 check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且四个模板都列出来', () => {
@@ -487,14 +528,36 @@ check('★ Host 清单比磁盘少时，探针卡片提示「Host 是旧版 + �
 });
 
 check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）', () => {
-  // 展开态一起查：折叠区里的文案同样是给人看的
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
-  const text = html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
-  const stars = text.match(/\*\*[^*]{1,40}\*\*/g);
-  assert(!stars, '界面文案里有 Markdown 粗体记号（会原样显示）：' + (stars || []).slice(0, 4).join(' | '));
-  const ticks = (text.match(/`[^`\n]{1,40}`/g) || []).filter((s) => !/`\+/.test(s));
-  assert(!ticks.length, '界面文案里有反引号（会原样显示）：' + ticks.slice(0, 4).join(' | '));
-  return '无 ** / 反引号 残留';
+  // 每种「展开态」都要查 —— 否则藏在折叠区/条件渲染里的文案会漏网
+  // （踩过：UI 读取那块的 `**不能被脚本创建**` 就是只在展开+有数据时才渲染，一开始没查到）
+  const variants = [
+    ['默认（收起）', { open: true, setOpen: () => {}, rootRef: { current: null } }],
+    ['高级诊断展开', openAdv()],
+    ['高级诊断展开 + 试玩状态 + 有备份', openAdv({
+      __autoState: { phase: 'growing', reason: '这一局还在写（试玩中）', name: 'a.gia', size: 1 },
+      __pendingProbe: true,
+      __probeBackup: 'C:\\x\\_backup\\双相.bak',
+      __probeResult: { hit: true, tag: 'P1', lines: ['[P1] x'] },
+      __backups: { ok: true, count: 1, backupDir: 'C:\\x\\_backup', fixedBackup: 'C:\\x\\_backup\\双相.bak',
+        fixedExists: true, entries: [{ name: '双相.bak', path: 'C:\\x\\_backup\\双相.bak', size: 1, fixed: true }] },
+      __pendingRestore: '__fixed__',
+      __uiInfo: { ok: true, count: 3, likelyTemplates: [{ id: 1073741867, name: '文本框', parent: null }],
+        records: [{ id: 1073741867, name: '文本框', parent: null }, { id: 1073741863, name: '容器节点', parent: null }] },
+      __uiRaw: true,
+      __logs: [{ time: 't', tag: 'A', text: '正常', raw: '[A] 正常' }, { time: 't', tag: 'A', text: '失败', bad: true, raw: '[A] 失败' }],
+    })],
+  ];
+  const bad = [];
+  for (const [name, props] of variants) {
+    const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, props));
+    const text = html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
+    const stars = text.match(/\*\*[^*]{1,40}\*\*/g);
+    if (stars) bad.push(name + ' → ' + stars.slice(0, 3).join(' | '));
+    const ticks = (text.match(/`[^`\n]{1,40}`/g) || []).filter((s) => !/`\+/.test(s));
+    if (ticks.length) bad.push(name + ' → 反引号 ' + ticks.slice(0, 3).join(' | '));
+  }
+  assert(bad.length === 0, '界面文案里有 Markdown 记号（会原样显示）：' + bad.join('；'));
+  return variants.length + ' 种渲染态下都无 ** / 反引号 残留';
 });
 
 check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者要求的三件事都要看得见）', () => {

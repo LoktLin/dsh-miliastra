@@ -53,11 +53,38 @@ const SAMPLE_LOGS = [
   { time: '17:04:21', message: '[BIG] ' + 'Enum.KeyEventType.KeyboardCraftspersonKey1Down=…, '.repeat(200) + 'END' },
 ];
 
+const SAMPLE_UI = {
+  ok: true, count: 37,
+  likelyTemplates: [
+    { id: 1073741867, name: '文本框', parent: null },
+    { id: 1073741868, name: '图片', parent: null },
+    { id: 1073741863, name: '容器节点', parent: null },
+  ],
+  records: [
+    { id: 1073741848, name: '客户端控件容器', parent: null },
+    { id: 1073741867, name: '文本框', parent: null },
+    { id: 1073741868, name: '图片', parent: null },
+    { id: 1073741863, name: '容器节点', parent: null },
+    { id: 1073741864, name: '图片', parent: 1073741863 },
+  ],
+  rendered: '（略）',
+};
+
 const html = req('react-dom/server').renderToStaticMarkup(
   React.createElement(exports_.__testPanel, {
     open: true, setOpen() {}, rootRef: { current: null },
     __advOpen: process.argv.includes('--adv'),
     __logs: process.argv.includes('--logs') ? exports_.__testToLogRows(SAMPLE_LOGS) : [],
+    __uiInfo: process.argv.includes('--ui') ? SAMPLE_UI : null,
+    __uiRaw: process.argv.includes('--uiraw'),
+    __backups: process.argv.includes('--backups') ? {
+      ok: true, count: 2, backupDir: 'C:\\x\\external_lua_file\\_backup',
+      fixedBackup: 'C:\\x\\external_lua_file\\_backup\\双相.bak', fixedExists: true,
+      entries: [
+        { name: '双相.bak', path: 'C:\\x\\_backup\\双相.bak', size: 22446, fixed: true, createdAt: '2026-09-23T19:00:00.000Z' },
+        { name: '双相.20260923-180000_备份.lua', path: 'C:\\x\\_backup\\双相.20260923-180000_备份.lua', size: 22446, fixed: false, createdAt: '2026-09-23T18:00:00.000Z' },
+      ],
+    } : null,
   }),
 );
 
