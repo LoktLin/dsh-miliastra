@@ -14,6 +14,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "assets/*",
     "index.js",
     "lib/**/*.js",
     "lib/**/*.mjs",
