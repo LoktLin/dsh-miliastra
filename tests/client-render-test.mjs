@@ -315,6 +315,66 @@ check('★ 超长日志行折叠成「点开看全」（1 万字符的枚举 dum
   return '超长行 → <details> + 总长度提示；短行不折叠';
 });
 
+check('★ 「试玩完自动取」判据：只在**看见试玩动过**之后才自动取回', () => {
+  const step = clientExports.__testAutoFollowStep;
+  assert(typeof step === 'function', '缺少 __testAutoFollowStep（自动取回的判据无法回归）');
+  const T0 = 1_700_000_000_000;
+  const f = (name, size, ageMs) => ({ name, size, mtimeMs: T0 - (ageMs || 0), path: 'C:\\x\\' + name });
+  const S = 6000;
+
+  // ① 没有文件 → 不动
+  const noFile = step(null, null, T0, S);
+  assert(noFile.action === 'none' && noFile.phase === 'idle', '没日志文件时不该动作：' + JSON.stringify(noFile));
+
+  // ② 首次看到「刚写过」的一局（mtime 10 秒前）→ 记为刚玩过，但**当次不取**
+  const fresh = step(null, f('a.gia', 1000, 10000), T0, S);
+  assert(fresh.action === 'none', '刚建立基线时不该立刻取回');
+  assert(fresh.next.activity === true, '「10 秒前才写过」应算刚玩过');
+  assert(fresh.phase === 'new-session', 'phase 不对：' + fresh.phase);
+
+  // ③ 首次看到「2 小时前的一局」→ 不算刚玩过，之后也不该自动取（别拿旧局面糊人）
+  const stale = step(null, f('old.gia', 5000, 2 * 3600 * 1000), T0, S);
+  assert(stale.next.activity === false, '2 小时前的局面不该算「刚玩过」');
+  let s = stale.next;
+  for (const t of [T0 + 2000, T0 + 8000, T0 + 20000]) s = step(s, f('old.gia', 5000, 2 * 3600 * 1000), t, S).next;
+  assert(step(s, f('old.gia', 5000, 2 * 3600 * 1000), T0 + 30000, S).action === 'none',
+    '旧局面被自动取回了 —— 打开面板就会糊用户一脸几小时前的日志');
+
+  // ④ 守望期间冒出新的一局 → 记为「动过」，安静够久 → 取回
+  s = step(fresh.next, f('b.gia', 200, 0), T0 + 4000, S);
+  assert(s.phase === 'new-session' && s.next.activity === true, '新文件没被识别成新的一局：' + JSON.stringify(s));
+  // 还在写 → 不取
+  s = step(s.next, f('b.gia', 800, 0), T0 + 8000, S);
+  assert(s.phase === 'growing' && s.action === 'none', '文件在变大时不该取：' + JSON.stringify(s));
+  // 刚安静下来 → 还在等
+  s = step(s.next, f('b.gia', 800, 0), T0 + 12000, S);
+  assert(s.phase === 'settling' && s.action === 'none', '刚安静下来不该立刻取：' + JSON.stringify(s));
+  // 安静够 6 秒 → 取回
+  s = step(s.next, f('b.gia', 800, 0), T0 + 19000, S);
+  assert(s.action === 'fetch', '安静够久后应当自动取回：' + JSON.stringify(s));
+  // 已取过的不重复取
+  const again = step(s.next, f('b.gia', 800, 0), T0 + 60000, S);
+  assert(again.action === 'none' && again.phase === 'done', '同一版日志被取了两次：' + JSON.stringify(again));
+
+  // ⑤ 空文件不取（这一局还没写出内容）
+  let eSt = step(fresh.next, f('c.gia', 0, 0), T0 + 4000, S).next;   // 新的一局，但 0 字节
+  let eR = step(eSt, f('c.gia', 0, 0), T0 + 10000, S);
+  eSt = eR.next;
+  eR = step(eSt, f('c.gia', 0, 0), T0 + 20000, S);
+  assert(eR.phase === 'empty' && eR.action === 'none', '空文件应当判为「还没写出内容」：' + JSON.stringify(eR));
+
+  return '无文件不动 / 旧局面不取 / 新一局+安静够久才取 / 不重复取 / 空文件不取';
+});
+
+check('★ 局面名与状态图标（面板上只显示 HH:MM:SS，不铺一长串文件名）', () => {
+  const s = clientExports.__testShortSessionName;
+  assert(s('2026-09-23_18-44-57_151_201170108.gia') === '18:44:57', '局面名没缩成时间：' + s('2026-09-23_18-44-57_151_201170108.gia'));
+  assert(s('乱七八糟.gia') === '乱七八糟', '非常规文件名应当原样回退：' + s('乱七八糟.gia'));
+  const m = clientExports.__testAutoPhaseMark;
+  assert(m('growing') && m('new-session') && m('done') && m('settling'), '状态图标有空的：' + JSON.stringify(['growing', 'new-session', 'done', 'settling'].map(m)));
+  return 'HH:MM:SS 抽取 + 4 种状态图标齐备';
+});
+
 check('★ 探针默认**收起**：不展开就看不到它（它主要给 AI 用，不该占创作者视线）', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
     open: true, setOpen: () => {}, rootRef: { current: null },
