@@ -11,6 +11,8 @@
  *    ——「环境缺失」与「代码坏了」是两件事，这里只负责证明后者不成立。
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { TOOLS } from '../index.js';
 
 let pass = 0;
@@ -228,6 +230,31 @@ for (const [toolName, args] of CASES) {
       + JSON.stringify({ ok: to.ok, hit: to.hit, timedOut: to.timedOut, cost }));
   } else {
     console.log(`✓ miliastra_playtest op=wait 超时可打断且如实回报（${(cost / 1000).toFixed(1)}s，hit=${to.hit}）`);
+    pass += 1;
+  }
+}
+
+/* ---- 版本一致性（2026-09-23 加：README 第一段曾一路停在 0.0.1 —— 六次发布没人发现，
+ *      因为**没有任何断言在管它**。典型的「不变量缺失」：功能都对，门面上写着旧版本。）---- */
+{
+  const pkgDir = path.resolve(import.meta.dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
+  const idx = fs.readFileSync(path.join(pkgDir, 'index.js'), 'utf8');
+  const readme = fs.readFileSync(path.join(pkgDir, 'README.md'), 'utf8');
+  const mIdx = /const VERSION = '([^']+)'/.exec(idx);
+  const mReadme = /\*\*版本 `([^`]+)`\*\*/.exec(readme);
+  const mInstall = /dsh-miliastra@(\d+\.\d+\.\d+)/.exec(readme);
+  const bad = [];
+  if (!mIdx) bad.push('index.js 里找不到 `const VERSION`');
+  else if (mIdx[1] !== pkg.version) bad.push(`index.js VERSION=${mIdx[1]} ≠ package.json ${pkg.version}`);
+  if (!mReadme) bad.push('README 里找不到「**版本 `x.y.z`**」那句');
+  else if (mReadme[1] !== pkg.version) bad.push(`README 第一段写的版本=${mReadme[1]} ≠ package.json ${pkg.version}`);
+  if (mInstall && mInstall[1] !== pkg.version) bad.push(`README 里的安装示例版本=${mInstall[1]} ≠ ${pkg.version}`);
+  if (bad.length) {
+    fail += 1;
+    failures.push('[version] 版本号不一致：' + bad.join('；'));
+  } else {
+    console.log(`✓ 版本号三处一致 → package.json / index.js VERSION / README 第一段 / 安装示例 都是 ${pkg.version}`);
     pass += 1;
   }
 }

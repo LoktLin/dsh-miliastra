@@ -3,7 +3,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
-**版本 `0.0.1`**（首个版本，见 [CHANGELOG](CHANGELOG.md)） · Apache-2.0
+**版本 `0.0.9`**（见 [CHANGELOG](CHANGELOG.md)） · Apache-2.0
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 这套工具链是**在正式服上排一次真实的 bug 排出来的**（「动态创建控件恒返回 nil」→ 根因是模板库为空），
@@ -104,7 +104,7 @@ npm view dsh-miliastra version              # 验证：打印版本号即成功
 发布后的使用方式就回到上面「方式二」：
 
 ```powershell
-dsh plugin --profile web add dsh-miliastra@0.0.1   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
+dsh plugin --profile web add dsh-miliastra@0.0.9   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
 dsh web
 ```
 
@@ -679,7 +679,7 @@ miliastra_code op=inspect file=角色B.lua    # 指定活文件体检（含 SHA-
 
 ```powershell
 # —— L1 契约 / 单元 ——
-node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例 + 截图删除双保险（30 项）
+node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例 + 截图删除双保险（45 项）
 node tests/deploy-test.mjs        # 部署与备份**安全**：备份失败不覆盖 / 原子写 / 固定名 / 回滚 / 双钥匙 / 自覆盖拦截（28 项，临时目录）
 node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（10 项）
 node tests/lualint-test.mjs       # Lua 结构校验器：合法构造不误报 / 写坏的必须报对行号 / 15 个真文件回归（32 项）
@@ -733,11 +733,11 @@ node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 | 层 | 命令 | 证明了什么 | 证明不了什么 |
 |---|---|---|---|
 | L1 | 技能 `selftest.mjs`（16 项） | 两个半边的契约、工具注册形状、路由信封、cleanup 可回收 | 真实渲染、真实装配 |
-| L1 | 上面九个单元测试（**396** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过、**连拍不虚报帧距**，**试玩开跑判据不误触发也不连拍**，**按局切分不把两局揉成一局**，**关卡表认不出时如实报行号、几何事实不带判决**，**指标汇总不带判决**，**AI 调用三条不变量（典型调用 / 无 `which` / `summaryOnly` 真省且不丢数字）** | 同上 |
+| L1 | 上面九个单元测试（**397** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过、**连拍不虚报帧距**，**试玩开跑判据不误触发也不连拍**，**按局切分不把两局揉成一局**，**关卡表认不出时如实报行号、几何事实不带判决**，**指标汇总不带判决**，**AI 调用三条不变量（典型调用 / 无 `which` / `summaryOnly` 真省且不丢数字）** | 同上 |
 | L3 | `client-render-test.mjs`（31 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 开跑触发判据 / 备份卡片 / 读界面控件 / 截图卡片与缩略图 / 试玩卡片 讲清后果** | 壳会不会把它挂上去 |
 | L4 | `live-check.mjs`（9 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
 
-**合计 443 项**（396 + L3 31 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
+**合计 444 项**（397 + L3 31 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
 `shot-test.mjs` 里另有 2 项走**真实 `powershell` 调用**，但只走失败路径（进程不存在 / 脚本不存在），
 所以既不依赖游戏开着，也不产生图片。
 

@@ -14,7 +14,7 @@
  * 边界（务必知道）：**编辑器 UI 里的操作（建模板 / 挂脚本 / 建容器）没有自动化通道**，
  * 插件替代不了人点编辑器，只替代「人和 AI 之间的来回搬运」。
  *
- * 三条纪律（技能 dsh-plugin-dev 实测踩出来的）：
+ * 三条纪律（技能 dsh-plugin-win10 / 原名 dsh-plugin-dev 实测踩出来的）：
  *   · 工具返回值必须 **lossless JSON**（所有出口过 `lossless()`）
  *   · `parameters` 必须是合法 JSON Schema（写坏会在注册期炸，严重时连发消息都失败）
  *   · 副作用全部挂 `ctx.effect`，服务用 `ctx.inject` 惰性取，缺了就降级 + warn
