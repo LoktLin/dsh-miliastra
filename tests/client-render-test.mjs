@@ -268,6 +268,28 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
   return `${html.length} 字符，三栏 + ${10} 张卡片齐备`;
 });
 
+// Host 是**启动时的快照** —— 面板要把「源码比它新」说出来（P0-C：今晚为此花了 5 个调用定位）。
+check('版本行：Host / 源码对照，陈旧时才警告并给下一步', () => {
+  const props = (status) => ({ open: true, setOpen: () => {}, rootRef: { current: null }, __status: status });
+  const fresh = renderToStaticMarkup(React.createElement(clientExports.__testPanel, props({
+    version: '0.0.10', startedAt: '2026-09-23T14:18:00.000Z',
+    source: { sourceVersion: '0.0.10', stale: false, hint: null },
+  })));
+  assert(fresh.includes('Host v0.0.10'), '版本行没渲染 Host 版本');
+  assert(fresh.includes('源码 v0.0.10'), '版本行没渲染源码版本');
+  assert(!fresh.includes('⚠️ Host'), '没过期却报了警告');
+
+  const staleHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, props({
+    version: '0.0.5', startedAt: '2026-09-23T14:18:00.000Z',
+    source: { sourceVersion: '0.0.10', stale: true, hint: '源码比 Host 快照新（源码 v0.0.10 ≠ 载入的 v0.0.5）→ Host 半边（工具 / 路由 / 系统提示）的改动要**重启 dsh web** 才生效；只改 lib/client.js 刷新页面即可' },
+  })));
+  assert(staleHtml.includes('⚠️ Host v0.0.5'), '陈旧时没标出警告与当时载入的版本');
+  assert(staleHtml.includes('源码 v0.0.10'), '陈旧时没给出源码版本');
+  assert(staleHtml.includes('重启 dsh web'), '陈旧时没给下一步（重启 dsh web）');
+  return '常显 Host/源码；陈旧时琥珀色 + 重启指引';
+});
+
+
 // 探针现在收在「高级诊断」折叠区里（默认收起），所以下面这些断言都要显式展开它。
 const openAdv = (extra) => Object.assign({
   open: true, setOpen: () => {}, rootRef: { current: null }, __advOpen: true,

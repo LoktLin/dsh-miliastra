@@ -13,7 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection } from '../index.js';
+import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection, hostStaleness } from '../index.js';
 import { slimStats } from '../lib/metrics.mjs';
 
 let pass = 0;
@@ -297,6 +297,26 @@ for (const [toolName, args] of CASES) {
   } else {
     console.log(`✓ 版本号四处一致 → package.json / index.js VERSION / README 第一段 / 安装示例 都是 ${pkg.version}`);
     pass += 1;
+  }
+}
+
+/* ---- Host 自陈旧：源码比启动快照新时，必须由 Host 自己说（今晚为此花了 5 个调用）---- */
+
+{
+  const base = { sourceVersion: '0.0.10', sourceMtimeMs: 1000, loadedVersion: '0.0.10', startedAtMs: 5000 };
+  const fresh = hostStaleness(base);
+  const vNew = hostStaleness({ ...base, sourceVersion: '0.0.11' });
+  const mNew = hostStaleness({ ...base, sourceMtimeMs: 5000 + 23 * 60000 });
+  const broken = hostStaleness({ sourceVersion: null, sourceMtimeMs: null, loadedVersion: '0.0.10', startedAtMs: 1 });
+  if (!fresh.stale && !fresh.hint
+    && vNew.stale && vNew.versionNewer && /重启 dsh web/.test(String(vNew.hint))
+    && mNew.stale && mNew.mtimeNewer && mNew.deltaMin === 23 && /重启 dsh web/.test(String(mNew.hint))
+    && !broken.stale) {
+    console.log(`✓ Host 陈旧判据：同版本 + 旧 mtime → 不报；源码版本变了 / index.js 晚 23 分钟 → 报并要求重启（deltaMin=${mNew.deltaMin}）；读不到源码也不报假警`);
+    pass += 1;
+  } else {
+    fail += 1;
+    failures.push('[gui] hostStaleness 形状不对：' + JSON.stringify({ fresh, vNew, mNew, broken }).slice(0, 220));
   }
 }
 

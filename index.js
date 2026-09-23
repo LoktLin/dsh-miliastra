@@ -30,6 +30,7 @@ const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
 import pathMod from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
@@ -309,6 +310,8 @@ const TOOLS = [
       return {
         ok: true,
         localLow: localLowRoot(),
+        // 源码比 Host 快照新就说出来 —— 省掉「改了怎么没生效」那一轮排查（今晚为此花过 5 个调用）
+        host: hostSummary(),
         levelCount: levels.length,
         current: cur ? brief(cur) : null,
         levels: (args.all ? levels : levels.slice(0, 12)).map(brief),
@@ -1557,6 +1560,60 @@ function shotsSummary() {
   }
 }
 
+/**
+ * 「源码比 Host 快照新」的判据 —— **纯函数**（好测：注入假版本 / mtime / 启动时刻）。
+ *
+ * 为什么要有它（2026-09-23 深夜真踩）：源码 22:41 改到 `0.0.9`，而 Host 是 **22:18 启动的快照**、
+ * 仍报 `0.0.5` —— 定位花掉 **5 个调用**（grep `package.json`、grep `VERSION`、查进程 CreationDate、
+ * 手工拼时间线）。**Host 半边是启动时的快照**这件事，应该由 Host 自己说，不该让人去推理。
+ *
+ * 判据两条，任一成立即算陈旧：① 源码 `package.json` 的版本 ≠ 载入的 `VERSION`；
+ * ② `index.js` 的 mtime 晚于进程启动时刻。**只报事实与下一步，不猜「你改了什么」。**
+ */
+export function hostStaleness({ sourceVersion, sourceMtimeMs, loadedVersion, startedAtMs }) {
+  const versionNewer = !!(sourceVersion && loadedVersion && String(sourceVersion) !== String(loadedVersion));
+  const mtimeNewer = !!(sourceMtimeMs && startedAtMs && sourceMtimeMs > startedAtMs);
+  const deltaMin = mtimeNewer ? Math.max(1, Math.round((sourceMtimeMs - startedAtMs) / 60000)) : 0;
+  const stale = versionNewer || mtimeNewer;
+  const why = [
+    versionNewer ? `源码 v${sourceVersion} ≠ 载入的 v${loadedVersion}` : null,
+    mtimeNewer ? `index.js 比启动晚约 ${deltaMin} 分钟` : null,
+  ].filter(Boolean).join('，');
+  return {
+    stale, versionNewer, mtimeNewer, deltaMin,
+    hint: stale
+      ? `源码比 Host 快照新（${why}）→ Host 半边（工具 / 路由 / 系统提示）的改动要**重启 dsh web** 才生效；只改 lib/client.js 刷新页面即可`
+      : null,
+  };
+}
+
+/** 读本包源码的版本与 mtime（读不到只返 null 字段，**绝不抛** —— 面板要能照常显示）。 */
+function sourceInfo() {
+  try {
+    const dir = pathMod.dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(fsMod.readFileSync(pathMod.join(dir, 'package.json'), 'utf8'));
+    const st = fsMod.statSync(pathMod.join(dir, 'index.js'));
+    return { sourceVersion: pkg.version, sourceMtimeMs: st.mtimeMs, sourceMtime: new Date(st.mtimeMs).toISOString() };
+  } catch (e) {
+    return { sourceVersion: null, sourceMtimeMs: null, error: (e && e.message) || String(e) };
+  }
+}
+
+/**
+ * Host 自身的状态（`/miliastra/status` 与 `miliastra_health` **共用这一份**）。
+ * 含「源码是不是比这个快照新」—— 判据只有一份，免得两处各写一套然后漂移。
+ */
+function hostSummary() {
+  const info = sourceInfo();
+  return {
+    version: VERSION,
+    startedAt: new Date(STARTED_AT).toISOString(),
+    pid: process.pid,
+    uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
+    source: { ...info, ...hostStaleness({ ...info, loadedVersion: VERSION, startedAtMs: STARTED_AT }) },
+  };
+}
+
 async function selfStatus() {
   let current = null;
   try {
@@ -1564,9 +1621,9 @@ async function selfStatus() {
     if (lv) current = { brand: lv.brand, levelId: lv.levelId, luaFiles: lv.luaFiles.map((f) => f.name), logCount: lv.logCount };
   } catch { /* ignore */ }
   return {
-    ok: true, plugin: name, title: TITLE, version: VERSION,
-    pid: process.pid,
-    uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
+    ok: true, plugin: name, title: TITLE,
+    // Host 是**启动时的快照**：版本 / 启动时刻 / 「源码是不是比它新」都在这份里
+    ...hostSummary(),
     localLow: localLowRoot(),
     tools: TOOLS.map((t) => t.name),
     probeTemplates: PROBE_TEMPLATES,
