@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection } from '../index.js';
+import { slimStats } from '../lib/metrics.mjs';
 
 let pass = 0;
 let fail = 0;
@@ -351,16 +352,50 @@ for (const [toolName, args] of CASES) {
 
   const mFull = await logTool.execute({ op: 'metrics' }, {});
   const mSlim = await logTool.execute({ op: 'metrics', summaryOnly: true }, {});
-  const keyX = (mSlim.loose && mSlim.loose.keys && mSlim.loose.keys.x) || null;
-  const keepsCore = !!(keyX && keyX.core && typeof keyX.core.from === 'number' && keyX.hotBin && typeof keyX.hotBin.count === 'number');
-  if (mSlim.summaryOnly === true && keyX && typeof keyX.binsOmitted === 'number' && keepsCore
-    && JSON.stringify(mSlim).length <= JSON.stringify(mFull).length) {
-    console.log(`✓ op=metrics 的 summaryOnly 去掉分箱但保留结论 → ${JSON.stringify(mFull).length}B → ${JSON.stringify(mSlim).length}B，`
-      + `binsOmitted=${keyX.binsOmitted}，core ${keyX.core.from}~${keyX.core.to} 与 hotBin 都还在`);
+  // ⚠️ 这里读的是**真机最新一局**的 .gia —— 内容会随每局试玩变。
+  // 所以断言必须**数据无关**：不写死键名（曾写死 `x`，23:33 那局的日志里没有 x → 假红），
+  // 只对齐「瘦身不许丢结论」这条不变量：全量里有 core/hotBin 的，摘要里必须还在。
+  const fullKeys = (mFull.loose && mFull.loose.keys) || {};
+  const slimKeys = (mSlim.loose && mSlim.loose.keys) || {};
+  const slimKeysSame = JSON.stringify(Object.keys(fullKeys).sort()) === JSON.stringify(Object.keys(slimKeys).sort());
+  const keepsConclusions = Object.entries(fullKeys).every(([k, v]) => {
+    const s = slimKeys[k] || {};
+    const hadCore = !!(v && v.core && typeof v.core.from === 'number');
+    return (!hadCore || (s.core && typeof s.core.from === 'number')) && (!v || !v.hotBin || !!s.hotBin);
+  });
+  const binsHonest = Object.entries(fullKeys).every(([k, v]) => {
+    const had = Array.isArray(v && v.bins) ? v.bins.length : 0;
+    const s = slimKeys[k] || {};
+    return had > 0 ? s.binsOmitted === had : !('binsOmitted' in s);
+  });
+  const looseFullLen = JSON.stringify(mFull.loose || {}).length;
+  const looseSlimLen = JSON.stringify(mSlim.loose || {}).length;
+  if (mSlim.summaryOnly === true && slimKeysSame && keepsConclusions && binsHonest && looseSlimLen <= looseFullLen) {
+    const checked = Object.entries(fullKeys).filter(([, v]) => v && v.core).map(([k]) => k);
+    console.log(`✓ op=metrics 的 summaryOnly 去掉分箱但保留结论 → loose ${looseFullLen}B → ${looseSlimLen}B，`
+      + `键 ${Object.keys(slimKeys).join('/') || '（这一局没有 k=数字 行）'}；带 core 的键：${checked.join('/') || '无'}`);
     pass += 1;
   } else {
     fail += 1;
-    failures.push('[ergonomics] op=metrics summaryOnly 不对：' + JSON.stringify({ slim: mSlim.summaryOnly, bin: keyX && keyX.binsOmitted, core: keepsCore }).slice(0, 200));
+    failures.push('[ergonomics] op=metrics summaryOnly 不对：' + JSON.stringify({ slim: mSlim.summaryOnly, slimKeysSame, keepsConclusions, binsHonest, looseFullLen, looseSlimLen, full: Object.keys(fullKeys) }).slice(0, 200));
+  }
+
+  // 「省体积」这条**用固定夹具**验（真机那一局可能只有 1 个数、1 个箱 —— 不具代表性，
+  // 而且回执里那段 `note` 文案本身就比省下来的还长）。夹具代表真实形态：多键 × 多箱。
+  {
+    const bins = Array.from({ length: 12 }, (_, i) => ({ from: i * 10, to: i * 10 + 10, count: i }));
+    const fx = { n: 78, min: 0, max: 120, mean: 60, median: 60, p25: 30, p75: 90,
+      core: { from: 30, to: 90, width: 60 }, span: 120, bins, hotBin: { from: 30, to: 40, count: 11 }, hotShare: 0.14 };
+    const slim = slimStats(fx);
+    const saved = JSON.stringify(fx).length - JSON.stringify(slim).length;
+    if (!('bins' in slim) && slim.binsOmitted === 12 && slim.core && slim.hotBin && saved > 0) {
+      console.log(`✓ slimStats 在「多箱」夹具上真的省体积 → ${JSON.stringify(fx).length}B → ${JSON.stringify(slim).length}B（省 ${saved}B），`
+        + `binsOmitted=12、core 与 hotBin 都在`);
+      pass += 1;
+    } else {
+      fail += 1;
+      failures.push('[ergonomics] slimStats 夹具不省 / 丢结论：' + JSON.stringify({ slimLen: JSON.stringify(slim).length, saved, binsOmitted: slim.binsOmitted, core: !!slim.core }).slice(0, 200));
+    }
   }
 
   const cuFull = await mapTool.execute({ op: 'clientui' }, {});

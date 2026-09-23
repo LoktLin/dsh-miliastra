@@ -726,7 +726,7 @@ const TOOLS = [
         summaryOnly: {
           type: 'boolean',
           description: 'op=metrics：去掉直方图分箱，只留 `n/min/max/median/core/hotBin` 这些标量'
-            + '（少了几个箱会由 `binsOmitted` 报出）。**先看数再决定要不要分箱**时用。默认 false（全量）。',
+            + '（有箱可去时 `binsOmitted` 会报出数量）。**先看数再决定要不要分箱**时用。默认 false（全量）。',
         },
         bins: { type: 'number', description: 'op=metrics：直方图分箱数（默认 10，1~50）。**集中区看 `core`（四分位距），热区看 `hotBin`**。' },
         withRaw: { type: 'boolean', description: 'true=把整段结构化记录一起回传（默认只回 time/message 等要点）。' },
@@ -806,7 +806,7 @@ const TOOLS = [
           note: '汇总的是**数字事实**，不是判定 —— 不说「这关有问题」，只说「N 次里有 M 次落在 a~b」。'
             + '「集中在哪」看 `core`（中间 50%，抗离群值）；`hotBin` 是直方图命中最多的那一箱，看形状用。'
             + '没有指标格式的行**一律静默忽略**（本 op 只读 `.gia`，一个字节都不写）。'
-            + (slim ? '`summaryOnly:true` 去了直方图分箱（`binsOmitted` 报出少了几个），`core`/`hotBin` 都还在。' : '')
+            + (slim ? '`summaryOnly:true` 去了直方图分箱（有箱可去时 `binsOmitted` 报出数量），`core`/`hotBin` 都还在。' : '')
             + (c.mil.length ? '' : '⚠️ 目前这一局没有 `[MIL]` 行，所以 `mil` 是 null —— 上面 `loose` 那份是**现成日志就能出的**。'),
         };
       }

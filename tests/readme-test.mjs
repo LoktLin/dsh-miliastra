@@ -182,6 +182,23 @@ t('`English overview` 覆盖全部工具', () => {
   return `${toolNames.length}/${toolNames.length}`;
 });
 
+/* ---- 5c. 渐进式披露：README 只是入口，细节在 docs/ —— 两个方向都要连得上 ---- */
+
+t('README 与 `docs/` 的「按需加载」双向可达', () => {
+  const pkgRoot = path.join(here, '..');
+  const links = [...new Set([...readme.matchAll(/\]\((docs\/[^)]+\.md)\)/g)].map((m) => m[1]))];
+  assert(links.length > 0, 'README 里一个 `docs/…md` 链接都没有 —— 「按需加载」的入口丢了（细节会重新堆回主文档）');
+  const missing = links.filter((rel) => !fs.existsSync(path.join(pkgRoot, rel)));
+  assert(!missing.length, `README 链接指向不存在的文件：${missing.join(' / ')}`);
+  const orphans = fs
+    .readdirSync(path.join(pkgRoot, 'docs'))
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => `docs/${f}`)
+    .filter((rel) => !links.includes(rel));
+  assert(!orphans.length, `docs/ 里有孤立文件（README 没链接，等于没人会读）：${orphans.join(' / ')}`);
+  return `链接 ${links.length} 篇，docs/ 无孤立文件`;
+});
+
 t('README 第一段的版本号 = package.json', () => {
   const m = /\*\*版本 `([^`]+)`\*\*/.exec(readme);
   assert(m, 'README 第一段找不到「**版本 `x.y.z`**」');

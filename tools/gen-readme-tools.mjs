@@ -81,11 +81,18 @@ export function renderToolsSection() {
       out.push('');
       continue;
     }
-    out.push('| 参数 | 类型 | 必填 | 取值 |');
-    out.push('|---|---|---|---|');
+    out.push('| 参数 | 类型 | 必填 | 取值 | 说明 |');
+    out.push('|---|---|---|---|---|');
     for (const key of keys) {
       const schema = props[key] || {};
-      out.push(`| \`${key}\` | \`${typeOf(schema)}\` | ${required.has(key) ? '**是**' : '否'} | ${valuesOf(schema)} |`);
+      // 参数说明也带上：AI 与人读这一份就够（否则「改了 description 要跑生成器」这句话对参数不成立）
+      const desc = String(schema.description || '')
+        .replace(/\s*\n\s*/g, ' ')
+        .replace(/\|/g, '\\|')
+        .trim();
+      out.push(
+        `| \`${key}\` | \`${typeOf(schema)}\` | ${required.has(key) ? '**是**' : '否'} | ${valuesOf(schema)} | ${desc} |`,
+      );
     }
     out.push('');
   }
