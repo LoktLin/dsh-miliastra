@@ -24,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.7';
+const VERSION = '0.0.8';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -46,6 +46,7 @@ import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
   shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture,
   thumbPathFor, resolveShotFile, ensureThumbnail,
+  planBurst, burstSummary, BURST_FLOOR_MS, BURST_MAX_COUNT,
 } from './lib/shot.mjs';
 
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
@@ -800,65 +801,42 @@ const TOOLS = [
         };
       }
 
-      /* op === wait */
+      /* op === wait —— 判据走 waitForPlaytestStart（与 miliastra_shot op=burst 是同一份） */
       const timeoutSec = clampNum(args.timeoutSec, 90, 5, 300);
       const afterSec = clampNum(args.afterSec, 0, 0, 120);
-      const backSec = clampNum(args.backSec, 0, 0, 3600);
-      const pollMs = clampNum(args.pollMs, 400, 100, 5000);
-      const t0 = Date.now();
+      const w = await waitForPlaytestStart(lv, {
+        timeoutSec,
+        backSec: clampNum(args.backSec, 0, 0, 3600),
+        pollMs: clampNum(args.pollMs, 400, 100, 5000),
+      });
 
-      let state = base.state;
-      let offset = base.size;
-      let hit = null;
-      if (backSec > 0) {
-        const pre = shouldHit(state, t0, { backSec });
-        if (pre.hit) hit = { backHit: true, atMs: state.lastStartAtMs, epochSec: state.epochSec, token: state.token };
-      }
-
-      while (!hit && Date.now() - t0 < timeoutSec * 1000) {
-        await sleep(pollMs);
-        const inc = readIncrement(logPath, offset);
-        if (!inc.ok) throw new HttpError('读试玩日志出错：' + inc.error, 500);
-        if (inc.rotated) {
-          // 游戏重启 → 日志换代 → 从头对齐，别拿旧 offset 读新文件
-          offset = 0;
-          state = createPlaytestState();
-          continue;
-        }
-        if (!inc.text) continue;
-        offset = inc.size;
-        const before = state.lastStartAtMs;
-        state = reduceLogLines(state, inc.text.split(/\r?\n/)).state;
-        if (state.lastStartAtMs !== before && Number.isFinite(state.lastStartAtMs)) {
-          hit = { backHit: false, atMs: state.lastStartAtMs, epochSec: state.epochSec, token: state.token };
-        }
-      }
-
-      const waitedSec = Math.round((Date.now() - t0) / 100) / 10;
-      if (!hit) {
+      if (!w.hit) {
         return {
           ok: true, op, ...common,
-          hit: false, timedOut: true, waitedSec, timeoutSec,
+          hit: false, timedOut: true, waitedSec: w.waitedSec, timeoutSec,
           hint: '这段时间里没有新的「试玩开跑」。确认人在编辑器里真的点了「试玩」；'
             + '如果是刚点过一小会儿，用 backSec=60 回扫那一局。',
         };
       }
 
       if (afterSec > 0) await sleep(afterSec * 1000);
-      const now = playtestSummary(state);
+      // 等完 afterSec 之后**重新扫一遍**再报状态：「还在不在试玩」必须是此刻的事实，不是命中那一刻的
+      const fresh = scanLog(w.logPath);
+      const now = fresh.ok ? playtestSummary(fresh.state) : w.summary;
       return {
         ok: true, op, ...common,
-        hit: true, backHit: !!hit.backHit,
-        startedAt: state.startedAtText || null,
-        startedAtMs: Number.isFinite(hit.atMs) ? hit.atMs : null,
-        epochSec: hit.epochSec,
-        token: hit.token,
-        waitedSec, afterSec,
+        hit: true, backHit: w.backHit,
+        startedAt: w.startedAt,
+        startedAtMs: Number.isFinite(w.atMs) ? w.atMs : null,
+        epochSec: w.epochSec,
+        token: w.token,
+        waitedSec: w.waitedSec, afterSec,
         inPlaytest: now.inPlaytest,
         elapsedSec: now.elapsedSec,
         stillRunning: now.inPlaytest,
-        nextSteps: '现在调 `miliastra_shot op=capture target=game` 拿到的就是「开跑后约 ' + afterSec + ' 秒」的画面；'
-          + '运行时日志（.gia）要等这一局结束之后再用 `miliastra_log` 取。',
+        nextSteps: '**一条调用就够**：`miliastra_shot op=burst awaitPlaytest:true afterSec=' + afterSec + ' count=5`'
+          + ' —— 它会等开跑、再等 N 秒、然后连拍。只要一张就用 `miliastra_shot op=capture`；'
+          + '运行时日志（.gia）要等这一局结束之后再 `miliastra_log`。',
       };
     },
   },
@@ -880,7 +858,7 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['capture', 'list', 'clean', 'targets'], description: '默认 capture。' },
+        op: { type: 'string', enum: ['capture', 'burst', 'list', 'clean', 'targets'], description: '默认 capture。' },
         target: {
           type: 'string',
           enum: Object.keys(SHOT_TARGETS),
@@ -895,6 +873,7 @@ const TOOLS = [
             + ' 900×800 的日志窗和 160×28 的最小化残片）——默认取**面积最大**的，不满意再用这个指定。',
         },
         label: { type: 'string', description: '文件名里的标签，如「试玩第1局」「控件对齐」（允许中文；非法字符会被清掉）。' },
+        level: { type: 'string', description: 'op=burst（配合 awaitPlaytest）：关卡 ID / 品牌；省略=当前关卡（用来定位该品牌的 output_log.txt）。' },
         dir: { type: 'string', description: '覆盖截图目录（默认插件数据目录下的 shots\\）。' },
         keepLast: { type: 'number', description: 'op=clean：至少保留最新的 N 张（保护网，任何模式下都生效）。' },
         olderThanDays: { type: 'number', description: 'op=clean：只删比这个更旧的（>0 才生效）。' },
@@ -903,6 +882,21 @@ const TOOLS = [
         confirm: { type: 'boolean', description: 'op=clean：真删必须再传 confirm:true。' },
         bringToFront: { type: 'boolean', description: '默认 true：抓不到时把目标窗口拉到前台再抓。' },
         keepWindowOnTop: { type: 'boolean', description: '默认 false：退回屏幕抓取时临时把目标窗口置顶。' },
+        count: { type: 'number', description: 'op=burst：连拍几张（默认 5，上限 20）。' },
+        burstMs: {
+          type: 'number',
+          description: 'op=burst：两张之间**额外等待**的毫秒（默认 800；小于 800 会被夹到 800 并标 `clamped`）。'
+            + '⚠️ **这不是「每 N 毫秒一张」**：单张自身还要 ~2.6 秒（本机实测），'
+            + '所以真实帧距 ≈ burstMs + 2600ms，回执里用 **`measuredIntervalMs`** 如实报出。',
+        },
+        awaitPlaytest: {
+          type: 'boolean',
+          description: 'op=burst：**默认 false（立刻开拍）**。传 true 就变成「等试玩开跑 → 再等 afterSec 秒 → 连拍」——'
+            + '这条链**一次调用就能完成**（判据与 miliastra_playtest op=wait 是同一份）。',
+        },
+        afterSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：命中开跑后再等 N 秒才开拍（默认 0，上限 120）。' },
+        timeoutSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：等开跑最多多少秒（默认 90，上限 300）。' },
+        backSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：回扫窗口秒数 —— 调用之前 backSec 秒内已经开跑的也算命中（默认 0）。' },
       },
       additionalProperties: false,
     },
@@ -981,6 +975,82 @@ const TOOLS = [
           failed: res.failed,
           after: { count: after.count, totalBytes: after.totalBytes, totalText: humanSize(after.totalBytes) },
         }, base);
+      }
+
+      /* ---- op=burst ----
+       * 「等开跑 → 等 N 秒 → 连拍 N 张」做成**一次调用**：
+       * 分成「先 op=wait 再逐个 capture」两次调用时，两次之间的往返延迟（1~3 秒）会毁掉时间精度。
+       */
+      if (op === 'burst') {
+        const plan = planBurst({ count: args.count, intervalMs: args.burstMs });
+        let playtest = null;
+        let startedAtMs = null;
+        if (args.awaitPlaytest === true) {
+          playtest = await waitForPlaytestStart(resolveLevel(args.level), {
+            timeoutSec: clampNum(args.timeoutSec, 90, 5, 300),
+            backSec: clampNum(args.backSec, 0, 0, 3600),
+            pollMs: clampNum(args.pollMs, 400, 100, 5000),
+          });
+          if (!playtest.hit) {
+            return {
+              ok: true, op, hit: false, timedOut: true, plan,
+              waitedSec: playtest.waitedSec,
+              hint: '没等到「试玩开跑」，所以**一张都没拍**（不白耗）。确认人在编辑器里点了「试玩」；'
+                + '刚点过一小会儿的话加 `backSec=60` 回扫那一局。',
+            };
+          }
+          const afterSec = clampNum(args.afterSec, 0, 0, 120);
+          if (afterSec > 0) await sleep(afterSec * 1000);
+          startedAtMs = Date.now();
+        }
+        if (!processName) throw new Error('没给出要截哪个进程（target/process 都是空的）。');
+        if (args.dryRun === true) {
+          return {
+            ok: true, op, dryRun: true, plan, dir, target: targetKey, process: processName,
+            playtest: playtest ? { hit: playtest.hit, epochSec: playtest.epochSec, startedAt: playtest.startedAt } : null,
+            note: '这是**计划**，一张都没拍。去掉 dryRun 才真拍 —— 连拍要花约 ' + plan.spanMs + 'ms。',
+          };
+        }
+        fsMod.mkdirSync(dir, { recursive: true });
+        const frames = [];
+        let abortedAt = null;
+        for (const f of plan.frames) {
+          if (f.i > 1) await sleep(plan.intervalMs);
+          const base = args.label ? String(args.label) : 'burst';
+          const label = plan.count > 1 ? base + '-' + f.i : base;
+          const name = nextFreeName(dir, shotFileName({ target: targetKey, label, when: new Date() }));
+          const r = await captureWindow({
+            processName, out: pathMod.join(dir, name),
+            title: args.window ? String(args.window) : '',
+            thumbOut: thumbPathFor(dir, name),
+            bringToFront: args.bringToFront === false ? 0 : 1,
+            keepWindowOnTop: args.keepWindowOnTop === true ? 1 : 0,
+          });
+          const judge = judgeCapture(r);
+          let size = null;
+          try { size = fsMod.statSync(r.path).size; } catch { /* 没落盘也照报，size 可能是 null */ }
+          frames.push({
+            i: f.i, file: r.ok ? name : null, atMs: Date.now(),
+            ok: r.ok, suspect: judge.suspect, warning: judge.warning,
+            width: r.width, height: r.height, size,
+            error: r.ok ? null : (r.error || '截图失败'),
+          });
+          if (!r.ok) { abortedAt = f.i; break; }
+        }
+        const sum = burstSummary(frames, { startedAtMs, requestedMs: plan.intervalMs });
+        return Object.assign({
+          ok: sum.okCount > 0, op, target: targetKey, process: processName, dir,
+          plan,
+          playtest: playtest
+            ? { hit: true, backHit: playtest.backHit, epochSec: playtest.epochSec, startedAt: playtest.startedAt, afterSec: clampNum(args.afterSec, 0, 0, 120) }
+            : null,
+          startedAtMs, abortedAt,
+        }, sum, {
+          hint: abortedAt
+            ? '第 ' + abortedAt + ' 张就失败了，**剩下的没拍**（不白耗时间）—— 看那一张的 error。'
+            : '看图走 `GET /miliastra/shot?name=<file>`（原图）或 `&thumb=1`（小图），回执不带 base64。'
+              + '**截图不会自动删**，记得 `op=clean` 看一眼。',
+        });
       }
 
       if (op !== 'capture') throw new Error('未知 op：' + op);
@@ -1424,6 +1494,62 @@ async function runToolByName(toolName, args) {
   } catch (e) {
     return { name: def.name, ok: false, error: (e && e.message) || String(e) };
   }
+}
+
+/**
+ * 等「试玩开跑」—— `miliastra_playtest op=wait` 与 `miliastra_shot op=burst awaitPlaytest:true` **共用这一份**。
+ *
+ * 抽出来的理由不是为了少写几行，而是**判据只能有一份**：
+ * 两条路各写一套「怎样算开跑」，早晚会漂移，而「漂移过的判据」比没有判据更坏（会让人信错的那个）。
+ */
+async function waitForPlaytestStart(lv, { timeoutSec = 90, backSec = 0, pollMs = 400 } = {}) {
+  const logPath = playtestLogPath(lv.brand);
+  const base = scanLog(logPath);
+  if (!base.ok) {
+    throw new HttpError(
+      '读不到试玩日志 ' + logPath + '（' + (base.error || '未知原因') + '）。'
+      + '这个文件由游戏客户端在启动时创建 —— 确认 ' + lv.brand + ' 客户端开着、且这台机器上跑过。',
+      404,
+    );
+  }
+  const t0 = Date.now();
+  let state = base.state;
+  let offset = base.size;
+  let hit = null;
+  if (backSec > 0) {
+    const pre = shouldHit(state, t0, { backSec });
+    if (pre.hit) hit = { backHit: true, atMs: state.lastStartAtMs, epochSec: state.epochSec, token: state.token };
+  }
+  while (!hit && Date.now() - t0 < timeoutSec * 1000) {
+    await sleep(pollMs);
+    const inc = readIncrement(logPath, offset);
+    if (!inc.ok) throw new HttpError('读试玩日志出错：' + inc.error, 500);
+    if (inc.rotated) {
+      // 游戏重启 → 日志换代 → 从头对齐，别拿旧 offset 读新文件
+      offset = 0;
+      state = createPlaytestState();
+      continue;
+    }
+    if (!inc.text) continue;
+    offset = inc.size;
+    const before = state.lastStartAtMs;
+    state = reduceLogLines(state, inc.text.split(/\r?\n/)).state;
+    if (state.lastStartAtMs !== before && Number.isFinite(state.lastStartAtMs)) {
+      hit = { backHit: false, atMs: state.lastStartAtMs, epochSec: state.epochSec, token: state.token };
+    }
+  }
+  return {
+    logPath, base, state,
+    hit: !!hit,
+    backHit: !!(hit && hit.backHit),
+    atMs: hit ? hit.atMs : null,
+    startedAt: state.startedAtText || null,
+    epochSec: hit ? hit.epochSec : null,
+    token: hit ? hit.token : null,
+    waitedSec: Math.round((Date.now() - t0) / 100) / 10,
+    timeoutSec,
+    summary: playtestSummary(state),
+  };
 }
 
 function makeHandler() {

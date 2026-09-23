@@ -20,6 +20,7 @@ import {
   SHOT_TARGETS, sanitizeLabel, stampOf, shotFileName, nextFreeName, isShotName, humanSize,
   planClean, judgeCapture, dataRoot, shotsDir, listShots, removeShots, captureWindow,
   thumbsDir, thumbPathFor, resolveShotFile, thumbIsFresh,
+  planBurst, burstSummary, clampBurstMs, BURST_FLOOR_MS, BURST_MAX_COUNT,
 } from '../lib/shot.mjs';
 
 let pass = 0;
@@ -246,6 +247,51 @@ ok('humanSize 非数字当 0', humanSize(undefined) === '0 B', humanSize(undefin
   ok('SHOT_TARGETS 有 game 与 editor', !!SHOT_TARGETS.game && !!SHOT_TARGETS.editor);
   ok('SHOT_TARGETS 带进程名与说明', SHOT_TARGETS.game.process === 'YuanShen' && typeof SHOT_TARGETS.game.why === 'string');
   ok('目标不含 .exe 后缀', Object.values(SHOT_TARGETS).every((t) => !/\.exe$/i.test(t.process)));
+}
+
+/* ------------------------------------- 连拍：计划与回执（纯函数，**故意不真拍**） */
+
+{
+  // ⚠️ 这里**故意不真拍**：每张约 2.6 秒、还会往用户的截图目录里写 2.4MB（测试不该占用户磁盘）。
+  //    真机连拍有一次性的证据（见 CHANGELOG 0.0.8）；自动化只钉「计划算得对、回执说得清」。
+  ok('clampBurstMs 把间隔夹到地板', clampBurstMs(100) === BURST_FLOOR_MS && clampBurstMs(5000) === 5000);
+  ok('clampBurstMs 非数字给地板值', clampBurstMs('abc') === BURST_FLOOR_MS && clampBurstMs(null) === BURST_FLOOR_MS);
+
+  const p = planBurst({ count: 3, intervalMs: 800 });
+  ok('planBurst 给出每张的相对偏移', p.frames.length === 3 && p.frames[0].offsetMs === 0 && p.frames[2].offsetMs === 1600);
+  ok('planBurst 报出总时长', p.spanMs === 1600);
+  ok('planBurst 数量上下夹住（1~20）', planBurst({ count: 0 }).count === 1 && planBurst({ count: 99 }).count === BURST_MAX_COUNT);
+  ok('planBurst 标出「被夹过」', (() => {
+    const a = planBurst({ count: 99, intervalMs: 100 });
+    const b = planBurst({ count: 3, intervalMs: 800 });
+    return a.clamped === true && a.countCapped === true && b.clamped === false && b.countCapped === false;
+  })());
+  ok('planBurst 非数字走默认（5 张）', planBurst({}).count === 5 && planBurst({ count: 'x' }).count === 5);
+
+  const frames = [
+    { i: 1, file: 'a.png', atMs: 1000, ok: true, width: 1456, height: 939, size: 2500000 },
+    { i: 2, file: 'b.png', atMs: 3600, ok: true, width: 1456, height: 939, size: 2500000, suspect: true, warning: 'x' },
+    { i: 3, file: null, atMs: 6200, ok: false, error: '抓不到' },
+  ];
+  const sum = burstSummary(frames, { startedAtMs: 1000, requestedMs: 800 });
+  ok('burstSummary 统计成功/失败/可疑', sum.count === 3 && sum.okCount === 2 && sum.failedCount === 1 && sum.suspectCount === 1);
+  ok('burstSummary 的 elapsedMs 是**真实**偏移（相对第一张）', sum.frames[0].elapsedMs === 0 && sum.frames[1].elapsedMs === 2600 && sum.frames[2].elapsedMs === 5200);
+  ok('★ burstSummary 报**实测帧距**（不是只回请求值）', sum.measuredIntervalMs === 2600, String(sum.measuredIntervalMs));
+  ok('★ 实测帧距明显大于请求间隔时给出警告', /实测帧距比你要的间隔大不少/.test(sum.note), sum.note.slice(-60));
+  ok('★ timing 说清单张自身耗时（那才是真实上限）', /2\.6 秒/.test(sum.timing.note) && /引擎/.test(sum.timing.note));
+  ok('burstSummary 失败那帧带 error、不给文件名', sum.frames[2].ok === false && sum.frames[2].file === null && sum.frames[2].error === '抓不到');
+  ok('burstSummary 可疑那帧带 warning', sum.frames[1].suspect === true && sum.frames[1].warning === 'x');
+  // ⚠️ 这条**不能**断言「字符串里不出现 base64」——`note` 里正写着「不带 base64」这句人话。
+  //    要判的是「有没有真把二进制塞进来」：超长字符串 / data: URI / 回执总长度。
+  ok('★ 回执里没有图片二进制（只给 URL 入口）', (() => {
+    const j = JSON.stringify(sum);
+    return !/data:image/.test(j) && (j.match(/"[^"]{300,}"/g) || []).length === 0 && j.length < 4000;
+  })(), String(JSON.stringify(sum).length));
+  ok('单张时量不出帧距（如实说）', (() => {
+    const one = burstSummary([frames[0]], { startedAtMs: 1000 });
+    return one.measuredIntervalMs === null && /只有一张/.test(one.timing.note);
+  })());
+  ok('空 frames 不炸', burstSummary([], {}).count === 0 && burstSummary(null, {}).count === 0);
 }
 
 console.log('');

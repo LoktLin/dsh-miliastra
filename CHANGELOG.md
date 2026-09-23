@@ -10,6 +10,86 @@
 
 ---
 
+## [0.0.8] — 2026-09-23
+
+**P2-7 截图连拍**。纯 AI 侧，没动面板。
+
+### 新增 · `miliastra_shot op=burst`
+
+```jsonc
+// ① 立刻连拍 5 张
+{ "op": "burst" }
+// ② 「等试玩开跑 → 再等 3 秒 → 连拍 5 张」——**一次调用完成**
+{ "op": "burst", "awaitPlaytest": true, "afterSec": 3, "count": 5 }
+// ③ 先看要花多久、拍几张（一张都不拍）
+{ "op": "burst", "count": 5, "dryRun": true }
+```
+
+为什么做成**一次调用**：拆成「先 `playtest op=wait` 再逐个 `capture`」两次调用时，
+两次之间的往返延迟（1~3 秒）会直接毁掉时间精度 —— 而连拍的全部意义就在时间上。
+判据与 `miliastra_playtest op=wait` **共用同一份实现**（`waitForPlaytestStart`），
+两条路各写一套早晚会漂移，而漂移过的判据比没有判据更坏。
+
+细节：`count` 夹在 1~20；间隔地板 800ms（小于它会被夹住并在回执里标 `clamped`）；
+**某一张失败就停手**（不白耗剩下的时间），回执里给 `abortedAt`；
+缩略图在**同一次进程**里顺带生成（省一次起进程）；回执**不带图片二进制**，只给
+`GET /miliastra/shot?name=<file>`（原图）与 `&thumb=1`（小图）两个入口。
+
+### 重要发现 · `burstMs` **不是**「每 N 毫秒一张」
+
+真机第一次连拍就暴露了：要 `burstMs=800`，实测帧距是 **2600ms**。
+
+原因是 `burstMs` 只是**两张之间的额外等待**，没算上单张自身的耗时 ——
+本机（起 PowerShell + `PrintWindow` + 顺带出缩略图）**约 2.6 秒/张**。
+
+**参数看起来是那个意思、其实不是，这种最坑**，所以：
+
+- 回执里恒定给 **`measuredIntervalMs`（实测帧距）**与 `timing.note`，把「单张耗时才是真实上限」写在脸上；
+- 实测帧距比请求值大 1.5 倍以上时，`note` 里直接加一句「⚠️ 差额是**单张自身耗时**，不是没生效」；
+- 参数描述里也写明它只是「额外等待」。
+
+### 真机证据（一次性，已跑）
+
+```
+op=burst count=3
+ok=true  count=3  okCount=3  suspect=0  span=5201ms  measuredIntervalMs=2600
+  #1 game-burst-verify-1-…png   0ms  1456×939  2.4 MB  suspect=false
+  #2 game-burst-verify-2-…png  2640ms  1456×939  2.4 MB  suspect=false
+  #3 game-burst-verify-3-…png  5201ms  1456×939  2.4 MB  suspect=false
+op=burst count=2 → measuredIntervalMs=2510（第二次复现，稳定在 2.5~2.7 秒）
+```
+
+⚠️ **由此定一条边界**：单帧寿命 **<1 秒**的特效，这个速度**注定只能抓到 1~2 帧** ——
+是引擎/进程启动的地板，不是参数没调好。要看快特效得改脚本（把过程画在控件上、或分多局抓）。
+
+### 已验证 · 测试
+
+`npm test` 全绿，合计 **438 项**（422 + 16 契约自检）：
+
+| 套件 | 项数 | 本版变化 |
+|---|---|---|
+| `shot-test` | **103** | +17：`clampBurstMs` / `planBurst`（偏移、总时长、上下夹、被夹标记）/ `burstSummary`（成功失败可疑计数、真实 elapsedMs、**实测帧距**、超请求间隔的警告、失败帧带 error、**回执不含图片二进制**、单张与空集） |
+| `smoke` | 39 | — |
+| `deploy-test` | 30 | — |
+| `probe-deploy-test` | 16 | — |
+| `lualint-test` | 32 | — |
+| `playtest-test` | 63 | — |
+| `giaruns-test` | 25 | — |
+| `leveldata-test` | 44 | — |
+| `metrics-test` | 39 | — |
+| `client-render-test` | 31 | — |
+| 契约自检 `selftest.mjs` | 16 | — |
+
+> 自动化测试里**故意不真拍**：每张约 2.6 秒、还会往用户的截图目录里写 2.4MB ——
+> 测试不该占用户的磁盘。真机连拍留一次性证据（上面那段）。
+
+### 顺带 · 重跑 `miliastra_playtest op=wait` 的回归
+
+`op=wait` 的判据刚被抽成共用的 `waitForPlaytestStart`，所以这一版跑了一次真机回归：
+`op=wait timeoutSec=5` 仍能被打断并如实回 `hit:false`（smoke 里那条断言覆盖）。
+
+---
+
 ## [0.0.7] — 2026-09-23
 
 **P1-5 指标约定**：让脚本能「吐指标」，工具能「看指标」。纯 AI 侧，没动面板。
