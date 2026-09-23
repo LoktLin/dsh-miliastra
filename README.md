@@ -5,7 +5,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
-**版本 `0.0.11`**（见 [CHANGELOG](CHANGELOG.md)） · Apache-2.0
+**版本 `0.0.11`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 这套工具链是**在正式服上排一次真实的 bug 排出来的**（「动态创建控件恒返回 nil」→ 根因是模板库为空），
@@ -47,7 +47,7 @@
 > (Genshin Impact UGC) into native DSH tools — locate the live `levelScript`/client script, deploy it
 > safely, read the map archive and runtime logs, take screenshots, and run probes — so an AI agent
 > can debug a UGC level without you copy-pasting files and logs.
-> **8 tools + a sidebar panel**, Apache-2.0, Windows, DSH `0.1.2-rc.1+`.
+> **8 tools + a sidebar panel**, GPL-3.0-only (engine partly derived from miliastra-beyond-simulator — see NOTICE), Windows, DSH `0.1.2-rc.1+`.
 > The Chinese sections above/below are the full manual; this page is the one-screen entry point.
 
 **30-second quick start**
@@ -110,7 +110,7 @@
 | 本文件 | 本仓库 `README.md` | 装 / 用 / 关键知识 / 能力边界 |
 | 变更记录 | 本仓库 [`CHANGELOG.md`](CHANGELOG.md) | 每个版本加了什么、修了什么、怎么验的 |
 | 发布说明 | 本仓库 [`.github/release-notes/`](.github/release-notes/) | 每个版本的 Release 文案（**中英双语**）+ 发版五步清单 |
-| 许可 | 本仓库 [`LICENSE`](LICENSE) | Apache-2.0 |
+| 许可 | 本仓库 [`LICENSE`](LICENSE) ｜ [`NOTICE`](NOTICE) | GPL-3.0-only（引擎部分吸收自 miliastra-beyond-simulator，来源与归属见 NOTICE） |
 
 **配套的离线知识库不在本仓库里**（内容是官方文档的抽取产物，版权归米哈游；
 本仓库只放可发布的代码）。它们在工作区的 `docs/` 与 `tools/` 下：
@@ -400,9 +400,10 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 配置项（环境变量 / 数据目录） | [`docs/配置与开发.md`](docs/配置与开发.md) |
 | 改代码后的验证阶梯 / 生效边界 / 探针硬边界 / 排障 | [`docs/配置与开发.md`](docs/配置与开发.md) |
 | 每个版本的变更与真机证据 | [`CHANGELOG.md`](CHANGELOG.md) |
+| 融合 `miliastra-beyond-simulator` 的需求边界与工单（R↔FP 追溯、六轮决策、W1–W7） | [`docs/需求边界清单_融合beyond-simulator_2026-09-24.md`](docs/需求边界清单_融合beyond-simulator_2026-09-24.md) |
 
 ## License
 
-[Apache License 2.0](LICENSE) · Copyright 2026 LoktLin
+[GNU GPL v3.0（GPL-3.0-only）](LICENSE) · Copyright 2026 LoktLin
 
-可自由使用、修改、分发（含商用），需保留版权与许可声明，且不提供任何担保。完整条款见 [LICENSE](LICENSE)。
+可自由使用、修改、分发（含商用），**但衍生作品必须以同一许可（GPL-3.0-only）发布**，并保留版权与许可声明；不提供任何担保。完整条款见 [LICENSE](LICENSE)；引擎部分的来源与归属见 [NOTICE](NOTICE)。

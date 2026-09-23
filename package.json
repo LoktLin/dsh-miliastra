@@ -17,12 +17,16 @@
     "assets/*",
     ".github/release-notes/*",
     "docs/**/*.md",
+    "engine/**/*.js",
+    "engine/**/*.mjs",
+    "engine/**/*.md",
     "index.js",
     "lib/**/*.js",
     "lib/**/*.mjs",
     "lib/**/*.ps1",
     "lib/assets/*",
     "cordis.patch.yml",
+    "NOTICE",
     "README.md",
     "CHANGELOG.md"
   ],
@@ -46,8 +50,15 @@
     "miliastra",
     "ugc"
   ],
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "fengari": "0.1.5",
+    "pixi.js": "8.20.0",
+    "protobufjs": "8.7.2"
+  },
   "devDependencies": {
+    "esbuild": "0.25.12",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
@@ -68,6 +79,7 @@
   ],
   "scripts": {
     "test": "node tests/readme-test.mjs && node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/lualint-test.mjs && node tests/shot-test.mjs && node tests/client-render-test.mjs",
+    "test:engine": "node --test \"engine/**/*.test.mjs\"",
     "prepublishOnly": "npm test"
   },
   "publishConfig": {

@@ -1,0 +1,20 @@
+dsh-miliastra
+Copyright 2026 linyq / LoktLin
+
+本产品包含来自 miliastra-beyond-simulator 项目的软件
+(https://github.com/1475505/miliastra-beyond-simulator)，
+该项目以 GNU General Public License v3.0 (GPL-3.0-only) 发布。
+
+吸收进来的组成部分（来源：上述仓库，基线提交 22d75a7）：
+  - engine/studio        Authoring JSON / GIA 编解码 / 试玩编排 / 宿主 PNG 出图 / 自动测试
+  - engine/lua-runtime   客户端 Lua 5.3 运行时模拟（基于 fengari）
+  - engine/server        服务端变量与信号的薄模拟
+
+因此本仓库自开发分支 dev-beyond-simulator 起，整体以 GPL-3.0-only 分发。
+此前版本（至 0.0.11）以 Apache License 2.0 发布；已发布版本的授权不因本次变更而撤回。
+
+第三方运行依赖（各自保留其原始许可）：
+  - fengari            MIT
+  - protobufjs         BSD-3-Clause
+  - @napi-rs/canvas    MIT（含各平台预编译二进制）
+  - pixi.js            MIT
