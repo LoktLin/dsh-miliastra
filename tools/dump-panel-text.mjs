@@ -1,0 +1,63 @@
+/**
+ * tools/dump-panel-text.mjs — 把侧边栏面板**渲染后的纯文字**打出来。
+ *
+ * 用途：改面板文案时，先自己读一遍「用户会看到的字」。
+ * 作者的原话是「gui 界面也没看懂探针作用」—— 那次就是因为没人以使用者视角读过一遍。
+ *
+ * 环境与 client-render-test.mjs 一致：最小 window/document + 真 react 的 SSR。
+ * 用法: node tools/dump-panel-text.mjs [关键字，默认「探针」]
+ */
+import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const PKG_DIR = path.resolve(import.meta.dirname, '..');
+const req = createRequire(path.join(PKG_DIR, 'package.json'));
+
+const styleNodes = [];
+const fakeNode = (t) => ({
+  tagName: String(t).toUpperCase(), id: '', textContent: '', attributes: {},
+  setAttribute(k, v) { this.attributes[k] = v; },
+  getAttribute(k) { return this.attributes[k]; },
+  remove() {},
+});
+const documentShim = {
+  head: { appendChild(n) { styleNodes.push(n); } },
+  body: {}, getElementById: () => null, createElement: fakeNode,
+};
+const windowShim = {
+  __ModuleLoader__: { load(s) { windowShim.__captured = s; } },
+  innerHeight: 900, innerWidth: 1200, addEventListener() {}, removeEventListener() {},
+};
+globalThis.window = windowShim;
+globalThis.document = documentShim;
+
+const source = fs.readFileSync(path.join(PKG_DIR, 'lib', 'client.js'), 'utf8');
+new Function('window', 'document', 'console', source)(windowShim, documentShim, console);
+
+const React = req('react');
+const exports_ = windowShim.__captured.factory((name) => {
+  if (name === 'react') return React;
+  if (name === 'react/jsx-runtime') return req('react/jsx-runtime');
+  if (name === '@deepseek-ai/dsh-client-ui-primitives') return { useDismissOnOutsidePointer() {} };
+  throw new Error('未提供的模块：' + name);
+});
+
+const html = req('react-dom/server').renderToStaticMarkup(
+  React.createElement(exports_.__testPanel, { open: true, setOpen() {}, rootRef: { current: null } }),
+);
+
+const lines = html
+  .replace(/<br\s*\/?>/g, '\n')
+  .replace(/<\/(div|span|p|button|label|section)>/g, '\n')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&')
+  .split('\n')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const kw = process.argv[2] || '探针';
+const i = lines.findIndex((s) => s.includes(kw));
+console.log(i >= 0 ? lines.slice(i).join('\n') : lines.join('\n'));
+console.log('\n—— 以上是渲染后的纯文字（' + lines.length + ' 行，面板 HTML ' + html.length + ' 字符）——');

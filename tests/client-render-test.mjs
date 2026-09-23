@@ -19,6 +19,9 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+// 静态 import：本文件的 check() 是**同步**的，用 await import() 会让断言变成
+// 「永远通过」的假测试（详见 probe-deploy-test.mjs 文件头的同一条警告）。
+import { PROBE_TEMPLATES, PROBE_INFO } from '../lib/probes.mjs';
 
 // 本机 dsh 把 react 内联进了前端 vendor 产物（没有独立的 react 包可 require），
 // 所以这一层用**本包自己的 devDependency** 里的真 React 来渲染 —— 见 package.json。
@@ -263,6 +266,84 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
   }
   assert(html.includes('dsh-miliastra-col'), '三栏容器没渲染');
   return `${html.length} 字符，三栏 + ${10} 张卡片齐备`;
+});
+
+check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且四个模板都列出来', () => {
+  const PanelComp = clientExports.__testPanel;
+  const html = renderToStaticMarkup(React.createElement(PanelComp, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+  }));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  // ① 得先回答「探针是什么」「要付什么代价」—— 作者的原话是「没看懂探针作用」
+  assert(/探针是干嘛的/.test(flat), '没有「探针是干嘛的」这一句');
+  assert(/临时替掉你脚本/.test(flat), '没有用大白话解释探针是什么');
+  assert(/什么时候用/.test(flat), '没有说什么时候该用它');
+  assert(/要付什么代价/.test(flat) && /玩法不会跑/.test(flat), '没说清「试玩那一局玩法不会跑」这个代价');
+  // ② 四步流程要能看到，且最后一步是还原脚本
+  assert(/流程/.test(flat), '没有流程说明');
+  assert(/重新试玩一局/.test(flat), '流程里没写「重新试玩一局」');
+  assert(/还原你的脚本|还原脚本/.test(flat), '流程里没写最后一步「还原你的脚本」');
+
+  // ③ 模板按钮用大白话名，且四个模板都在（含 api-surface —— 面板曾漏掉它）
+  for (const t of ['ping', 'tree', 'instantiate', 'api-surface']) {
+    assert(flat.includes(t), '模板按钮缺 ' + t);
+  }
+  for (const label of ['探活', '看控件', '试钥匙', '翻字典']) {
+    assert(flat.includes(label), '缺大白话标签：' + label);
+  }
+  return '是什么 / 代价 / 四步流程 / 4 个模板 + 大白话名 都在';
+});
+
+check('★ 面板兜底文案与 Host 的 PROBE_INFO 不脱节（模板清单、标签、一句话说明）', () => {
+  const src = fs.readFileSync(path.join(PKG_DIR, 'lib', 'client.js'), 'utf8');
+  const infoBlock = /var PROBE_FALLBACK = \[([\s\S]*?)\n      \];/.exec(src);
+  assert(infoBlock, 'client.js 里找不到 PROBE_FALLBACK 兜底表（改了结构就更新这条测试）');
+  const block = infoBlock[1];
+  const missing = PROBE_TEMPLATES.filter((t) => !new RegExp("template: '" + t + "'").test(block));
+  assert(missing.length === 0, 'Host 有模板但面板兜底文案里没有：' + missing.join(', '));
+  const extra = (block.match(/template: '([^']+)'/g) || [])
+    .map((s) => s.replace(/template: '|'/g, ''))
+    .filter((t) => PROBE_TEMPLATES.indexOf(t) < 0);
+  assert(extra.length === 0, '面板兜底文案里有 Host 已不存在的模板：' + extra.join(', '));
+  for (const t of PROBE_TEMPLATES) {
+    const label = PROBE_INFO[t].label;
+    assert(block.includes("'" + label + "'"), '模板 ' + t + ' 的兜底标签与 Host 不一致（应为 ' + label + '）');
+    // oneLine 也必须是同一句话 —— 否则面板与工具描述会各说各的（用户看到的和 AI 看到的不是一回事）
+    assert(block.includes(PROBE_INFO[t].oneLine), '模板 ' + t + ' 的兜底 oneLine 与 Host 不一致：' + PROBE_INFO[t].oneLine);
+  }
+  return PROBE_TEMPLATES.length + ' 个模板的兜底文案（标签 + oneLine）与 Host 一致';
+});
+
+check('★ 部署后（已部署状态）渲染出「第 4 步：还原我的脚本」按钮', () => {
+  const PanelComp = clientExports.__testPanel;
+  const html = renderToStaticMarkup(React.createElement(PanelComp, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __probeBackup: 'C:\\x\\_backup\\双相_20260923104427_备份.lua',
+  }));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/探针已部署/.test(flat), '已部署状态没给出提示');
+  assert(/重新试玩一局/.test(flat), '已部署状态没提醒「重新试玩」');
+  assert(/还原我的脚本/.test(flat), '缺「④ 还原我的脚本」按钮 —— 用户会忘记把探针换回去');
+  // 只有「已部署」才出现，别一上来就摆一个会误点的按钮
+  const clean = renderToStaticMarkup(React.createElement(PanelComp, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+  }));
+  assert(!/还原我的脚本/.test(clean), '未部署时不该出现「还原我的脚本」按钮');
+  return '已部署：提示 + 重新试玩提醒 + 还原按钮；未部署：按钮不出现';
+});
+
+check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）', () => {
+  const PanelComp = clientExports.__testPanel;
+  const html = renderToStaticMarkup(React.createElement(PanelComp, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+  }));
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
+  const stars = text.match(/\*\*[^*]{1,40}\*\*/g);
+  assert(!stars, '界面文案里有 Markdown 粗体记号（会原样显示）：' + (stars || []).slice(0, 4).join(' | '));
+  const ticks = (text.match(/`[^`\n]{1,40}`/g) || []).filter((s) => !/`\+/.test(s));
+  assert(!ticks.length, '界面文案里有反引号（会原样显示）：' + ticks.slice(0, 4).join(' | '));
+  return '无 ** / 反引号 残留';
 });
 
 check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {

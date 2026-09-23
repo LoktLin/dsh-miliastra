@@ -64,7 +64,7 @@
     }
   ],
   "scripts": {
-    "test": "node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/client-render-test.mjs",
+    "test": "node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/lualint-test.mjs && node tests/client-render-test.mjs",
     "prepublishOnly": "npm test"
   },
   "publishConfig": {

@@ -32,7 +32,7 @@ import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.m
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
-import { PROBE_TEMPLATES, renderProbe } from './lib/probes.mjs';
+import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
@@ -441,18 +441,29 @@ const TOOLS = [
   {
     name: 'miliastra_probe',
     description:
-      TITLE + '：探针（只读诊断脚本）模板化。'
-      + 'op=list 列模板；op=render 生成 Lua 全文；op=deploy 生成并直接投进当前关卡活文件（先备份）；'
-      + 'op=collect 从最新日志里取回该探针的结果。'
-      + '模板：tree（打印运行时控件树/画布尺寸）、instantiate（读画布上所有活控件的控件模板索引并逐个试创建 + 扫区间，'
-      + '用来判断「哪些号真能被 game.InstantiateClientUIControl 创建」）、ping（最小连通性）。'
-      + '流程：deploy → 人在编辑器里试玩一局 → collect。'
-      + '⚠️ 部署后必须**重新**试玩（不会热加载）；探针只读，不做场景写操作。',
+      TITLE + '：探针 —— **「问游戏一句」的工具**。'
+      + '探针是一段临时替掉活文件的小程序，只在试玩那几秒跑一次，把游戏内部信息打到日志里。'
+      + '为什么需要它：有些事光读代码看不出来（某个控件号能不能被创建、某个按键枚举到底叫什么名），'
+      + '必须让游戏真跑一遍才知道 —— 用它，别猜。'
+      + '**代价**：部署会**临时覆盖活文件**，所以试玩那一局你的玩法不会跑（Host 会先自动备份，用完一键还原）。'
+      + '**四步**：① op=deploy template=<名字> → ② 在编辑器里**重新**试玩一局（不会热加载）→ '
+      + '③ op=collect 收回结论 → ④ 用 miliastra_code op=restore 还原你的脚本。'
+      + '**四个模板**（先 op=list 看详情）：'
+      + '`ping` 探活=确认脚本到底有没有跑起来（日志空着时先跑它）；'
+      + '`tree` 看控件=屏幕上挂着哪些控件、画布多大；'
+      + '`instantiate` 试钥匙=拿一串索引号去试，看哪个真能被脚本创建出来；'
+      + '`api-surface` 翻字典=把枚举和成员列出来（比如按键的真名），输出较长已分片打印。'
+      + '另：op=render 只生成 Lua 不部署（要先看代码用这个）。探针只读，不做场景写操作。',
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['list', 'render', 'deploy', 'collect'], description: '默认 list。' },
-        template: { type: 'string', description: '模板名：tree / instantiate / ping。' },
+        template: {
+          type: 'string',
+          enum: PROBE_TEMPLATES,
+          description: '模板名。怕选错先 op=list 看每个模板的大白话说明：'
+            + PROBE_TEMPLATES.map((t) => `${t}=${(PROBE_INFO[t] || {}).label || ''}（${(PROBE_INFO[t] || {}).oneLine || ''}）`).join('；'),
+        },
         tag: { type: 'string', description: '日志标签（默认 PROBE）。collect 时用它过滤。' },
         level: { type: 'string', description: '关卡；省略=当前关卡。' },
         file: { type: 'string', description: 'op=deploy：要替换哪个活文件（一个关卡可能有多个 .lua；省略=自动选）。' },
@@ -474,7 +485,14 @@ const TOOLS = [
       if (op === 'list') {
         return {
           ok: true, op, templates: PROBE_TEMPLATES,
-          usage: 'miliastra_probe op=deploy template=instantiate tag=P1 → 试玩一局 → miliastra_probe op=collect tag=P1',
+          whatIsAProbe: PROBE_OVERVIEW.what,
+          why: PROBE_OVERVIEW.why,
+          cost: PROBE_OVERVIEW.cost,
+          steps: PROBE_OVERVIEW.steps,
+          // 每个模板的大白话说明 —— 面板直接拿这份渲染，避免两边各写一套文案
+          info: PROBE_TEMPLATES.map((t) => Object.assign({ template: t }, PROBE_INFO[t] || {})),
+          usage: 'miliastra_probe op=deploy template=instantiate tag=P1 → 在编辑器里重新试玩一局 → '
+            + 'miliastra_probe op=collect tag=P1 → miliastra_code op=restore 还原你的脚本',
         };
       }
       if (op === 'collect') {
@@ -512,9 +530,14 @@ const TOOLS = [
         const dep = deployFile(probeSrc, dest, { backupDir: args.backupDir, lintMode: args.lintMode });
         return {
           ok: dep.ok, op, template: r.template, tag: r.tag,
+          label: (PROBE_INFO[r.template] || {}).label || null,
           probeSource: probeSrc, ...dep,
           collectWith: `miliastra_probe op=collect tag=${r.tag}`,
-          nextStep: '在编辑器里**停止当前试玩 → 重新试玩一局**（部署不会热加载），起来 5 秒后即可 collect。',
+          restoreWith: dep.backup ? `miliastra_code op=restore backup=${dep.backup}` : null,
+          nextStep: dep.ok
+            ? '⚠️ 现在活文件是探针，**你的玩法这一局不会跑**。去编辑器里「停止试玩 → 重新试玩一局」（不会热加载），'
+              + '起来约 5 秒后 op=collect 收结论；**收完记得还原你的脚本**' + (dep.backup ? '（上面的 restoreWith 就是还原命令）' : '')
+            : '部署失败，活文件未被改动。',
         };
       }
       throw new Error('未知 op：' + op);

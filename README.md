@@ -289,6 +289,7 @@ node tools/lint-probes.mjs         # 把 4 个探针模板渲染出来逐个校�
 node tools/lint-all.mjs ../../code # 对整个 code/ 目录跑结构校验
 node tools/live-render-check.mjs   # **向运行中的 Host** 要模板渲染结果并校验（防「跑着的是旧版」）
 node tools/render-probe.mjs api-surface   # **从磁盘**渲染模板并落到 code/<玩法>/（Host 是旧版时用这个）
+node tools/dump-panel-text.mjs 探针  # 把面板**渲染后的纯文字**打出来 —— 改文案时先自己读一遍用户会看到什么
 
 # —— L4 真机（改完 Host 半边、重启 dsh web 之后）——
 node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
