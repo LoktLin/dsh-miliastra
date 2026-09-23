@@ -110,11 +110,30 @@ dsh web
 | 工具 | 干什么 | 什么时候用 |
 |---|---|---|
 | **`miliastra_health`** | 扫出所有客户端安装 / 关卡 / 活文件 / 地图 / 日志目录，并判定「当前正在开发的关卡」 | **任何操作前先调它**。路径随账号与换图变化，禁止写死 |
-| **`miliastra_code`** | 活文件的 读 / 部署 / 体检 / 还原。部署一律：**先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 BOM** | 改完本地脚本要投进沙箱时 |
+| **`miliastra_code`** | 活文件的 读 / 部署 / 体检 / 还原。部署一律：**先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 BOM**，并**先做 Lua 结构校验**（见下） | 改完本地脚本要投进沙箱时 |
 | **`miliastra_map`** | 读 `<关卡ID>.gil`：关卡信息、**客户端控件谱系**（控件模板索引 / 名字 / 父 / 子）、脚本源码快照比对 | 判断「哪些控件能被脚本动态创建」、判断「跑的是不是本地这版代码」 |
 | **`miliastra_log`** | 读 `.gia` 运行时日志：列局面、结构化读正文、按 TAG / 正则过滤、汇总标签 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
-| **`miliastra_probe`** | 探针模板化：`tree` / `instantiate` / `ping` 三个只读诊断脚本，渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
+| **`miliastra_probe`** | 探针模板化：`tree` / `instantiate` / `ping` / `api-surface` 四个只读诊断脚本，渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
 | `miliastra_echo` | 回显参数 | 怀疑插件没生效 / 参数丢了时先调它 |
+
+### 部署前的 Lua 结构校验（`lintMode`）
+
+**一段语法错的 Lua 投进沙箱，试玩会静默不生效** —— 脚本根本没起来，日志里只会是「什么都没有」，
+这是最难查的一类失败（比报错难查得多）。所以 `op=deploy` 默认先扫一遍结构：
+
+| `lintMode` | 行为 |
+|---|---|
+| `strict`（默认） | 缺 `end` / 括号不配平 / 字符串或长注释没闭合 / `repeat` 少了 `until` → **直接拒绝部署，且不碰活文件、不产生备份** |
+| `warn` | 照投，但把问题放进返回值的 `warnings[]`，不静默吞掉 |
+| `off` | 不校验（逃生舱） |
+
+校验器在 `lib/lualint.mjs`，**零依赖的结构级启发式**（不是完整 Lua 解析器）：先严格剥掉注释与
+字符串（含 `--[[ ]]` / `[==[ ]==]` 长括号），再统计块开闭与括号配对，**报出「第 N 行的 xxx 没有对应的 end」**。
+
+> ⚠️ 写它的时候踩过一个坑，值得记下来：最初「换行直接跳过」，结果**行尾标识符与下一行行首会粘成一个词**
+> （`local sx, sy` 换行接 `local` → `sylocal`），行首的 `end` 被吞进上一行的尾巴 ——
+> 于是**真文件恒报「缺 29 个 end」，而单行小样例却全绿**。现在换行会占位保留，
+> `tests/lualint-test.mjs` 里有 4 条专门盯这个的回归断言。
 
 典型循环：
 
@@ -260,9 +279,14 @@ miliastra_code op=inspect file=角色B.lua # 指定活文件体检
 ```powershell
 # —— L1 契约 / 单元 ——
 node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例（21 项）
-node tests/deploy-test.mjs        # 部署与备份：哈希 / 拒收 BOM / 拒收非法 UTF-8 / 备份撞名顺延 / 列备份 / 安全还原（12 项，临时目录）
-node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件（7 项）
-node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵（10 项）
+node tests/deploy-test.mjs        # 部署与备份：哈希 / 拒收 BOM / 拒收非法 UTF-8 / 备份撞名顺延 / 列备份 / 安全还原 / lintMode 三档（17 项，临时目录）
+node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（10 项）
+node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵（15 项）
+node tests/lualint-test.mjs       # Lua 结构校验器：合法构造不误报 / 写坏的必须报对行号 / 15 个真文件回归（32 项）
+
+# —— 开发用小工具（不随包发布）——
+node tools/lint-probes.mjs        # 把 4 个探针模板渲染出来逐个校验，出错打印上下文行
+node tools/lint-all.mjs ../../code # 对整个 code/ 目录跑结构校验
 
 # —— L4 真机（改完 Host 半边、重启 dsh web 之后）——
 node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
@@ -276,9 +300,9 @@ node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 | 层 | 命令 | 证明了什么 | 证明不了什么 |
 |---|---|---|---|
 | L1 | 技能 `selftest.mjs`（16 项） | 两个半边的契约、工具注册形状、路由信封、cleanup 可回收 | 真实渲染、真实装配 |
-| L1 | 上面三个单元测试 | 部署/探针的字节级行为 | 同上 |
-| L3 | `client-render-test.mjs`（14 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确 | 壳会不会把它挂上去 |
-| L4 | `live-check.mjs`（8 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
+| L1 | 上面四个单元测试（74 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报 | 同上 |
+| L3 | `client-render-test.mjs`（15 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确 | 壳会不会把它挂上去 |
+| L4 | `live-check.mjs`（9 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
 
 `live-check.mjs` 覆盖：状态路由、工具按名调用、`health` / `log` / `map` 四个只读工具真跑一遍、
 `echo` 回显、未知路由 404。**它证明不了「侧边栏面板真的渲染出来了」** —— 那需要刷新页面用眼睛看一眼。

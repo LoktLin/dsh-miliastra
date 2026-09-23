@@ -172,6 +172,58 @@ check('restore() 拒收带 BOM / 非法 UTF-8 的备份（还原坏文件比不�
   return '两种坏备份都被拒收，活文件未被改动';
 });
 
+check('★ lintMode=strict：语法错的脚本被拒收，且**不碰活文件、不产生备份**', () => {
+  const broken = path.join(tmp, 'broken.lua');
+  fs.writeFileSync(broken, '-- 少一个 end\nlocal function f()\n  return 1\n', 'utf8');
+  const before = fs.readFileSync(dest);
+  const bd = path.join(tmp, 'lint-strict-backup');
+  const beforeCount = fs.existsSync(bd) ? fs.readdirSync(bd).length : 0;
+  const r = deploy(broken, dest, { backupDir: bd });
+  assert(r.ok === false, '缺 end 的脚本竟然被部署了');
+  assert(/结构校验不通过/.test((r.errors || []).join(' ')), '没说是结构校验拦下的：' + JSON.stringify(r.errors));
+  assert(/第 2 行的 function 没有对应的 end/.test((r.errors || []).join(' ')), '没报出是哪个块没关：' + JSON.stringify(r.errors));
+  assert(Buffer.compare(fs.readFileSync(dest), before) === 0, '被拒收却改动了活文件');
+  assert((fs.existsSync(bd) ? fs.readdirSync(bd).length : 0) === beforeCount, '被拒收却产生了备份');
+  return '拦下并说明原因，活文件零改动';
+});
+
+check('★ lintMode=warn：照投但要带出 warnings（不静默吞掉）', () => {
+  const broken = path.join(tmp, 'broken-warn.lua');
+  fs.writeFileSync(broken, '-- 少一个 end\nlocal function f()\n  return 1\n', 'utf8');
+  const r = deploy(broken, dest, { backupDir: path.join(tmp, 'lint-warn-backup'), lintMode: 'warn' });
+  assert(r.ok === true, 'warn 模式不该拒收：' + JSON.stringify(r.errors));
+  assert(r.lintMode === 'warn', 'lintMode 没回传：' + r.lintMode);
+  assert(r.lint && r.lint.ok === false, 'lint 结果没回传');
+  assert((r.warnings || []).some((w) => /结构校验不通过/.test(w)), 'warnings 没带出问题：' + JSON.stringify(r.warnings));
+  return '已部署 + 1 条 warning';
+});
+
+check('★ lintMode=off：不校验、不报（逃生舱）', () => {
+  const broken = path.join(tmp, 'broken-off.lua');
+  fs.writeFileSync(broken, '-- 少一个 end\nlocal function f()\n  return 1\n', 'utf8');
+  const r = deploy(broken, dest, { backupDir: path.join(tmp, 'lint-off-backup'), lintMode: 'off' });
+  assert(r.ok === true, 'off 模式不该拦：' + JSON.stringify(r.errors));
+  assert((r.warnings || []).length === 0, 'off 模式不该有 warning');
+  return '原样投出';
+});
+
+check('★ 合法脚本：lint ok、warnings 为空、结果里带 lint 回执', () => {
+  const good = path.join(tmp, 'good.lua');
+  fs.writeFileSync(good, '-- 正常\nlocal function f(v)\n  return v\nend\nreturn f(1)\n', 'utf8');
+  const r = deploy(good, dest, { backupDir: path.join(tmp, 'lint-ok-backup') });
+  assert(r.ok === true, '合法脚本被拦了：' + JSON.stringify(r.errors));
+  assert(r.lint && r.lint.ok === true, 'lint 回执不对：' + JSON.stringify(r.lint));
+  assert((r.warnings || []).length === 0, '合法脚本不该有 warning');
+  return `${r.lint.stats.lines} 行 / ${r.lint.stats.tokens} token`;
+});
+
+check('★ 未知 lintMode 明确报错，不静默降级成 off', () => {
+  const r = deploy(src, dest, { backupDir: path.join(tmp, 'lint-bad-backup'), lintMode: 'loose' });
+  assert(r.ok === false, '未知 lintMode 竟然被接受');
+  assert(/lintMode 只能是/.test((r.errors || []).join(' ')), '报错文案没点名 lintMode：' + JSON.stringify(r.errors));
+  return '拒绝并说明可选值';
+});
+
 check('备份目录可用环境变量覆盖（MILIASTRA_BACKUP_DIR）', () => {
   const saved = process.env.MILIASTRA_BACKUP_DIR;
   const custom = path.join(tmp, 'env-backup-dir');

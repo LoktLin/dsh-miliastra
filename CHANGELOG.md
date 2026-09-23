@@ -68,6 +68,38 @@
   `OnInit`/`OnEnable`/`OnStart` 三行空壳。探针模板已内建这行。
 - **解析 5 字节 varint 只解 4 字节**，漏掉整整一段 ID 区间（工具早期版本）。
 
+### 部署前的 Lua 结构校验（`lib/lualint.mjs`）
+
+**一段语法错的 Lua 投进沙箱，试玩会静默不生效** —— 脚本根本没起来，日志里只会是「什么都没有」，
+这比报错难查得多。所以 `miliastra_code op=deploy` 与 `miliastra_probe op=deploy` 默认先扫一遍结构：
+
+- `lintMode: 'strict'`（默认）—— 缺 `end` / 括号不配平 / 字符串或长注释没闭合 / `repeat` 少了 `until`
+  → **拒绝部署，且不碰活文件、不产生备份**
+- `lintMode: 'warn'` —— 照投，但问题进 `warnings[]`，不静默吞掉
+- `lintMode: 'off'` —— 不校验（逃生舱）；未知取值明确报错，**不静默降级成 off**
+
+零依赖的结构级启发式（不是完整 Lua 解析器）：先严格剥注释与字符串（含 `--[[ ]]` / `[==[ ]==]`），
+再统计块开闭与括号配对，报的是**「第 N 行的 function 没有对应的 end」**而不是「文件最后一行」。
+
+- **`miliastra_probe` 新增 `api-surface` 模板**：把 `_G` / `Enum` / `game` / `script` / 元表逐个枚举打出来，
+  并对 `KeyEventType` / `KeyboardKeyCode` / `ControllerKeyCode` 逐个实测取值 ——
+  用来终结「按键枚举到底是哪张表」这种靠猜的活（模板上线前被结构校验抓出一个 `if … end else … end` 的语法错，
+  那种错**投进去就是整段静默失效**）。
+
+### 开发小工具（`tools/`，不随包发布）
+
+- `tools/lint-probes.mjs` —— 把每个探针模板渲染出来逐个结构校验，出错打印上下文行
+- `tools/lint-all.mjs <目录>` —— 对整个目录的 `.lua` 跑结构校验
+
+### 修掉的真实缺陷（续）
+
+- **结构校验器把换行丢了** → 「行尾标识符 + 下一行行首词」粘成一个标识符
+  （`local sx, sy` 换行接 `local` → `sylocal`），**行首的 `end` 被吞进上一行尾巴**。
+  症状极具迷惑性：**真文件恒报「缺 29 个 end」，而单行小样例全绿**。
+  逐行拆 token 才抓到（`L130:sylocal`）。现在换行占位保留，`tests/lualint-test.mjs` 有 4 条回归断言盯它。
+- **缺 `end` 时报的是「文件最后一行」**，对排障几乎没用。改为记开块栈，报**最内层没关上的那个块**的行号。
+- **`api-surface` 模板里的语法错**（`if … then … end else … end`）—— 由新加的模板结构校验抓出。
+
 ### 工程 / 仓库
 
 - 许可证 **Apache-2.0**；`LICENSE` / `CHANGELOG.md` / `.gitattributes`（统一 LF）/ `.gitignore`
@@ -80,13 +112,14 @@
 | 层 | 结果 |
 |---|---|
 | L1 工具层（`tests/smoke.mjs`） | 22 项 |
-| L1 部署与备份（`tests/deploy-test.mjs`） | 12 项 |
-| L1 探针部署 / 多活文件 / 关卡布局 / 进程形状（`tests/probe-deploy-test.mjs`） | 9 项 |
+| L1 部署与备份 / `lintMode` 三档（`tests/deploy-test.mjs`） | 17 项 |
+| L1 探针部署 / 多活文件 / 关卡布局 / 模板结构（`tests/probe-deploy-test.mjs`） | 10 项 |
+| L1 Lua 结构校验器 / 15 个真文件回归（`tests/lualint-test.mjs`） | 32 项 |
 | L3 真实 React 渲染 + 整面板空状态 SSR（`tests/client-render-test.mjs`） | 15 项 |
 | L1 技能契约自检（`dsh-plugin-dev` 的 `selftest.mjs`） | 16 项 |
 | **L4 真机**（`tests/live-check.mjs`，对着运行中的 dsh web） | 9 项 |
 
-合计 **83 项断言**。契约取证自本机 **`dsh 0.1.5-rc.1`**。
+合计 **121 项**（含自检 16 项）。契约取证自本机 **`dsh 0.1.5-rc.1`**。
 
 其中 L4 的 9 项里有一条值得单独说：**`clientHalf` 断言** ——
 它查宿主 `dsh-client-modules` 的 boot 图，机器证明「面板 bundle 已进 `window.__DSH_BOOT__`」

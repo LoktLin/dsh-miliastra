@@ -175,6 +175,9 @@ const TOOLS = [
       + '**部署一律：先备份旧文件 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM。**'
       + '（不带 BOM 是硬要求：原神实测会打印 "Read text file with BOM header may cause Lua error"。）'
       + 'op=read 读活文件正文；op=deploy 把 source 指向的本地文件投进沙箱（**覆盖前自动备份**）；'
+      + '**部署前先做 Lua 结构校验**（缺 end / 括号不配平 / 字符串没闭合这类错投进去，试玩会静默不生效、'
+      + '日志里什么都没有 —— 这是最难查的一类失败）；默认 lintMode:"strict" 直接拒绝，'
+      + '确认没问题可 lintMode:"warn" 只提示、"off" 跳过。'
       + 'op=inspect 只体检不改动；'
       + 'op=backups 列出该活文件的全部备份（时间/SHA/是否带 BOM）；op=backup 手动备份一份；'
       + 'op=restore backup=<备份文件绝对路径> 用它覆盖活文件 —— **还原前会先把当前版本再自动备份一次**（双保险）。'
@@ -189,6 +192,11 @@ const TOOLS = [
         backup: { type: 'string', description: 'op=restore：要还原的备份文件绝对路径（从 op=backups 拿）。' },
         backupDir: { type: 'string', description: '备份目录（默认活文件同级 _backup；可用环境变量 MILIASTRA_BACKUP_DIR 覆盖）。' },
         noBackup: { type: 'boolean', description: 'op=deploy：跳过备份（危险，默认 false）。' },
+        lintMode: {
+          type: 'string',
+          enum: ['strict', 'warn', 'off'],
+          description: 'op=deploy：Lua 结构校验强度。strict（默认）=不通过就拒绝部署；warn=只带提示照投；off=不校验。',
+        },
         head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。' },
       },
       additionalProperties: false,
@@ -250,8 +258,12 @@ const TOOLS = [
       if (op === 'deploy') {
         if (!args.source) throw new Error('op=deploy 需要 source（要投进去的本地文件绝对路径）。');
         if (!destPath) throw new Error('没找到目标活文件路径（关卡里还没有 .lua？先用 miliastra_health 看）。');
-        const r = deployFile(args.source, destPath, { backupDir: args.backupDir, noBackup: args.noBackup === true });
-        return { ok: r.ok, op, level: { levelId: lv.levelId }, ...r, nextStep: r.ok ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果' : null };
+        const r = deployFile(args.source, destPath, { backupDir: args.backupDir, noBackup: args.noBackup === true, lintMode: args.lintMode });
+        return {
+          ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
+          lintSummary: r.lint ? (r.lint.ok ? '结构正常' : '发现问题') : '（未校验）',
+          nextStep: r.ok ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果' : null,
+        };
       }
       throw new Error('未知 op：' + op);
     },
@@ -448,6 +460,11 @@ const TOOLS = [
         from: { type: 'number', description: 'instantiate：兜底扫描下界（默认 1073741824）。' },
         to: { type: 'number', description: 'instantiate：兜底扫描上界（默认 1073741900）。' },
         saveTo: { type: 'string', description: 'render/deploy：把生成的 Lua 另存到这个绝对路径。' },
+        lintMode: {
+          type: 'string',
+          enum: ['strict', 'warn', 'off'],
+          description: 'op=deploy：Lua 结构校验强度（默认 strict）。探针模板都是本插件生成的，正常不会挂；报错说明模板本身有 bug。',
+        },
       },
       additionalProperties: false,
     },
@@ -492,7 +509,7 @@ const TOOLS = [
         const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
         const probeSrc = (args.saveTo || (lv.luaDir + '\\_探针_' + r.template + '_' + r.tag + '_' + stamp + '.lua'));
         if (!args.saveTo) fs.writeFileSync(probeSrc, r.lua, 'utf8');
-        const dep = deployFile(probeSrc, dest, { backupDir: args.backupDir });
+        const dep = deployFile(probeSrc, dest, { backupDir: args.backupDir, lintMode: args.lintMode });
         return {
           ok: dep.ok, op, template: r.template, tag: r.tag,
           probeSource: probeSrc, ...dep,

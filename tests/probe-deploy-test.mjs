@@ -175,6 +175,24 @@ await check('一个关卡多个活文件：全部列出 / 可按名字选 / 选�
   }
 });
 
+await check('★ 每个探针模板生成出来的 Lua 都通过结构校验（模板写错会静默不生效）', async () => {
+  const { PROBE_TEMPLATES, renderProbe } = await import('../lib/probes.mjs');
+  const { lintLua, lintSummary } = await import('../lib/lualint.mjs');
+  assert(PROBE_TEMPLATES.length >= 4, '模板数不对：' + PROBE_TEMPLATES.join(', '));
+  const badTpl = [];
+  const sizes = [];
+  for (const t of PROBE_TEMPLATES) {
+    const r = renderProbe(t, { tag: 'SELFTEST' });
+    assert(r.ok, `模板 ${t} 渲染失败：${r.error}`);
+    assert(/EnableUpdate\(true\)/.test(r.lua), `模板 ${t} 没开 EnableUpdate(true) —— 只会打 OnInit/OnEnable/OnStart 三行空壳`);
+    const lr = lintLua(r.lua);
+    if (!lr.ok) badTpl.push(t + ': ' + lintSummary(lr));
+    sizes.push(t + ' ' + r.bytes + 'B');
+  }
+  assert(badTpl.length === 0, '模板结构有问题：' + badTpl.join(' | '));
+  return `${PROBE_TEMPLATES.length} 个模板全通过（${sizes.join(' / ')}）`;
+});
+
 console.log('');
 try { fs.rmSync(fakeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
 if (failures.length) {
