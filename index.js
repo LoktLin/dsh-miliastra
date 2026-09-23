@@ -32,6 +32,7 @@ import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.m
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
+import { diagnoseLogs } from './lib/logdiag.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 
@@ -438,14 +439,20 @@ const TOOLS = [
     name: 'miliastra_log',
     description:
       TITLE + '：读客户端运行时日志 `.gia`。**这是运行时取证（Lua 里 print 出来的东西）的唯一入口**，'
-      + '比让人手动复制粘贴可靠得多。每局试玩会新写一个 .gia 文件。'
+      + '比让人手动复制粘贴可靠得多。'
       + 'op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；'
-      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）。'
-      + '记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。',
+      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）；'
+      + '**op=diagnose 回答「我刚试玩了，为什么没有日志？」** —— 把「最近一局多久前写的 / 游戏进程在不在跑 / '
+      + '地图最后存盘时间」摆出来，给出结论与下一步。'
+      + '记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。'
+      + '\n\n⚠️ **「试玩了却没有新日志」是常见现象，先跑 op=diagnose 定位是哪一环，别急着怀疑脚本。**'
+      + '2026-09-23 实测：作者玩了一会儿、回来发现磁盘上**一个新的 .gia 都没有** —— 最后查明是'
+      + '**忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）。diagnose 会把「最近一局多久前写的 / '
+      + '进程在不在跑 / 地图最后存盘时间」摆出来给结论。',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags'], description: '默认 tail。' },
+        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'diagnose'], description: '默认 tail。' },
         level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
@@ -464,6 +471,58 @@ const TOOLS = [
       if (op === 'sessions') {
         const files = listGia(dir, Number.isFinite(args.limit) ? args.limit : 40);
         return { ok: true, op, dir, count: files.length, files };
+      }
+      /*
+       * op=diagnose —— 回答「我刚试玩了，为什么没有日志？」
+       *
+       * 背景（2026-09-23 实机踩到）：作者试玩了一局，**磁盘上一个新的 .gia 都没有**，
+       * 而面板/工具当时只会安安静静地把「上一次的旧日志」端上来 —— 用户根本不知道自己漏了哪一步。
+       *
+       * 这个 op 就是把「人肉判断」变成可断言的东西：把现场证据摆出来，给出结论 + 下一步。
+       * 判据只用**能拿到的事实**（时间 / 进程 / 存盘时间），不做无根据的猜测。
+       */
+      if (op === 'diagnose') {
+        const files = listGia(dir, 5);
+        const procs = clientProcesses();
+        const gilSt = lv.gil && lv.gil.path ? (() => { try { return fsMod.statSync(lv.gil.path); } catch { return null; } })() : null;
+        // 判据抽在 lib/logdiag.mjs（纯函数）—— 这里是「取事实 + 组装回执」
+        const d = diagnoseLogs({
+          files,
+          procs: procs ? procs.summary : null,
+          gilMtimeMs: gilSt ? gilSt.mtimeMs : null,
+          now: Date.now(),
+        });
+
+        // 顺带报一下最近一局的 channel（关卡 / 模式名）—— 帮用户判断「这是不是我那张图」
+        let newestChannel = null;
+        if (files[0]) {
+          try {
+            const g = readGia(files[0].path);
+            if (g.ok) {
+              const withMsg = g.records.filter((r) => r.message);
+              const last = withMsg[withMsg.length - 1] || g.records[g.records.length - 1];
+              newestChannel = last ? last.channel : null;
+            }
+          } catch { /* 读不到就算了，不影响结论 */ }
+        }
+
+        return {
+          ok: true, op, dir, level: { levelId: lv.levelId },
+          verdict: d.verdict, headline: d.headline, why: d.why, next: d.next,
+          evidence: Object.assign({}, d.facts, {
+            newest: files[0] ? {
+              name: files[0].name, size: files[0].size, mtime: files[0].mtime,
+              ageSec: d.facts.newestAgeSec,
+              writtenAt: new Date(Date.parse(files[0].mtime)).toLocaleString(),
+              channel: newestChannel,
+            } : null,
+            otherRecent: files.slice(1).map((f) => ({ name: f.name, mtime: f.mtime, size: f.size })),
+            processes: procs ? procs.summary : null,
+            gameMemoryMB: procs ? (procs.entries || []).filter((e) => e.running).map((e) => e.label + ' ' + e.memoryMB + 'MB') : null,
+            mapSavedAt: gilSt ? gilSt.mtime.toISOString() : null,
+            mapSize: gilSt ? gilSt.size : null,
+          }),
+        };
       }
       const file = args.file
         ? (args.file.includes('\\') ? args.file : dir + '\\' + args.file)

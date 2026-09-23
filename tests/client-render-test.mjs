@@ -546,6 +546,13 @@ check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`*
       __uiInfo: { ok: true, count: 3, likelyTemplates: [{ id: 1073741867, name: '文本框', parent: null }],
         records: [{ id: 1073741867, name: '文本框', parent: null }, { id: 1073741863, name: '容器节点', parent: null }] },
       __uiRaw: true,
+      // 体检结论是**从 Host 拿来的**文本，里面有给 AI 看的 Markdown —— 面板必须剥掉再显示
+      __logDiag: {
+        verdict: 'stale',
+        headline: '⚠️ 最近一局是 **113 分钟前**写的（18:44:57）—— **你刚才那局没有写出日志**。',
+        why: ['① **试玩可能还在进行中** —— `.gia` 不是边玩边写', '④ 「日志」面板里 **`客户端脚本` 没勾选**'],
+        next: ['① 确认试玩是**进行中**的状态', '② 结束试玩后**再点一次取日志**'],
+      },
       __logs: [{ time: 't', tag: 'A', text: '正常', raw: '[A] 正常' }, { time: 't', tag: 'A', text: '失败', bad: true, raw: '[A] 失败' }],
     })],
   ];
@@ -610,6 +617,39 @@ check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者
   assert(!/还原到最新备份<\/button>/.test(noFixed), '没有固定名备份却给了一键还原按钮');
   assert(/Host 可能是旧版/.test(noFixed.replace(/<[^>]+>/g, ' ')), '没解释为什么没有固定名备份');
   return '位置 + 固定名 + 一键还原 + ★标记 + 确认后果；缺固定名时给解释';
+});
+
+check('★ 试玩体检：最近一局不新鲜时，把「原因 + 下一步」摆在日志卡片最上面', () => {
+  const stale = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __logDiag: {
+      verdict: 'stale',
+      headline: '⚠️ 最近一局是 113 分钟前写的（18:44:57）—— 你刚才那局没有写出日志。',
+      why: ['① 试玩可能还在进行中 —— .gia 不是边玩边写', '② 或者其实没点「试玩」'],
+      next: ['① 在编辑器里确认试玩是进行中的状态', '② 结束试玩后再点一次取日志'],
+    },
+  }));
+  const flat = stale.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  // ① 结论要在，而且要说清「没有写出日志」（不能只端上旧日志让人自己发现）
+  assert(/没有写出日志/.test(flat), '没说清「刚才那局没写出日志」');
+  assert(/可能原因/.test(flat), '没列可能原因');
+  assert(/下一步/.test(flat), '没给下一步');
+  assert(/不是边玩边写/.test(flat), '没解释 .gia 的落盘时机（这是用户最容易误解的点）');
+  // ② 要用醒目样式（-err），不能混在普通提示里
+  assert(/dsh-miliastra-err/.test(stale), '没用醒目样式（-err）');
+  // ③ 要有个「试玩体检」按钮随时能再问一次
+  assert(/试玩体检<\/button>/.test(stale), '缺「试玩体检」按钮');
+
+  // 反过来：fresh 时不该刷一个红框出来（只留一句淡色说明）
+  const fresh = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __logDiag: { verdict: 'fresh', headline: '最近一局是 30 秒前写的 —— 这应该就是你刚才那局。', why: [], next: ['直接「取日志」即可'] },
+  }));
+  const freshFlat = fresh.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/30 秒前/.test(freshFlat), 'fresh 的说明没显示');
+  assert(!/可能原因/.test(freshFlat), 'fresh 时不该列「可能原因」');
+  return 'stale：醒目框 + 原因 + 下一步 + 按钮；fresh：只一句说明';
 });
 
 check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
