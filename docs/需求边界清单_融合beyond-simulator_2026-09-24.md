@@ -279,13 +279,13 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 
 | 工单 | 内容 | 验收（量化） | 依赖 | 状态 |
 |---|---|---|---|---|
-| **W1** | 许可与声明 → GPL-3.0-only（`LICENSE` / `NOTICE` / `package.json` / `README`） | 三处声明一致；既有 462 项仍全绿 | 无 | 待确认 |
-| **W2** | 引擎子树搬入 + 依赖 + esbuild 构建脚本 | 对方 169 项测试在本仓可跑（非 skip） | W1 | 待确认 |
+| **W1** | 许可与声明 → GPL-3.0-only（`LICENSE` / `NOTICE` / `package.json` / `README`） | 三处声明一致；既有 462 项仍全绿 | 无 | ✅ 已完成（`c76da4d`，与 W2 同批落地） |
+| **W2** | 引擎子树搬入 + 依赖 + esbuild 构建脚本 | 引擎测试在本仓可跑（非 skip） | W1 | 🟡 进行中：搬入 + 依赖 + **129 项引擎测试已绿**；**esbuild 构建脚本待做** |
 | **W3** | Host 适配层（路由 + 工具，命名按 QT3） | 新路由/工具契约测试绿；`readme-test` 逐字比对过 | W2 | 待确认 |
 | **W4** | `conversation.view` 三 tab 骨架（UI 自写） | 三 tab 可切、状态独立、互不白屏 | 无（不依赖 W2/W3） | 待确认 |
 | **W5** | 初级/高级卡片归类搬家（QT1 定稿后） | 现有 10 张卡功能不变形；462 项绿 | W4 | 待确认 |
 | **W6** | 模拟器视图（接引擎 API 渲染 + 交互） | 读 `.gil` 出控件树/画布；写回经官方编辑器验证 | W2 W3 | 待确认 |
-| **W7** | 搬对方测试子集进回归 | 169 + 462 一起全绿，断言数只增不减 | W2 | 待确认 |
+| **W7** | 搬对方测试子集进回归 | 引擎 129 + 我们 462 一起全绿，断言数只增不减 | W2 | 🟡 部分：129 项已跑绿（`npm run test:engine`），**尚未并入 `npm test`** |
 
 ---
 
@@ -296,6 +296,12 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 2026-09-24 | 建 `dev` 分支并推送 | `dev eaea62c [origin/dev]` |
 | 2026-09-24 | 建 `dev-beyond-simulator` 分支并推送 | `git branch -vv` → `dev-beyond-simulator eaea62c [origin/dev-beyond-simulator]` |
 | 2026-09-24 | 对比 + 许可 + 重依赖 + 代码质量分析 | `docs/dsh-miliastra_对比_miliastra-beyond-simulator_2026-09-24.md` |
+| 2026-09-24 | **第 4 轮拍板**：许可不单独排期，重心转"模拟器重构吸收" | 作者原话：「许可不重要 重要的模拟器要重构吸收」 |
+| 2026-09-24 | 引擎物理搬入 `engine/{studio,lua-runtime,server}` = **58 文件 / 610 KB**，5 处裸包名 + 4 处测试旧路径改写 | commit `c76da4d`（已推送 `origin/dev-beyond-simulator`） |
+| 2026-09-24 | 4 个依赖装好并实测可加载（原生 canvas 真出 PNG 113 B、fengari 有 lua 命名空间） | `npm install` → added 22 packages in 13s |
+| 2026-09-24 | **引擎测试 129 项全绿**（0 失败 / 0 跳过 / 1.9s） | `npm run test:engine`；注：129 是引擎三包（studio+lua-runtime+server），对方全仓 169 还含 `dsh-plugin`/`web`/`mcp` 三套（按 Q5 **未搬**） |
+| 2026-09-24 | 许可同批落地：`LICENSE`→GPL-3.0-only、新增 `NOTICE`、README 四处同步、`readme-test` 的 docs 可达性补链后 14/0 | 同 commit `c76da4d` |
+| 2026-09-24 | 既有套件复核：11 子集 + 自检**全绿**（client-render 32 / deploy 30 / giaruns 25 / leveldata 44 / live-check 9 / lualint 32 / metrics 39 / playtest 63 / probe-deploy 16 / readme 14 / shot 103 / smoke 48） | 逐个跑，见输出 |
 
 ```yaml
 handoff:
