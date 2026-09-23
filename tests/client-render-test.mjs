@@ -340,6 +340,21 @@ check('★ 「试玩完自动取」判据：只在**看见试玩动过**之后�
   assert(step(s, f('old.gia', 5000, 2 * 3600 * 1000), T0 + 30000, S).action === 'none',
     '旧局面被自动取回了 —— 打开面板就会糊用户一脸几小时前的日志');
 
+  // ③-b ★ 回归：Host 返回的是 `mtime`（ISO 字符串），不是 `mtimeMs`。
+  //      曾经读错字段名 → age 恒 0 → 「刚玩过」永远为真 → 旧局面被自动取回。
+  const isoOld = { name: 'iso.gia', size: 5000, mtime: new Date(T0 - 2 * 3600 * 1000).toISOString(), path: 'C:\\x\\iso.gia' };
+  const isoOldStep = step(null, isoOld, T0, S);
+  assert(isoOldStep.next.activity === false, '只给 mtime（ISO 字符串）的旧局面被误判成「刚玩过」—— 字段名又写错了');
+  let sIso = isoOldStep.next;
+  for (const t of [T0 + 8000, T0 + 20000]) sIso = step(sIso, isoOld, t, S).next;
+  assert(step(sIso, isoOld, T0 + 30000, S).action === 'none', 'ISO mtime 的旧局面被自动取回了');
+  // 反过来：ISO mtime 且很新 → 应当算「刚玩过」
+  const isoFresh = { name: 'iso2.gia', size: 900, mtime: new Date(T0 - 5000).toISOString(), path: 'C:\\x\\iso2.gia' };
+  assert(step(null, isoFresh, T0, S).next.activity === true, '刚写完的 ISO mtime 局面没算「刚玩过」');
+  // mtime 完全缺失 → 保守当「很旧」，不许自动取
+  const noTime = { name: 'notime.gia', size: 900, path: 'C:\\x\\notime.gia' };
+  assert(step(null, noTime, T0, S).next.activity === false, 'mtime 缺失时应保守判为「旧」，不该自动取');
+
   // ④ 守望期间冒出新的一局 → 记为「动过」，安静够久 → 取回
   s = step(fresh.next, f('b.gia', 200, 0), T0 + 4000, S);
   assert(s.phase === 'new-session' && s.next.activity === true, '新文件没被识别成新的一局：' + JSON.stringify(s));
