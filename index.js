@@ -23,11 +23,12 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.1';
+const VERSION = '0.0.2';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
+import pathMod from 'node:path';
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
@@ -35,6 +36,10 @@ import { readGia, listGia, filterRecords } from './lib/gia.mjs';
 import { diagnoseLogs } from './lib/logdiag.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { clientProcesses } from './lib/proc.mjs';
+import {
+  SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
+  shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture,
+} from './lib/shot.mjs';
 
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
 
@@ -558,6 +563,176 @@ const TOOLS = [
   },
 
   {
+    name: 'miliastra_shot',
+    description:
+      TITLE + '：截图 —— 把「现在画面上是什么」变成一张 PNG。'
+      + '运行时日志（miliastra_log）能回答「代码跑了没、print 了什么」，回答不了「画面对不对」'
+      + '（控件到底挂上去了没、位置歪没歪、颜色对不对）；这一环靠它。'
+      + 'op=capture（默认）立刻截一张，目标 `target=game`（原神客户端，默认）/ `editor`（千星沙箱），'
+      + '也可以用 `process` 指定任意进程名；op=list 看截到哪去了、有多少张、占多大；'
+      + 'op=clean 清理，**默认只报告不删**。'
+      + '**截图存在插件的数据目录**（默认 `~/.dsh/miliastra/shots`，`MILIASTRA_DATA_DIR` 可整体覆盖）——'
+      + '既不放游戏存档目录（那是米哈游的地盘），也不放包目录（插件升级会整个替换掉它）。'
+      + '**不会自动删**：清理要显式给条件（`all` 或 `olderThanDays`），真删还要 `confirm:true`。'
+      + '回执恒带 `pid / process / title` —— 明确告诉你**截到的到底是哪个窗口**'
+      + '（第一版抓错了程序，光看 `ok:true` 根本发现不了）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['capture', 'list', 'clean', 'targets'], description: '默认 capture。' },
+        target: {
+          type: 'string',
+          enum: Object.keys(SHOT_TARGETS),
+          description: '截哪个窗口：'
+            + Object.keys(SHOT_TARGETS).map((k) => `${k}=${SHOT_TARGETS[k].label}(进程 ${SHOT_TARGETS[k].process})`).join('；')
+            + '。默认 game。',
+        },
+        process: { type: 'string', description: '直接指定进程名（不带 .exe），覆盖 target。' },
+        label: { type: 'string', description: '文件名里的标签，如「试玩第1局」「控件对齐」（允许中文；非法字符会被清掉）。' },
+        dir: { type: 'string', description: '覆盖截图目录（默认插件数据目录下的 shots\\）。' },
+        keepLast: { type: 'number', description: 'op=clean：至少保留最新的 N 张（保护网，任何模式下都生效）。' },
+        olderThanDays: { type: 'number', description: 'op=clean：只删比这个更旧的（>0 才生效）。' },
+        all: { type: 'boolean', description: 'op=clean：不管新旧，除 keepLast 外全删。' },
+        dryRun: { type: 'boolean', description: 'op=clean：默认 true（只报告将删哪些）。' },
+        confirm: { type: 'boolean', description: 'op=clean：真删必须再传 confirm:true。' },
+        bringToFront: { type: 'boolean', description: '默认 true：抓不到时把目标窗口拉到前台再抓。' },
+        keepWindowOnTop: { type: 'boolean', description: '默认 false：退回屏幕抓取时临时把目标窗口置顶。' },
+      },
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
+    async execute(args = {}) {
+      const op = String(args.op || 'capture');
+
+      if (op === 'targets') {
+        const procs = clientProcesses();
+        return {
+          ok: true, op,
+          dir: shotsDir(),
+          dataRoot: dataRoot(),
+          targets: Object.keys(SHOT_TARGETS).map((k) => {
+            const t = SHOT_TARGETS[k];
+            const e = (procs.entries || []).find((x) => x.file.toLowerCase() === (t.process + '.exe').toLowerCase());
+            return {
+              target: k, label: t.label, process: t.process, why: t.why,
+              running: e ? e.running : null, instances: e ? e.instances : 0,
+            };
+          }),
+        };
+      }
+
+      const targetKey = String(args.target || 'game');
+      const tgt = SHOT_TARGETS[targetKey] || null;
+      const processName = String(args.process || (tgt ? tgt.process : targetKey) || '').replace(/\.exe$/i, '');
+      const dir = args.dir ? pathMod.resolve(String(args.dir)) : shotsDir();
+
+      if (op === 'list') {
+        const s = listShots(dir);
+        const limit = Number.isFinite(args.limit) ? args.limit : 20;
+        return {
+          ok: true, op, dir, exists: s.exists,
+          count: s.count, totalBytes: s.totalBytes, totalText: humanSize(s.totalBytes),
+          newest: s.files.length ? { name: s.files[0].name, mtime: s.files[0].mtime, size: s.files[0].size } : null,
+          files: s.files.slice(0, limit).map((f) => ({ name: f.name, size: f.size, sizeText: humanSize(f.size), mtime: f.mtime })),
+          truncated: s.count > limit,
+          howToClean: 'miliastra_shot op=clean keepLast=5 olderThanDays=7  → 先看将删哪些；'
+            + '确认后再加 dryRun=false confirm=true 真删。截图**不会自动删**。',
+        };
+      }
+
+      if (op === 'clean') {
+        const s = listShots(dir);
+        const plan = planClean({
+          files: s.files,
+          keepLast: Number.isFinite(args.keepLast) ? args.keepLast : 0,
+          olderThanDays: Number.isFinite(args.olderThanDays) ? args.olderThanDays : 0,
+          all: args.all === true,
+          now: Date.now(),
+        });
+        const base = {
+          op, dir, before: { count: s.count, totalBytes: s.totalBytes, totalText: humanSize(s.totalBytes) },
+          planned: plan.delete.map((f) => ({ name: f.name, sizeText: humanSize(f.size), mtime: f.mtime })),
+          keepCount: plan.keep.length,
+          bytes: plan.bytes, bytesText: humanSize(plan.bytes),
+          note: plan.note,
+        };
+        if (args.dryRun !== false) {
+          return Object.assign({ ok: true, dryRun: true, confirmWith: 'dryRun=false confirm=true' }, base);
+        }
+        if (args.confirm !== true) {
+          return Object.assign({
+            ok: false, dryRun: false,
+            error: '真删要同时传 dryRun:false 与 confirm:true —— 截图删了不可恢复。',
+          }, base);
+        }
+        const res = removeShots(plan.delete.map((f) => f.path));
+        const after = listShots(dir);
+        return Object.assign({
+          ok: res.failed.length === 0,
+          dryRun: false,
+          removed: res.removed.map((p) => pathBasenameOf(p)),
+          removedCount: res.removed.length,
+          failed: res.failed,
+          after: { count: after.count, totalBytes: after.totalBytes, totalText: humanSize(after.totalBytes) },
+        }, base);
+      }
+
+      if (op !== 'capture') throw new Error('未知 op：' + op);
+
+      /* ---- op=capture ---- */
+      if (!processName) throw new Error('没给出要截哪个进程（target/process 都是空的）。');
+      fsMod.mkdirSync(dir, { recursive: true });
+      const wanted = shotFileName({ target: targetKey, label: args.label, when: new Date() });
+      const name = nextFreeName(dir, wanted);
+      const out = pathMod.join(dir, name);
+
+      const r = await captureWindow({
+        processName, out,
+        bringToFront: args.bringToFront === false ? 0 : 1,
+        keepWindowOnTop: args.keepWindowOnTop === true ? 1 : 0,
+      });
+
+      if (!r.ok) {
+        const procs = clientProcesses();
+        return {
+          ok: false, op, target: targetKey, process: processName, dir,
+          error: r.error || '截图失败',
+          stderr: r.stderr || null,
+          runningWindows: (procs.entries || []).map((e) => `${e.file}=${e.running === null ? 'unknown' : e.running}`),
+          hint: `进程 "${processName}" 没在跑、或者它没有主窗口。`
+            + '游戏本体是 YuanShen.exe（要先把客户端开起来）；换别的目标用 process= 或 target=editor。',
+        };
+      }
+
+      const judge = judgeCapture(r);
+      let size = null;
+      try { size = fsMod.statSync(r.path).size; } catch { /* 图没落盘也照报，size 可能为 null */ }
+      const s = listShots(dir);
+      return {
+        ok: true, op, target: targetKey, label: args.label ? sanitizeLabel(args.label) : null,
+        // 回执的身份：**截到的到底是哪个窗口**（第一版就是靠人眼看图才发现抓错了程序）
+        process: r.process, pid: r.pid, title: r.title,
+        path: r.path, file: name, dir,
+        width: r.width, height: r.height, mode: r.mode, front: r.front,
+        blackRatio: r.blackRatio, size, sizeText: size === null ? null : humanSize(size),
+        suspect: judge.suspect, warning: judge.warning,
+        shots: {
+          count: s.count, totalBytes: s.totalBytes, totalText: humanSize(s.totalBytes),
+          newest: s.files.length ? s.files[0].name : null,
+        },
+        cleanup: `截图存在 ${dir} —— 现在共 ${s.count} 张 / ${humanSize(s.totalBytes)}。`
+          + '**不会自动删**（磁盘是你的）。不用了就：miliastra_shot op=clean keepLast=5 olderThanDays=7'
+          + ' → 看将删哪些 → 再加 dryRun=false confirm=true 真删。',
+        nextSteps: [
+          '用图片查看器打开上面的 path 看观感（面板里也会列出最近几张）。',
+          judge.suspect ? '⚠️ 本次标记 suspect=true，先读 warning 再决定要不要信这张图。' : null,
+          '要对照日志用 miliastra_log；要看控件挂载用 miliastra_map op=clientui。',
+        ].filter(Boolean),
+      };
+    },
+  },
+
+  {
     name: 'miliastra_probe',
     description:
       TITLE + '：探针 —— **「问游戏一句」的工具**。'
@@ -567,11 +742,12 @@ const TOOLS = [
       + '**代价**：部署会**临时覆盖活文件**，所以试玩那一局你的玩法不会跑（Host 会先自动备份，用完一键还原）。'
       + '**四步**：① op=deploy template=<名字> → ② 在编辑器里**重新**试玩一局（不会热加载）→ '
       + '③ op=collect 收回结论 → ④ 用 miliastra_code op=restore 还原你的脚本。'
-      + '**四个模板**（先 op=list 看详情）：'
-      + '`ping` 探活=确认脚本到底有没有跑起来（日志空着时先跑它）；'
-      + '`tree` 看控件=屏幕上挂着哪些控件、画布多大；'
-      + '`instantiate` 试钥匙=拿一串索引号去试，看哪个真能被脚本创建出来；'
-      + '`api-surface` 翻字典=把枚举和成员列出来（比如按键的真名），输出较长已分片打印。'
+      + `**${PROBE_TEMPLATES.length} 个模板**（先 op=list 看详情）：`
+      // 模板清单从 PROBE_INFO 生成 —— 硬编码过「四个模板」，加第 5 个时描述就悄悄过期了
+      + PROBE_TEMPLATES.map((t) => {
+        const i = PROBE_INFO[t] || {};
+        return '`' + t + '` ' + (i.label || '') + (i.oneLine ? '=' + i.oneLine : '');
+      }).join('；') + '。'
       + '另：op=render 只生成 Lua 不部署（要先看代码用这个）。探针只读，不做场景写操作。',
     parameters: {
       type: 'object',
@@ -877,6 +1053,29 @@ function clientHalf() {
   }
 }
 
+/**
+ * 截图目录的摘要（给面板用）。
+ * 面板要在**打开时**就把「图在哪、有多少、占多大」摆出来 —— 和日志卡片同一个待遇，
+ * 而不是等人点了按钮才第一次知道东西落在哪。
+ */
+function shotsSummary() {
+  try {
+    const s = listShots(shotsDir());
+    return {
+      dir: s.dir,
+      count: s.count,
+      totalBytes: s.totalBytes,
+      totalText: humanSize(s.totalBytes),
+      newest: s.files.length
+        ? { name: s.files[0].name, mtime: s.files[0].mtime, sizeText: humanSize(s.files[0].size) }
+        : null,
+      files: s.files.slice(0, 12).map((f) => ({ name: f.name, mtime: f.mtime, sizeText: humanSize(f.size) })),
+    };
+  } catch (e) {
+    return { dir: shotsDir(), count: 0, totalBytes: 0, totalText: '0 B', newest: null, files: [], error: (e && e.message) || String(e) };
+  }
+}
+
 async function selfStatus() {
   let current = null;
   try {
@@ -890,6 +1089,7 @@ async function selfStatus() {
     localLow: localLowRoot(),
     tools: TOOLS.map((t) => t.name),
     probeTemplates: PROBE_TEMPLATES,
+    shots: shotsSummary(),
     clientHalf: clientHalf(),
     current,
     prefix: PREFIX,

@@ -450,7 +450,7 @@ check('★ 读界面控件：给出可创建模板 / 容器节点 / 全部记录
   return '可创建模板 / 容器节点 / 全部记录 / 候选说明 / 空库告警 都在';
 });
 
-check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且四个模板都列出来', () => {
+check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且模板清单一个不漏', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
@@ -464,14 +464,14 @@ check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，�
   assert(/重新试玩一局/.test(flat), '流程里没写「重新试玩一局」');
   assert(/还原你的脚本|还原脚本/.test(flat), '流程里没写最后一步「还原你的脚本」');
 
-  // ③ 模板按钮用大白话名，且四个模板都在（含 api-surface —— 面板曾漏掉它）
+  // ③ 模板按钮用大白话名，且**每个**模板都在（含 api-surface / api-check —— 面板曾漏掉 api-surface）
   for (const t of ['ping', 'tree', 'instantiate', 'api-surface']) {
     assert(flat.includes(t), '模板按钮缺 ' + t);
   }
   for (const label of ['探活', '看控件', '试钥匙', '翻字典']) {
     assert(flat.includes(label), '缺大白话标签：' + label);
   }
-  return '是什么 / 代价 / 四步流程 / 4 个模板 + 大白话名 都在';
+  return '是什么 / 代价 / 四步流程 / ' + PROBE_TEMPLATES.length + ' 个模板 + 大白话名 都在';
 });
 
 check('★ 面板兜底文案与 Host 的 PROBE_INFO 不脱节（模板清单、标签、一句话说明）', () => {
@@ -650,6 +650,77 @@ check('★ 试玩体检：最近一局不新鲜时，把「原因 + 下一步」
   assert(/30 秒前/.test(freshFlat), 'fresh 的说明没显示');
   assert(!/可能原因/.test(freshFlat), 'fresh 时不该列「可能原因」');
   return 'stale：醒目框 + 原因 + 下一步 + 按钮；fresh：只一句说明';
+});
+
+check('★ 截图卡片：存到哪 / 多少张 / 不会自动删，三件事都必须在卡片上', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __shot: {
+      dir: 'C:\\Users\\x\\.dsh\\miliastra\\shots', count: 7, totalBytes: 17694858, totalText: '16.9 MB',
+      newest: { name: 'game-试玩第1局-20260923-204915.png', sizeText: '2.4 MB', mtime: '2026-09-23T12:49:15.000Z' },
+      files: [{ name: 'game-试玩第1局-20260923-204915.png', sizeText: '2.4 MB', mtime: '2026-09-23T12:49:15.000Z' }],
+      lastCapture: {
+        ok: true, file: 'game-试玩第1局-20260923-204915.png', process: 'YuanShen', pid: 3284,
+        title: '原神', width: 1456, height: 939, mode: 'printwindow', blackRatio: 0.0312, suspect: false,
+      },
+    },
+  }));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  // ① 存到哪 —— 这是作者的原话要求（「跟日志一样要提示用户」）
+  assert(/存放目录/.test(flat), '没显示存放目录');
+  assert(/miliastra/.test(flat) && /shots/.test(flat), '没显示截图目录的绝对路径');
+  // ② 有多少、占多大 —— 不然用户根本不知道要不要清
+  assert(/7 张/.test(flat), '没显示张数');
+  assert(/16\.9 MB/.test(flat), '没显示占用体积');
+  assert(/game-试玩第1局/.test(flat), '没显示最近一张的文件名');
+  // ③ 不会自动删 —— 最关键的一句（用户会以为工具会自己收拾）
+  assert(/不会自动删/.test(flat), '没说明「不会自动删」');
+  assert(/先看/.test(flat), '没说清清理是「先看再确认」两步');
+  // ④ 三个动作按钮
+  assert(/截取游戏画面<\/button>/.test(html), '缺「截取游戏画面」按钮');
+  assert(/截编辑器<\/button>/.test(html), '缺「截编辑器」按钮');
+  assert(/清理…<\/button>/.test(html), '缺「清理…」按钮');
+  // ⑤ 回执要自证「截到的是哪个窗口」（第一版抓错程序就是这里漏的）
+  assert(/原神/.test(flat) && /3284/.test(flat), '没显示截到的窗口标题/pid');
+  assert(/窗口自绘/.test(flat), '没说明用的是哪条抓取路线（决定这张图可不可信）');
+  // ⑥ 可疑时要用醒目样式
+  const suspect = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __shot: {
+      dir: 'C:\\x', count: 1, totalText: '2.4 MB', files: [],
+      lastCapture: { ok: true, file: 'a.png', process: 'YuanShen', pid: 1, title: '原神', width: 1, height: 1,
+        mode: 'screen', blackRatio: 0.02, suspect: true, warning: 'grab may show another program' },
+    },
+  }));
+  assert(/dsh-miliastra-err/.test(suspect), 'suspect=true 时没用醒目样式');
+  return '存放目录 + 张数体积 + 不会自动删 + 三按钮 + 窗口身份；可疑时醒目';
+});
+
+check('★ 清理要两步：先看将删哪些，确认按钮才出现', () => {
+  // 没规划时不该有「确认删除」
+  const idle = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __shot: { dir: 'C:\\x', count: 1, totalText: '2.4 MB', files: [] },
+  }));
+  assert(!/确认删除/.test(idle), '还没规划就给了「确认删除」按钮 —— 会一按就删');
+
+  // 规划出来后：要显示会删哪些 + 确认按钮 + 取消
+  const planned = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __shot: { dir: 'C:\\x', count: 3, totalText: '7.2 MB', files: [] },
+    __cleanPlan: {
+      ok: true, dryRun: true, note: '将删除 2 张（4.8 MB），保留 1 张',
+      planned: [{ name: 'old-1.png', sizeText: '2.4 MB' }, { name: 'old-2.png', sizeText: '2.4 MB' }],
+      keepCount: 1, bytes: 5000000,
+    },
+  }));
+  const flat = planned.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/将删除 2 张/.test(flat), '没显示将删几张');
+  assert(/old-1\.png/.test(flat), '没列出将删哪些文件');
+  assert(/确认删除 2 张<\/button>/.test(planned), '缺「确认删除」按钮');
+  assert(/取消<\/button>/.test(planned), '缺「取消」按钮');
+  return '未规划不给确认按钮；规划后列出清单 + 确认 + 取消';
 });
 
 check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {

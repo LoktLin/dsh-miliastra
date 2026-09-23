@@ -59,6 +59,10 @@ const CASES = [
   ['miliastra_log', { op: 'sessions', limit: 5 }],
   ['miliastra_log', { op: 'tags' }],
   ['miliastra_log', { op: 'tail', limit: 5 }],
+  ['miliastra_shot', { op: 'targets' }],
+  ['miliastra_shot', { op: 'list' }],
+  ['miliastra_shot', { op: 'clean' }],                       // 默认 dryRun，不删任何东西
+  ['miliastra_shot', { op: 'clean', all: true, keepLast: 3 }], // 也只是报告
   ['miliastra_probe', { op: 'list' }],
   ['miliastra_probe', { op: 'render', template: 'ping', tag: 'SMOKE' }],
   ['miliastra_probe', { op: 'render', template: 'tree', tag: 'SMOKE' }],
@@ -120,6 +124,46 @@ for (const [toolName, args] of CASES) {
     if (again && again.available === true && again.cached !== true) {
       console.log('  （提示：第二次调用没命中缓存 —— 仅影响性能，不计失败）');
     }
+  }
+}
+
+// ---- 截图：删除必须有双保险（截图删了不可恢复）----
+
+{
+  const shot = TOOLS.find((t) => t.name === 'miliastra_shot');
+  const before = await shot.execute({ op: 'list' }, {});
+  const dry = await shot.execute({ op: 'clean', all: true }, {});
+  const mid = await shot.execute({ op: 'list' }, {});
+  if (!dry.dryRun || dry.removedCount) {
+    fail += 1;
+    failures.push('[safety] op=clean 默认应当是 dryRun 且不删东西：' + JSON.stringify({ dryRun: dry.dryRun, removedCount: dry.removedCount }));
+  } else if (mid.count !== before.count) {
+    fail += 1;
+    failures.push(`[safety] op=clean dryRun 之后张数变了：${before.count} → ${mid.count}`);
+  } else {
+    console.log(`✓ miliastra_shot op=clean 默认 dryRun（${before.count} 张，一张没动）`);
+    pass += 1;
+  }
+
+  const noConfirm = await shot.execute({ op: 'clean', all: true, dryRun: false }, {});
+  const after = await shot.execute({ op: 'list' }, {});
+  if (noConfirm.ok !== false || !noConfirm.error || after.count !== before.count) {
+    fail += 1;
+    failures.push('[safety] 只给 dryRun=false、不给 confirm:true 时**必须拒绝且不删**：'
+      + JSON.stringify({ ok: noConfirm.ok, count: after.count }));
+  } else {
+    console.log('✓ miliastra_shot 真删要 dryRun=false + confirm=true 双钥匙');
+    pass += 1;
+  }
+
+  // 回执必须写明「截到的到底是哪个窗口」—— 第一版抓错程序就是因为没有这个字段
+  const cap = await shot.execute({ op: 'capture', process: 'NoSuchProcess_ZZZ' }, {});
+  if (cap.ok !== false || !cap.error || !Array.isArray(cap.runningWindows)) {
+    fail += 1;
+    failures.push('[shape] 截图失败时必须回 ok:false + error + runningWindows：' + JSON.stringify(cap).slice(0, 200));
+  } else {
+    console.log('✓ miliastra_shot 截不到的进程时如实报错并列出可截窗口');
+    pass += 1;
   }
 }
 
