@@ -12,6 +12,7 @@
 
 - **`miliastra_health`** 环境体检：客户端安装 / 关卡 / 活文件 / 地图 / 日志目录定位。
   **两种关卡布局都扫**（`<id>\<id>.gil` 与根目录的 `<id>.gil` —— 只扫前者会漏掉大部分图）。
+  另含**编辑器 / 游戏进程状态**（`BeyondEditor.exe` / `YuanShen.exe`，10 秒缓存、best-effort 不抛）。
 - **`miliastra_code`** 活文件：`inspect` / `read` / `deploy` / `backup` / `backups` / `restore`。
   部署一律 **先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**，任一不满足直接拒绝。
 - **`miliastra_map`** 读 `.gil`（protobuf）：`summary` / `clientui` / `script` / `strings`。
@@ -20,6 +21,15 @@
   `{时间, 账号, 玩家, 关卡, 正文}`。
 - **`miliastra_probe`** 探针模板化：`tree` / `instantiate` / `ping`，`render` → `deploy` → `collect`。
 - **`miliastra_echo`** 回显参数，用来确认参数真的传到了 Host。
+
+另外：
+
+- **同源 HTTP 路由** `/miliastra/{status,tools,tool}`，给面板取数据（唯一合法通道）。
+  带**本机访问守卫**（非 `127.0.0.1`/`localhost` 一律 403）、未知路由回 404、`Cache-Control: no-store`。
+- **系统提示段**：让 agent 知道「有这么个插件、什么时候该用它」，而不是去拼 PowerShell。
+- **`/status` 的 `clientHalf` 自检**：查询宿主 `dsh-client-modules` 的 boot 图，
+  直接回答「面板 bundle 有没有进 `window.__DSH_BOOT__`」——
+  把原先「只能靠人眼看面板出没出来」这件事变成可断言的数据。
 
 ### Client 半边 · 侧边栏面板
 
@@ -38,27 +48,49 @@
   → 重新试玩 → 「收回结论」直接从最新一局日志里捞该 tag 的输出
 - **历史局面**：列出最近 12 局 `.gia`，点某一局只看那一局
 - 日志 TAG 汇总 / 按 TAG 过滤（点胶囊即过滤）
+- **诊断日志三连**（刻意保留）：`factory 已执行` / `apply 运行中` / `入口已注册` ——
+  client 半边失败默认是**全静默**的，这三行让排障一眼定位卡在哪一步
 
 ### 修掉的真实缺陷
 
+- **`exports.inject` 没声明 `slots`** → cordis 的服务代理直接抛
+  `cannot get property "slots" without inject`，**整条 loader entry 失败**。
+  症状最难看：宿主报 `failed to apply loader entry`，而页面上**一条我们的日志都没有**。
+  更坑的是当时把诊断日志写在了 `try` 外面 —— 一行探针把整个插件打死了。
+- **Client 的 `callTool` 少剥一层信封** → 面板上「本机存档 —」「关卡数 undefined」全是空的。
+  信封是三层 `body{ok,data:{name,ok,data:<业务返回体>}}`，这个错**犯了两次**
+  （一次在 `live-check.mjs`、一次在面板里）。现在剥离逻辑抽成独立函数并加了回归测试。
 - **关卡扫描盲区**：`Beyond_Local_Save_Level` 下有两种布局，只扫带文件夹的那种会**漏掉大部分图**
-  （实测 8 个只看见 3 个）。
+  （实测 8 个只看见 3 个；修复后 18 个）。
 - **`MILIASTRA_LOCALLOW` 写错会静默回退到真实存档根** —— 手滑就会去动真文件。改成「显式指定就照做，指错就明确报错」。
 - **备份同秒撞名**：时间戳只到秒，同一秒连部署两次会覆盖前一份备份。改为自动顺延 `-2 / -3`。
+- **探针漏 `script:EnableUpdate(true)`** → `OnUpdate` 永不触发，游戏里只打
+  `OnInit`/`OnEnable`/`OnStart` 三行空壳。探针模板已内建这行。
 - **解析 5 字节 varint 只解 4 字节**，漏掉整整一段 ID 区间（工具早期版本）。
+
+### 工程 / 仓库
+
+- 许可证 **Apache-2.0**；`LICENSE` / `CHANGELOG.md` / `.gitattributes`（统一 LF）/ `.gitignore`
+- `files` 白名单（`private` 已移除，npm 可直接发布）；`prepublishOnly: npm test` —— **测试不过发不出去**
+- README 含实机截图 `assets/panel.png`（已加进 `files`，否则 npm 详情页是裂图）
+- 仓库 <https://github.com/LoktLin/dsh-miliastra>
 
 ### 已验证
 
 | 层 | 结果 |
 |---|---|
-| L1 工具层（`tests/smoke.mjs`） | 21 项 |
+| L1 工具层（`tests/smoke.mjs`） | 22 项 |
 | L1 部署与备份（`tests/deploy-test.mjs`） | 12 项 |
-| L1 探针部署 / 多活文件 / 关卡布局（`tests/probe-deploy-test.mjs`） | 9 项 |
-| L3 真实 React 渲染（`tests/client-render-test.mjs`） | 14 项 |
+| L1 探针部署 / 多活文件 / 关卡布局 / 进程形状（`tests/probe-deploy-test.mjs`） | 9 项 |
+| L3 真实 React 渲染 + 整面板空状态 SSR（`tests/client-render-test.mjs`） | 15 项 |
 | L1 技能契约自检（`dsh-plugin-dev` 的 `selftest.mjs`） | 16 项 |
-| **L4 真机**（`tests/live-check.mjs`，对着运行中的 dsh web） | 8 项 |
+| **L4 真机**（`tests/live-check.mjs`，对着运行中的 dsh web） | 9 项 |
 
-契约取证自本机 **`dsh 0.1.5-rc.1`**。
+合计 **83 项断言**。契约取证自本机 **`dsh 0.1.5-rc.1`**。
+
+其中 L4 的 9 项里有一条值得单独说：**`clientHalf` 断言** ——
+它查宿主 `dsh-client-modules` 的 boot 图，机器证明「面板 bundle 已进 `window.__DSH_BOOT__`」
+（实测 `dsh-miliastra  63.0 KB  rev=33316704`）。**这一格以前只能靠人眼看面板出没出来。**
 
 ### 已知边界
 
@@ -67,3 +99,6 @@
 - **不做场景写操作**：工具只读，或只写「活文件」（脚本本身），不碰地图数据。
 - **负载 / 节点图统计尚未实现**：官方文档确认「负载计算」是编辑器 UI 功能（静态菜单 + 动态试玩报告），
   「节点图」数据虽在 `.gil` 里有痕迹但字段结构尚未逆出。已记录为后续课题。
+- **`patchReload: live` 不会重新 import Host 模块**（实测：改 `cordis.patch.yml` 触发重载后
+  `/miliastra/status` 仍返回旧字段）—— 所以 **Host 改动一定要重启 `dsh web`**，
+  只有 `lib/client.js` 刷新页面即可。

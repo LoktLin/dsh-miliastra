@@ -65,6 +65,22 @@ await check('GET /miliastra/status 回 {ok:true,data}', async () => {
   return `${j.data.plugin} v${j.data.version}，工具 ${j.data.tools.length} 个：${j.data.tools.join(', ')}`;
 });
 
+await check('Client 半边：面板 bundle 已进 window.__DSH_BOOT__ 图（**不需要人眼**）', async () => {
+  const r = await fetch(`${BASE}/miliastra/status`);
+  const j = await r.json();
+  const c = j.data && j.data.clientHalf;
+  assert(c, '/status 没有 clientHalf 字段 —— Host 版本太旧，先重启 dsh web');
+  if (c.inBootGraph === 'unknown') {
+    // 宿主没暴露 boot 图（例如未启用 web 半边）——环境限制，不算失败，但必须说清楚
+    return '（无法断言：' + (c.note || '宿主未暴露 boot 图') + '）';
+  }
+  assert(c.inBootGraph === true,
+    '面板 bundle **没进** boot 图，浏览器不会加载它：' + (c.note || ''));
+  assert(c.bundle && typeof c.bundle.size === 'number' && c.bundle.size > 0,
+    'bundle 路径/大小读不到：' + JSON.stringify(c.bundle));
+  return `${c.entryId}  ${(c.bundle.size / 1024).toFixed(1)} KB  rev=${String(c.rev || '').slice(0, 8)}`;
+});
+
 await check('POST /miliastra/tool → miliastra_echo 回显正确', async () => {
   const d = await callTool('miliastra_echo', { text: 'live-check' });
   assert(d.ok === true && d.echoed === 'live-check', '回显不对：' + JSON.stringify(d));
@@ -128,5 +144,6 @@ if (failures.length) {
 }
 console.log(`结果：通过 ${pass}，失败 ${fail}`);
 console.log('');
-console.log('⚠️ 仍未验证（需要人眼）：刷新的页面上，侧边栏底部「设置」旁应出现「千星奇域」入口，点开是状态浮层。');
+console.log('说明：面板 bundle 是否被下发已由上面的 clientHalf 断言机器验证；');
+console.log('      剩下唯一要人眼的只有「像素画出来没有」——刷新页面看一眼侧栏底部即可。');
 process.exit(fail ? 1 : 0);
