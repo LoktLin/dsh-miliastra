@@ -232,6 +232,86 @@ for (const [toolName, args] of CASES) {
   }
 }
 
+/* ---- 0.0.9：AI 调用体验的三条**不变量**（防止以后又长回去）----
+ *
+ * 这三条都不是「功能」，是**给调用方（AI）省事**的约束，所以必须被测试钉住 ——
+ * 否则下一次加 op 时顺手就破坏了，而且**不会有任何报错**（只是变回难用）。
+ */
+{
+  // ① 每个工具的 description 里都要有一条「典型调用」：AI 读描述就能照抄，不用自己猜参数组合
+  const noTypical = TOOLS.filter((t) => !/典型调用/.test(t.description));
+  if (noTypical.length) {
+    fail += 1;
+    failures.push('[ergonomics] 这些工具的 description 里没有「典型调用」：' + noTypical.map((t) => t.name).join(', '));
+  } else {
+    console.log(`✓ 每个工具的 description 都带「典型调用」（${TOOLS.length} 个）—— AI 读描述就能照抄`);
+    pass += 1;
+  }
+
+  // ② 不许再有 `which` 这种和 `level` 撞车的参数名：
+  //    `level` = **地图关卡 ID**（哪张图）｜`stage` = **玩法里的第几关**。两个「关卡」在中文里同名，必须靠参数名分开。
+  const withWhich = TOOLS.filter((t) => JSON.stringify(t.parameters).includes('"which"'));
+  if (withWhich.length) {
+    fail += 1;
+    failures.push('[ergonomics] 还有 `which` 参数（会和 level 撞车，应该叫 stage）：' + withWhich.map((t) => t.name).join(', '));
+  } else {
+    console.log('✓ 没有 `which` 参数了（`level`=地图关卡ID / `stage`=玩法第几关，不会再混）');
+    pass += 1;
+  }
+
+  // ③ `summaryOnly` 必须**真的省上下文**，而且**不丢关键数字**
+  const codeTool = TOOLS.find((t) => t.name === 'miliastra_code');
+  const logTool = TOOLS.find((t) => t.name === 'miliastra_log');
+  const mapTool = TOOLS.find((t) => t.name === 'miliastra_map');
+
+  const lvFull = await codeTool.execute({ op: 'levels' }, {});
+  const lvSlim = await codeTool.execute({ op: 'levels', summaryOnly: true }, {});
+  const lvOne = await codeTool.execute({ op: 'levels', stage: 3 }, {});
+  const jFull = JSON.stringify(lvFull).length;
+  const jSlim = JSON.stringify(lvSlim).length;
+  const row = (lvSlim.levels || [])[0] || {};
+  const keepsNumbers = ['stage', 'platCount', 'adjacentCount', 'adjacentOverlaps', 'risingOverlaps', 'trueOverlaps', 'nearMiss', 'spanX']
+    .every((k) => typeof row[k] === 'number');
+  if (jSlim < jFull / 5 && keepsNumbers && (lvOne.levels || []).length === 1 && JSON.stringify(lvOne).length < jFull) {
+    console.log(`✓ op=levels 的 summaryOnly 真的省上下文 → 全量 ${jFull}B → 摘要 ${jSlim}B（${Math.round(jSlim / jFull * 100)}%），`
+      + `stage=3 单关 ${JSON.stringify(lvOne).length}B，且摘要里的数字都在`);
+    pass += 1;
+  } else {
+    fail += 1;
+    failures.push('[ergonomics] op=levels summaryOnly 没省到 / 丢了数字：'
+      + JSON.stringify({ jFull, jSlim, keepsNumbers, one: (lvOne.levels || []).length }));
+  }
+
+  const mFull = await logTool.execute({ op: 'metrics' }, {});
+  const mSlim = await logTool.execute({ op: 'metrics', summaryOnly: true }, {});
+  const keyX = (mSlim.loose && mSlim.loose.keys && mSlim.loose.keys.x) || null;
+  const keepsCore = !!(keyX && keyX.core && typeof keyX.core.from === 'number' && keyX.hotBin && typeof keyX.hotBin.count === 'number');
+  if (mSlim.summaryOnly === true && keyX && typeof keyX.binsOmitted === 'number' && keepsCore
+    && JSON.stringify(mSlim).length <= JSON.stringify(mFull).length) {
+    console.log(`✓ op=metrics 的 summaryOnly 去掉分箱但保留结论 → ${JSON.stringify(mFull).length}B → ${JSON.stringify(mSlim).length}B，`
+      + `binsOmitted=${keyX.binsOmitted}，core ${keyX.core.from}~${keyX.core.to} 与 hotBin 都还在`);
+    pass += 1;
+  } else {
+    fail += 1;
+    failures.push('[ergonomics] op=metrics summaryOnly 不对：' + JSON.stringify({ slim: mSlim.summaryOnly, bin: keyX && keyX.binsOmitted, core: keepsCore }).slice(0, 200));
+  }
+
+  const cuFull = await mapTool.execute({ op: 'clientui' }, {});
+  const cuSlim = await mapTool.execute({ op: 'clientui', summaryOnly: true }, {});
+  const cuKeep = Array.isArray(cuSlim.likelyTemplates) && typeof cuSlim.count === 'number' && typeof cuSlim.standaloneCount === 'number';
+  const jCuFull = JSON.stringify(cuFull).length;
+  const jCuSlim = JSON.stringify(cuSlim).length;
+  // 这里只要求「省得下来（≥40%）」，**不要求省到 1/5**：clientui 的大头是 `records`/`rendered`，
+  // 但模板清单/结构件本身也不小，硬凑比例会变成"为了过测试而改数字"。
+  if (jCuSlim < jCuFull * 0.6 && cuKeep && !('rendered' in cuSlim)) {
+    console.log(`✓ op=clientui 的 summaryOnly 省掉逐条谱系 → ${jCuFull}B → ${jCuSlim}B（${Math.round(jCuSlim / jCuFull * 100)}%），模板清单与计数都还在`);
+    pass += 1;
+  } else {
+    fail += 1;
+    failures.push('[ergonomics] op=clientui summaryOnly 不对：' + JSON.stringify({ jCuFull, jCuSlim, keep: cuKeep, hasRendered: 'rendered' in cuSlim }));
+  }
+}
+
 console.log('');
 if (failures.length) {
   console.log('====== 失败明细 ======');

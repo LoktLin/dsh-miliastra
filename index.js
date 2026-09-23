@@ -24,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.8';
+const VERSION = '0.0.9';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -39,8 +39,8 @@ import {
   playtestSummary, shouldHit,
 } from './lib/playtest.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
-import { extractLevelTable, describeLevels, findCanvas } from './lib/leveldata.mjs';
-import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint } from './lib/metrics.mjs';
+import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './lib/leveldata.mjs';
+import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
@@ -235,7 +235,8 @@ const TOOLS = [
       TITLE + '：环境体检。**任何时候要操作原神 UGC，先调它。**'
       + '返回：扫到的客户端安装（正式服/Beta）、所有关卡、当前判定为「正在开发」的关卡、'
       + '活文件（沙箱 .lua）清单与大小、地图存档 .gil、运行时日志目录与日志文件数。'
-      + '编辑器 UI 操作（建模板/挂脚本）没有自动化通道——本工具只做文件层体检，替代不了人点编辑器。',
+      + '编辑器 UI 操作（建模板/挂脚本）没有自动化通道——本工具只做文件层体检，替代不了人点编辑器。'
+      + '\n\n**典型调用**：`{}`（当前关卡速览）｜`{"all":true}`（全部关卡）',
     parameters: {
       type: 'object',
       properties: {
@@ -308,12 +309,15 @@ const TOOLS = [
       + '· **`op=fixbom`** —— 活文件带 UTF-8 BOM 时**只去掉那 3 个字节**（原神实测会打印 '
       + '"Read text file with BOM header may cause Lua error"）。BOM 不是本工具加的，'
       + '实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → '
-      + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。',
+      + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。'
+      + '\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
+      + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua"}`（投代码）｜'
+      + '`{"op":"levels","summaryOnly":true}`（先扫全部关卡几何）→ `{"op":"levels","stage":3}`（再钻第 3 关）',
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels'], description: '默认 inspect。' },
-        level: { type: 'string', description: '关卡 ID / 品牌 / 脚本名片段；省略=当前关卡。' },
+        level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
           description: '指定活文件名（省略=该关卡最近改动的那个 .lua；**探针源码/备份这类附属文件会被自动跳过**）。'
@@ -341,7 +345,17 @@ const TOOLS = [
           description: 'op=deploy：Lua 结构校验强度。strict（默认）=不通过就拒绝部署；warn=只带提示照投；off=不校验。',
         },
         head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。' },
-        which: { type: 'string', description: 'op=levels：只看第几关（序号）或名字片段；省略=全部关卡。' },
+        stage: {
+          type: 'string',
+          description: 'op=levels：**玩法里的第几关**（表里的序号，或名字片段）；省略=全部关卡。'
+            + '⚠️ 别和 `level` 混：`level` = **地图关卡 ID**（如 1073741833，哪张图），'
+            + '`stage` = **游戏里的第几关**（如 3）—— 前者选文件，后者选表里的一段。',
+        },
+        summaryOnly: {
+          type: 'boolean',
+          description: 'op=levels：只给**每关一行的数字摘要**（计数 + 重叠/净空/相交的处数），'
+            + '**不带每块平台的坐标、不带直方图分箱** —— 先扫一眼再 `stage=N` 钻进去。默认 false（全量）。',
+        },
         nearPx: { type: 'number', description: 'op=levels：「近似贴上」的筛选阈值（默认 48px）—— **这是筛选，不是判定**。' },
       },
       additionalProperties: false,
@@ -478,22 +492,27 @@ const TOOLS = [
             hint: ex.hint || null,
           };
         }
+        const cards = describeLevels(ex.levels, {
+          which: args.stage == null || args.stage === '' ? null : String(args.stage),
+          nearPx: clampNum(args.nearPx, 48, 0, 2000),
+        });
+        const summaryOnly = args.summaryOnly === true;
         return {
           ok: true, op, file: destPath,
           levelCount: ex.levels.length,
+          stageFilter: args.stage == null || args.stage === '' ? null : String(args.stage),
+          summaryOnly,
           canvas: findCanvas(ex.constants),
           blockLines: ex.blockLines,
           constants: ex.constants,
-          levels: describeLevels(ex.levels, {
-            which: args.which == null || args.which === '' ? null : String(args.which),
-            nearPx: clampNum(args.nearPx, 48, 0, 2000),
-          }),
+          levels: summaryOnly ? cards.map(levelSummary) : cards,
           coordinateNote: '坐标**按表里怎么写就怎么报**（该表约定设计坐标 y 从顶向下）。'
             + '脚本转控件坐标时会翻 y（实测 `canvasH / 2 - dy * sy`）—— **别拿这里的 y 直接和控件坐标比**。',
           disclaimer: '本工具**只给几何数字，不给「跳得过去 / 不可达」的结论** —— '
             + '那取决于跳跃初速、重力、移动平台相位，属于玩法。'
             + '`adjacent` 按**声明顺序**（脚本注释说这是通关路径顺序）；'
-            + '`nearMiss` 的 `nearPx` 是**筛选阈值**，不是判定；`overlaps` 是两块矩形**真的相交**。',
+            + '`nearMiss` 的 `nearPx` 是**筛选阈值**，不是判定；`overlaps` 是两块矩形**真的相交**。'
+            + (summaryOnly ? '' : '　想省上下文：`summaryOnly:true` 只给每关一行的数字摘要（不带平台坐标），再 `stage=N` 钻进去。'),
         };
       }
       throw new Error('未知 op：' + op);
@@ -509,13 +528,20 @@ const TOOLS = [
       + 'op=script 比对地图里嵌的脚本源码与本地活文件（用来判断"跑的是不是本地这版代码"）；'
       + 'op=strings 提取可读字符串（偏移+文本），存盘前后 diff 用。'
       + '判据：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**；'
-      + '画布上摆的实例、以及模板控件的子节点，一律返回 nil。',
+      + '画布上摆的实例、以及模板控件的子节点，一律返回 nil。'
+      + '\n\n**典型调用**：`{"op":"summary"}`（版本/脚本映射/模板数）｜'
+      + '`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）',
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['summary', 'clientui', 'script', 'strings'], description: '默认 summary。' },
-        level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡。' },
+        level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡。' },
         file: { type: 'string', description: 'op=script：用哪个活文件比对（一个关卡可能有多个 .lua；省略=自动选；给了名字但不存在会报错并列出全部）。' },
+        summaryOnly: {
+          type: 'boolean',
+          description: 'op=clientui：省掉 `records`（每条控件一行）与 `rendered`（谱系文字），只留计数与「可能能动态创建的模板」。'
+            + '**先看有没有模板，再决定要不要逐条看**时用。默认 false（全量）。',
+        },
         path: { type: 'string', description: '直接指定 .gil 绝对路径（跳过自动定位）。' },
         limit: { type: 'number', description: 'op=strings：最多返回多少条（默认 200）。' },
         match: { type: 'string', description: 'op=strings：子串过滤。' },
@@ -569,21 +595,28 @@ const TOOLS = [
       }
       if (op === 'clientui') {
         const c = classifyControls(gil.clientUI);
-        return {
+        const base = {
           ok: true, op, path: gilPath,
           level: gil.level,
           count: gil.clientUI.length,
-          standalone: c.standalone,
           likelyTemplates: c.likelyTemplates,
           likelyContainers: c.likelyContainers,
           structural: c.structural,
-          records: gil.clientUI,
-          rendered: renderClientUI(gil),
           hint: '能被 game.InstantiateClientUIControl 创建的，只有「在客户端控件模板库里【添加客户端控件】存为模板」的独立控件。'
             + '本工具把「无父节点 + 名字是客户端控件类型」的记为 likelyTemplates；'
             + '其中 容器节点 那几条通常是客户端控件容器的画布根节点（不是模板），真正的模板看 图片 / 文本框 这类。'
             + '实测佐证：本关 1073741867(文本框) / 1073741868(图片) 可创建，1073741863~1866（画布实例）一律 nil。',
         };
+        if (args.summaryOnly === true) {
+          // 全量 `records` + `rendered` 是 37 条控件 × 多列，光扫一眼就要几千字符
+          return {
+            ...base,
+            standaloneCount: c.standalone.length,
+            note: 'summaryOnly：省掉了 `records`（每条控件一行）与 `rendered`（谱系文字），'
+              + '只留计数与「可能能动态创建的模板」。要全量就去掉 summaryOnly。',
+          };
+        }
+        return { ...base, standalone: c.standalone, records: gil.clientUI, rendered: renderClientUI(gil) };
       }
       if (op === 'script') {
         const cur = args.level || !args.path ? resolveLevel(args.level) : null;
@@ -625,12 +658,15 @@ const TOOLS = [
       + '\n\n⚠️ **「试玩了却没有新日志」先看这里**：`.gia` 里**只有脚本自己 `print` 出来的东西**。'
       + '实测最坑的一次是**压根忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）——'
       + '另一种是编辑器「日志」面板里 `客户端脚本` 没勾上。工具不再替这种现象下结论，'
-      + '只如实回「最近一局是什么时候写的」；是不是刚玩过，你自己看一眼就知道。',
+      + '只如实回「最近一局是什么时候写的」；是不是刚玩过，你自己看一眼就知道。'
+      + '\n\n**典型调用**：`{"op":"runs"}`（这一局/这几局发生了什么，含局间 diff）｜'
+      + '`{"op":"metrics"}`（死亡位置分布与集中区，**不用改脚本**）｜'
+      + '`{"op":"tail","tag":"yuan-code","limit":30}`（按标签读正文）｜`{"op":"tail","run":1790171162}`（只看那一局）',
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics'], description: '默认 tail。' },
-        level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用它对应的日志目录）。' },
+        level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep/runs：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
         pattern: { type: 'string', description: '正文正则过滤。' },
@@ -641,6 +677,11 @@ const TOOLS = [
         },
         limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120）；op=runs/metrics：最多返回几局/几条时间线（默认 10 / 40）；op=sessions：几个文件（默认 40）。' },
         evt: { type: 'string', description: 'op=metrics：只看某个事件名（严格约定的 `evt=`）。' },
+        summaryOnly: {
+          type: 'boolean',
+          description: 'op=metrics：去掉直方图分箱，只留 `n/min/max/median/core/hotBin` 这些标量'
+            + '（少了几个箱会由 `binsOmitted` 报出）。**先看数再决定要不要分箱**时用。默认 false（全量）。',
+        },
         bins: { type: 'number', description: 'op=metrics：直方图分箱数（默认 10，1~50）。**集中区看 `core`（四分位距），热区看 `hotBin`**。' },
         withRaw: { type: 'boolean', description: 'true=把整段结构化记录一起回传（默认只回 time/message 等要点）。' },
       },
@@ -698,10 +739,14 @@ const TOOLS = [
         const bins = clampNum(args.bins, 10, 1, 50);
         const c = collectMetrics(pool);
         const evtQ = args.evt == null || String(args.evt).trim() === '' ? null : String(args.evt).trim();
-        const sums = summarizeMil(c.mil, { bins });
+        const summarized = summarizeMil(c.mil, { bins });
+        const slim = args.summaryOnly === true;
+        const sums = slim ? slimMil(summarized) : summarized;
+        const loose = c.loose.length ? summarizeLoose(c.loose, { bins }) : null;
         return {
           ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
           scanned: c.scanned, milCount: c.mil.length, looseCount: c.loose.length, ignored: c.ignored,
+          summaryOnly: slim,
           // ① 严格约定（`[MIL] evt=… k=v`）：每个事件一张卡 + 一条时间线
           mil: c.mil.length
             ? {
@@ -710,11 +755,12 @@ const TOOLS = [
             }
             : null,
           // ② 宽松抽取：**不用改脚本**，现有日志里现成的 `k=数字` 也能汇总
-          loose: c.loose.length ? summarizeLoose(c.loose, { bins }) : null,
+          loose: loose ? (slim ? slimLoose(loose) : loose) : null,
           convention: conventionHint(),
           note: '汇总的是**数字事实**，不是判定 —— 不说「这关有问题」，只说「N 次里有 M 次落在 a~b」。'
             + '「集中在哪」看 `core`（中间 50%，抗离群值）；`hotBin` 是直方图命中最多的那一箱，看形状用。'
             + '没有指标格式的行**一律静默忽略**（本 op 只读 `.gia`，一个字节都不写）。'
+            + (slim ? '`summaryOnly:true` 去了直方图分箱（`binsOmitted` 报出少了几个），`core`/`hotBin` 都还在。' : '')
             + (c.mil.length ? '' : '⚠️ 目前这一局没有 `[MIL]` 行，所以 `mil` 是 null —— 上面 `loose` 那份是**现成日志就能出的**。'),
         };
       }
@@ -758,12 +804,15 @@ const TOOLS = [
       + '`…21-46-05_157.gia` 到 **21:47:07** 才落盘；**局在跑的时候磁盘上根本没有这个文件**。'
       + 'op=status 看当前状态 + 最近几局；op=wait 等下一次开跑（`backSec` 可回扫刚过去那局，'
       + '`afterSec` 要「开跑 N 秒后」）——命中后接着调 `miliastra_shot` 截一张，'
-      + '就是「游戏开跑 N 秒后的画面」。op=wait 超时**不报错**，如实回 `hit:false`。',
+      + '就是「游戏开跑 N 秒后的画面」。op=wait 超时**不报错**，如实回 `hit:false`。'
+      + '\n\n**典型调用**：`{"op":"status"}`（现在在不在试玩）｜'
+      + '`{"op":"wait","afterSec":3}`（等开跑再等 3 秒 —— 但**要截图就别用这条**：'
+      + '直接 `miliastra_shot {"op":"burst","awaitPlaytest":true,"afterSec":3}` 一次调用更准）',
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['status', 'wait'], description: '默认 status。' },
-        level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用来定位该品牌的 output_log.txt）。' },
+        level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用来定位该品牌的 output_log.txt）。' },
         backSec: { type: 'number', description: 'op=wait：回扫窗口秒数 —— 调用之前 backSec 秒内已经开跑的也算命中（默认 0）。人点了试玩再叫 AI 时用得上。' },
         timeoutSec: { type: 'number', description: 'op=wait：最多等多少秒（默认 90，上限 300）。' },
         afterSec: { type: 'number', description: 'op=wait：命中开跑后再等 N 秒才返回（默认 0，上限 120）—— 这就是「开跑 N 秒后」。' },
@@ -854,7 +903,10 @@ const TOOLS = [
       + '既不放游戏存档目录（那是米哈游的地盘），也不放包目录（插件升级会整个替换掉它）。'
       + '**不会自动删**：清理要显式给条件（`all` 或 `olderThanDays`），真删还要 `confirm:true`。'
       + '回执恒带 `pid / process / title` —— 明确告诉你**截到的到底是哪个窗口**'
-      + '（第一版抓错了程序，光看 `ok:true` 根本发现不了）。',
+      + '（第一版抓错了程序，光看 `ok:true` 根本发现不了）。'
+      + '\n\n**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜'
+      + '`{"op":"burst","awaitPlaytest":true,"afterSec":3,"count":5}`（**等开跑 → 等 3 秒 → 连拍 5 张**，一次调用）｜'
+      + '`{"op":"burst","dryRun":true}`（先看要多久、拍几张）',
     parameters: {
       type: 'object',
       properties: {
@@ -1137,7 +1189,9 @@ const TOOLS = [
         const i = PROBE_INFO[t] || {};
         return '`' + t + '` ' + (i.label || '') + (i.oneLine ? '=' + i.oneLine : '');
       }).join('；') + '。'
-      + '另：op=render 只生成 Lua 不部署（要先看代码用这个）。探针只读，不做场景写操作。',
+      + '另：op=render 只生成 Lua 不部署（要先看代码用这个）。探针只读，不做场景写操作。'
+      + '\n\n**典型调用**：`{"op":"deploy","template":"ping"}` → 人重新试玩 → `{"op":"collect","tag":"P1"}` → '
+      + '**还原**：`miliastra_code {"op":"restore"}`（不传 backup 就是用固定名那份）',
     parameters: {
       type: 'object',
       properties: {
@@ -1249,7 +1303,8 @@ const TOOLS = [
     description:
       '调试用：把 text 原样回显，并带上插件版本与本机存档根目录。'
       + '**怀疑「插件没生效 / 面板调不通 Host / 工具参数丢了」时先调它** ——'
-      + '返回里带着你传进来的字符串，就不用猜参数到底有没有传到 Host。',
+      + '返回里带着你传进来的字符串，就不用猜参数到底有没有传到 Host。'
+      + '\n\n**典型调用**：`{"text":"ping"}`',
     parameters: {
       type: 'object',
       properties: { text: { type: 'string', description: '要回显的字符串。' } },
