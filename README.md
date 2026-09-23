@@ -62,37 +62,37 @@
 
 ---
 
-## 安装
+## 安装（固定方式：从源码目录装）
 
-### 方式一：从源码目录装（还没发包时用这个）
+**只有这一种安装方式**：把仓库克隆下来，软链进 profile，注册进 bundles。
+改代码**立即生效**，适合开发与自用 —— npm 发布**暂缓**（要发的话见文末「发布到 npm（暂缓）」）。
 
 ```powershell
 git clone <本仓库地址> dsh-miliastra
 cd dsh-miliastra
 
-# 开发态：目录软链 + 手动进 bundles（改代码立即生效）
+# ① 软链到 profile 的 node_modules（开发态）
 cmd /c mklink /J "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-miliastra" (Get-Location).Path
-# 再把 "dsh-miliastra" 加进 ~/.dsh/profiles/web/package.json 的 dsh.profile.bundles
-```
 
-### 方式二：装进 web profile（发布到 npm 之后）
+# ② **注册进 bundles** —— 少了这步插件完全不会加载（原因见下面那条警告）
+#    编辑 %USERPROFILE%\.dsh\profiles\web\package.json，把 "dsh-miliastra" 加进 dsh.profile.bundles
 
-```powershell
-dsh plugin --profile web add dsh-miliastra   # 会自动写进 dsh.profile.bundles
-```
-
-### 两种方式都别忘了
-
-```powershell
-dsh web     # 重启 Web GUI —— Host 半边是启动时加载的快照，不重启不生效
+# ③ 重启 Web GUI
+dsh web     # Host 半边是启动时加载的快照，不重启不生效
 ```
 
 > ⚠️ **只放软链不会让插件被装配**：启动期不扫描 `node_modules`，装配来源只有 profile 的 `dsh.profile.bundles`
 > （或 profile `cordis.patch.yml` 里显式 insert 一行）。这条错了的表现是**完全静默**：文件都在、什么也没发生。
+>
+> ⚠️ 本机 pnpm 是 `nodeLinker: hoisted`，手搓的软链不在 profile 的 `dependencies` 里，
+> **下一次 `dsh plugin add/install` 会把它清掉** —— 所以它是「自用/开发」方式，不是交付方式。
 
 ---
 
-## 发布到 npm
+## 发布到 npm（**暂缓**，后面再说）
+
+> **现在固定走上面的「从源码目录装」，不发 npm。** 这一节留在这里只是为了以后要发时不用重新调研 ——
+> 内容都实测过（`npm pack --dry-run` 验过 `files` 字段、验过 `dsh.bundle.patch` 会被认）。
 
 ```powershell
 npm login                                   # 浏览器 / 2FA；没账号先到 npmjs.com 注册并验证邮箱
@@ -101,7 +101,7 @@ npm publish                                 # 真发；开了 2FA 时加 --otp=1
 npm view dsh-miliastra version              # 验证：打印版本号即成功
 ```
 
-发布后的使用方式就回到上面「方式二」：
+发布之后，别人就用一条命令装（会自动写进 `dsh.profile.bundles`）：
 
 ```powershell
 dsh plugin --profile web add dsh-miliastra@0.0.9   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
