@@ -333,6 +333,25 @@ check('★ 部署后（已部署状态）渲染出「第 4 步：还原我的脚
   return '已部署：提示 + 重新试玩提醒 + 还原按钮；未部署：按钮不出现';
 });
 
+check('★ Host 清单比磁盘少时，探针卡片提示「Host 是旧版 + 重启 dsh web」', () => {
+  // 模拟「运行中的 Host 还是旧版」：只返回 3 个模板（磁盘上已有 4 个）
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __probeInfo: { templates: ['ping', 'tree', 'instantiate'], info: [], overview: {} },
+  }));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/Host 是旧版/.test(flat), '没提示「运行中的 Host 是旧版」');
+  assert(/api-surface/.test(flat), '没点名少了哪个模板');
+  assert(/重启 dsh web/.test(flat), '提示里没给下一步动作（重启 dsh web）');
+  // 反过来：Host 清单齐全时不该有这条噪音
+  const ok = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __probeInfo: { templates: ['ping', 'tree', 'instantiate', 'api-surface'], info: [], overview: {} },
+  }));
+  assert(!/Host 是旧版/.test(ok.replace(/<[^>]+>/g, ' ')), 'Host 清单齐全时不该提示旧版');
+  return '缺模板时提示 + 点名缺失项 + 给出动作；齐全时不提示';
+});
+
 check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）', () => {
   const PanelComp = clientExports.__testPanel;
   const html = renderToStaticMarkup(React.createElement(PanelComp, {
