@@ -1,0 +1,59 @@
+{
+  "name": "dsh-miliastra",
+  "version": "0.0.1",
+  "description": "原神·千星奇域（Miliastra Wonderland）UGC 工具链：活文件定位与部署、地图存档 .gil 读取、运行时日志 .gia 取证、探针模板化，外加一个侧边栏状态面板。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib/**/*.js",
+    "lib/**/*.mjs",
+    "lib/assets/*",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0",
+    "dsh": ">=0.1.2-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "genshin",
+    "miliastra",
+    "ugc"
+  ],
+  "license": "MIT",
+  "private": true,
+  "devDependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/REPLACE_ME/dsh-miliastra.git"
+  },
+  "bugs": {
+    "url": "https://github.com/REPLACE_ME/dsh-miliastra/issues"
+  },
+  "homepage": "https://github.com/REPLACE_ME/dsh-miliastra#readme",
+  "author": "linyq"
+}

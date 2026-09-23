@@ -1,0 +1,60 @@
+# Changelog
+
+本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [0.0.1] — 2026-09-23
+
+首个版本。整套工具链不是设计出来的，是**在原神·千星奇域 7.1 正式服上排一次真实的 bug 排出来的** ——
+那次「`game.InstantiateClientUIControl` 对任何索引号都返回 `nil`」折腾了好几小时，
+最后定位到「客户端控件模板库为空」。踩过的坑都固化成了工具能力与 README 的「关键知识」。
+
+### Host 半边 · 6 个工具
+
+- **`miliastra_health`** 环境体检：客户端安装 / 关卡 / 活文件 / 地图 / 日志目录定位。
+  **两种关卡布局都扫**（`<id>\<id>.gil` 与根目录的 `<id>.gil` —— 只扫前者会漏掉大部分图）。
+- **`miliastra_code`** 活文件：`inspect` / `read` / `deploy` / `backup` / `backups` / `restore`。
+  部署一律 **先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**，任一不满足直接拒绝。
+- **`miliastra_map`** 读 `.gil`（protobuf）：`summary` / `clientui` / `script` / `strings`。
+  `clientui` 给出**客户端控件谱系 + 可被脚本动态创建的模板清单**；`script` 给出**地图快照 vs 活文件的一致性**。
+- **`miliastra_log`** 读 `.gia` 运行时日志：`sessions` / `tail` / `grep` / `tags`，结构化到
+  `{时间, 账号, 玩家, 关卡, 正文}`。
+- **`miliastra_probe`** 探针模板化：`tree` / `instantiate` / `ping`，`render` → `deploy` → `collect`。
+- **`miliastra_echo`** 回显参数，用来确认参数真的传到了 Host。
+
+### Client 半边 · 侧边栏面板
+
+- 注册到**官方槽位** `sidebar.footer.action`（不是 DOM 注入）
+- **三栏**布局（参考蛋仔面板）：① 关卡 / ② 代码 / ③ 日志，每栏独立滚动
+- 粉蓝配色；入口图标内联 PNG（像素画，`image-rendering: pixelated`）
+- **多活文件支持**：一个关卡可以有多个 `.lua`（不同角色各一个），选择器切换，所有操作跟着走
+- **备份清单 + 逐条还原**，还原带二次确认与「还原前安全备份」
+- 日志 TAG 汇总 / 按 TAG 过滤（点胶囊即过滤）
+
+### 修掉的真实缺陷
+
+- **关卡扫描盲区**：`Beyond_Local_Save_Level` 下有两种布局，只扫带文件夹的那种会**漏掉大部分图**
+  （实测 8 个只看见 3 个）。
+- **`MILIASTRA_LOCALLOW` 写错会静默回退到真实存档根** —— 手滑就会去动真文件。改成「显式指定就照做，指错就明确报错」。
+- **备份同秒撞名**：时间戳只到秒，同一秒连部署两次会覆盖前一份备份。改为自动顺延 `-2 / -3`。
+- **解析 5 字节 varint 只解 4 字节**，漏掉整整一段 ID 区间（工具早期版本）。
+
+### 已验证
+
+| 层 | 结果 |
+|---|---|
+| L1 工具层（`tests/smoke.mjs`） | 21 项 |
+| L1 部署与备份（`tests/deploy-test.mjs`） | 12 项 |
+| L1 探针部署 / 多活文件 / 关卡布局（`tests/probe-deploy-test.mjs`） | 9 项 |
+| L3 真实 React 渲染（`tests/client-render-test.mjs`） | 14 项 |
+| L1 技能契约自检（`dsh-plugin-dev` 的 `selftest.mjs`） | 16 项 |
+| **L4 真机**（`tests/live-check.mjs`，对着运行中的 dsh web） | 8 项 |
+
+契约取证自本机 **`dsh 0.1.5-rc.1`**。
+
+### 已知边界
+
+- **编辑器 UI 操作没有自动化通道**：在「客户端控件模板」里点【添加客户端控件】、给容器节点挂脚本、
+  建容器节点 —— 这些必须由人在编辑器里完成。本插件替代的是「人和 AI 之间的来回搬运」，不是编辑器操作本身。
+- **不做场景写操作**：工具只读，或只写「活文件」（脚本本身），不碰地图数据。
+- **负载 / 节点图统计尚未实现**：官方文档确认「负载计算」是编辑器 UI 功能（静态菜单 + 动态试玩报告），
+  「节点图」数据虽在 `.gil` 里有痕迹但字段结构尚未逆出。已记录为后续课题。
