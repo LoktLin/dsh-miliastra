@@ -24,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.6';
+const VERSION = '0.0.7';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -40,6 +40,7 @@ import {
 } from './lib/playtest.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { extractLevelTable, describeLevels, findCanvas } from './lib/leveldata.mjs';
+import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
@@ -627,7 +628,7 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs'], description: '默认 tail。' },
+        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics'], description: '默认 tail。' },
         level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep/runs：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
@@ -637,7 +638,9 @@ const TOOLS = [
           description: 'op=tail/grep/tags：**只看某一局**。给 epoch 秒（如 1790170177）或 instance 片段。'
             + 'op=runs 的 epochSec 与 miliastra_playtest 报的是同一个值。',
         },
-        limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120）；op=runs：最多返回几局（默认 10）；op=sessions：几个文件（默认 40）。' },
+        limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120）；op=runs/metrics：最多返回几局/几条时间线（默认 10 / 40）；op=sessions：几个文件（默认 40）。' },
+        evt: { type: 'string', description: 'op=metrics：只看某个事件名（严格约定的 `evt=`）。' },
+        bins: { type: 'number', description: 'op=metrics：直方图分箱数（默认 10，1~50）。**集中区看 `core`（四分位距），热区看 `hotBin`**。' },
         withRaw: { type: 'boolean', description: 'true=把整段结构化记录一起回传（默认只回 time/message 等要点）。' },
       },
       additionalProperties: false,
@@ -687,6 +690,31 @@ const TOOLS = [
         return {
           ok: false, op, file,
           error: '这个文件里没有 instance 含 "' + runQ + '" 的记录。先用 op=runs 看有哪些局（instance / epochSec）。',
+        };
+      }
+
+      if (op === 'metrics') {
+        const bins = clampNum(args.bins, 10, 1, 50);
+        const c = collectMetrics(pool);
+        const evtQ = args.evt == null || String(args.evt).trim() === '' ? null : String(args.evt).trim();
+        const sums = summarizeMil(c.mil, { bins });
+        return {
+          ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+          scanned: c.scanned, milCount: c.mil.length, looseCount: c.loose.length, ignored: c.ignored,
+          // ① 严格约定（`[MIL] evt=… k=v`）：每个事件一张卡 + 一条时间线
+          mil: c.mil.length
+            ? {
+              events: evtQ ? sums.filter((s) => s.evt === evtQ) : sums,
+              timeline: metricsTimeline(c.mil, { limit: clampNum(args.limit, 40, 1, 500) }),
+            }
+            : null,
+          // ② 宽松抽取：**不用改脚本**，现有日志里现成的 `k=数字` 也能汇总
+          loose: c.loose.length ? summarizeLoose(c.loose, { bins }) : null,
+          convention: conventionHint(),
+          note: '汇总的是**数字事实**，不是判定 —— 不说「这关有问题」，只说「N 次里有 M 次落在 a~b」。'
+            + '「集中在哪」看 `core`（中间 50%，抗离群值）；`hotBin` 是直方图命中最多的那一箱，看形状用。'
+            + '没有指标格式的行**一律静默忽略**（本 op 只读 `.gia`，一个字节都不写）。'
+            + (c.mil.length ? '' : '⚠️ 目前这一局没有 `[MIL]` 行，所以 `mil` 是 null —— 上面 `loose` 那份是**现成日志就能出的**。'),
         };
       }
 

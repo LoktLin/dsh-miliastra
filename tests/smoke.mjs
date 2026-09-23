@@ -61,6 +61,7 @@ const CASES = [
   ['miliastra_log', { op: 'tags' }],
   ['miliastra_log', { op: 'tail', limit: 5 }],
   ['miliastra_log', { op: 'runs' }],                          // 只读：按局切分 + 局间 diff
+  ['miliastra_log', { op: 'metrics' }],                       // 只读：指标汇总（严格 [MIL] + 宽松 k=数字）
   ['miliastra_playtest', { op: 'status' }],                  // 只读：读 output_log.txt
   ['miliastra_shot', { op: 'targets' }],
   ['miliastra_shot', { op: 'list' }],
