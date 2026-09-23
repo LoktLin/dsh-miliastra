@@ -24,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.9';
+const VERSION = '0.0.10';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -227,6 +227,52 @@ function classifyControls(clientUI) {
 }
 
 /* ---------------------------------------------------------------- 工具定义 */
+
+/* ---------------------------------------------- 系统提示段的数据源（0.0.10）
+ *
+ * ⚠️ 为什么**从数据生成**而不是手写一段话：
+ *    那段提示是「AI 的开场指路」，它天生是**第二份副本** —— 而第二份副本必然漂移。
+ *    实证：0.0.9 之前那段只覆盖 5 个工具，`miliastra_playtest` / `miliastra_shot`
+ *    （0.0.4~0.0.8 加的）**在提示里没有任何"什么时候用"**，而没人会发现 ——
+ *    同一个病在 README 上也发过（第一段版本号停在 `0.0.1` 六次发布）。
+ *    → 所以这里只维护**数据**，文案由 `renderPromptSection()` 生成；
+ *      再由 `tests/smoke.mjs` 断言「不在 `PROMPT_SKIP` 里的工具，都必须有一条指路」。
+ *      **加新工具时如果忘了补，smoke 会当场红。**
+ *
+ * ⚠️ 往里写什么：只写 **schema 表达不了的** —— 「什么时候用哪个」的决策。
+ *    别复述参数/返回值/op 列表（那些工具 schema 里已经有了，抄一遍等于重复付费 + 多个会过期的副本）。
+ */
+export const PROMPT_SKIP = new Set(['miliastra_echo']);   // 纯调试工具：不需要在开场提示里指路
+
+export const PROMPT_GUIDE = [
+  { tool: 'miliastra_health', when: '先用它定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）' },
+  { tool: 'miliastra_code', when: '改完本地 lua 用 op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM；还会跑 Lua 结构校验）；op=inspect 看有没有被编辑器写回旧版' },
+  { tool: 'miliastra_map', when: '判断「哪些控件能被脚本动态创建」用 op=clientui（只看无父节点的独立模板）' },
+  { tool: 'miliastra_log', when: '运行时结果一律用它取证（Lua 里 print，别靠猜）；op=runs 按「局」切分、op=metrics 汇总指标分布' },
+  { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
+  { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
+  { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
+];
+
+export const PROMPT_RULES = [
+  '编辑器 UI 操作（建客户端控件模板、挂脚本、建容器节点）**没有自动化通道，必须人做**；',
+  '「试玩」按钮也只能人点 —— 插件只负责把人点完之后的开跑/结束接住（不读内存、不连游戏端口、不冒充编辑器）；',
+  '工具**只报数字，不下判决**（几何重叠多少 px、指标集中在哪段，都是事实；「能不能过」是作者的判断）；',
+  '「磁盘是用户的」：截图与备份**绝不自动删**，清理永远要人显式点（真删还要双钥匙）；',
+  '不碰用户的玩法（规则/判定/数值/组件位置），拿不准先问、给 2~3 个具体选项。',
+];
+
+/** 生成系统提示段的正文（纯函数，便于断言「覆盖全不全」）。 */
+export function renderPromptSection() {
+  return [
+    '原神·千星奇域（Miliastra Wonderland）UGC 工具链已装载，提供工具：' + TOOLS.map((t) => t.name).join('、') + '。',
+    '涉及原神 UGC / 千星奇域 / 客户端控件 / levelScript / 图片资产 / 地图存档 .gil / 运行时日志 .gia 时，',
+    '优先用这些工具而不是自己拼 PowerShell：',
+    ...PROMPT_GUIDE.map((g) => '  · ' + g.tool + '：' + g.when),
+    '硬规则：',
+    ...PROMPT_RULES.map((r) => '  · ' + r),
+  ].join('\n');
+}
 
 const TOOLS = [
   {
@@ -1359,18 +1405,8 @@ export function apply(ctx) {
       const systemPrompt = promptCtx.get('systemPrompt');
       if (!systemPrompt || typeof systemPrompt.section !== 'function') return;
       try {
-        const text = [
-          '原神·千星奇域（Miliastra Wonderland）UGC 工具链已装载，提供工具：' + TOOLS.map((t) => t.name).join('、') + '。',
-          '涉及原神 UGC / 千星奇域 / 客户端控件 / levelScript / 图片资产 / 地图存档 .gil / 运行时日志 .gia 时，',
-          '优先用这些工具而不是自己拼 PowerShell：',
-          '  · 先 miliastra_health 定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）',
-          '  · 运行时结果一律 miliastra_log 取证（Lua 里 print，别靠猜）',
-          '  · 改完本地 lua 用 miliastra_code op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM 检查）',
-          '  · 判断「哪些控件能被脚本动态创建」用 miliastra_map op=clientui（只看无父节点的独立模板）',
-          '  · 需要运行时真相时 miliastra_probe 部署探针，让人试玩一局后 collect',
-          '硬规则：编辑器 UI 操作（建客户端控件模板、挂脚本、建容器节点）没有自动化通道，必须人做；',
-          '不碰用户的玩法（规则/判定/数值/组件位置），拿不准先问。',
-        ].join('\n');
+        // 文案由数据生成（见文件头 `PROMPT_GUIDE`）—— 不再手写，避免它变成第二份会漂移的副本
+        const text = renderPromptSection();
         promptCtx.effect(
           () => systemPrompt.section({ name: 'plugin:' + name, order: 148, text }),
           name + ': prompt section',

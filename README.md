@@ -3,7 +3,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
-**版本 `0.0.9`**（见 [CHANGELOG](CHANGELOG.md)） · Apache-2.0
+**版本 `0.0.10`**（见 [CHANGELOG](CHANGELOG.md)） · Apache-2.0
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 这套工具链是**在正式服上排一次真实的 bug 排出来的**（「动态创建控件恒返回 nil」→ 根因是模板库为空），
@@ -104,7 +104,7 @@ npm view dsh-miliastra version              # 验证：打印版本号即成功
 发布之后，别人就用一条命令装（会自动写进 `dsh.profile.bundles`）：
 
 ```powershell
-dsh plugin --profile web add dsh-miliastra@0.0.9   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
+dsh plugin --profile web add dsh-miliastra@0.0.10   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
 dsh web
 ```
 
@@ -470,20 +470,24 @@ miliastra_code op=levels which=3    # 只看第 3 关（序号或名字片段）
 > 只说「N 次里有 M 次落在 a~b」，不说「这关有问题」（有测试守着这条）。
 > 没有指标格式的行**一律静默忽略**（`ignored` 计数如实报出）；本 op **只读** `.gia`，一个字节都不写。
 
-### AI 调用约定（0.0.9 起，有测试钉住）
+### AI 调用约定（0.0.9 起，有测试钉住；0.0.10 补第四条）
 
-这个插件的第一服务对象是**AI**（人点编辑器、AI 读写文件），所以调用体验本身就是功能。三条不变量：
+这个插件的第一服务对象是**AI**（人点编辑器、AI 读写文件），所以调用体验本身就是功能。四条不变量：
 
 | 约定 | 为什么 | 怎么被守住 |
 |---|---|---|
 | 每个工具的 description 末尾有 **`典型调用`** | AI 读描述就能照抄，不用自己拼参数组合 | `smoke` 断言 8 个工具全都有 |
 | **`level` = 地图关卡 ID，`stage` = 玩法里的第几关** | 中文里两个都叫「关卡」，参数名撞车 = 一定会填错 | `smoke` 断言全库不再出现 `which`（旧名） |
 | 大返回可以用 **`summaryOnly:true`** 瘦身，**但结论不能丢** | `op=levels` 一关带全平台坐标，3 关 18.9KB（≈5k tokens） | `smoke` 断言省下来 **且** `core`/`hotBin`/各计数都还在 |
+| 每个工具在**系统提示段**里都要有「**什么时候用**」 | **只有工具 schema 与系统提示段能自动到达 AI**；提示段漏了 = 工具存在但 AI 不知道何时用（`playtest`/`shot` 就这样漏了 4 个版本） | `smoke` 断言覆盖 **7/8**（豁免只在 `PROMPT_SKIP` 里显式写），且**工具名与说明必须同一行** |
 
 压缩实测：`levels` 18 917B → **3 126B**；`clientui` 7 592B → **1 636B**；`metrics` 去掉分箱但 `core` 与 `hotBin` 保留。
 **默认行为不变** —— 想省要显式传 `summaryOnly:true`（不偷偷改语义）。
 
-> 完整的「我该调哪条」清单：工作区 `docs/dsh-miliastra_更新说明_0.0.4~0.0.9_2026-09-23.md`。
+> 提示段体积：**工具 schema 13 049 字**（AI 自动看见的全量）vs **提示段 1 166 字 ≈ 9%** ——
+> 只写 schema 表达不了的**决策与纪律**，**绝不复述参数/返回值**。
+
+> 完整的「我该调哪条」清单：工作区 `docs/dsh-miliastra_更新说明_0.0.4~0.0.10_2026-09-23.md`。
 
 ### 部署前的 Lua 结构校验（`lintMode`）
 

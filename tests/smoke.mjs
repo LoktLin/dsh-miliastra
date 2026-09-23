@@ -13,7 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { TOOLS } from '../index.js';
+import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection } from '../index.js';
 
 let pass = 0;
 let fail = 0;
@@ -234,6 +234,46 @@ for (const [toolName, args] of CASES) {
   }
 }
 
+/* ---- 系统提示段必须**覆盖所有需要指路的工具**（0.0.10 加）
+ *
+ * 为什么要有这条：系统提示段本质是「AI 的开场指路」，它是工具 schema 之外的**第二份副本**，
+ * 而第二份副本必然漂移。实证：0.0.9 之前那段只覆盖 5 个工具，
+ * `miliastra_playtest` / `miliastra_shot`（0.0.4~0.0.8 加的）在提示里**没有任何"什么时候用"**，
+ * 而没人会发现 —— 同一个病在 README 上也发过（版本号停在 0.0.1 六次发布）。
+ * → 判据刻意做成**绊线**而不是"质检"：不在豁免名单里的工具，必须有一条指路，否则红。
+ *    它不会误报（豁免是显式的），代价只是「加工具时要想一句什么时候用」—— 那一句本来就该想。
+ */
+{
+  const names = TOOLS.map((t) => t.name);
+  const covered = new Set(PROMPT_GUIDE.map((g) => g.tool));
+  const text = renderPromptSection();
+  const bad = [];
+  const missing = names.filter((n) => !PROMPT_SKIP.has(n) && !covered.has(n));
+  if (missing.length) bad.push('这些工具在系统提示段里没有「什么时候用」：' + missing.join(', ')
+    + '（确实不需要的，显式加进 PROMPT_SKIP 并写明理由）');
+  const ghost = [...covered].filter((n) => !names.includes(n));
+  if (ghost.length) bad.push('系统提示段指路的工具不存在（改名/删掉后忘了同步）：' + ghost.join(', '));
+  // ⚠️ 必须**按行**查「工具名 + 冒号」在不在同一条 bullet 里。
+  //    第一版只查 `text.includes(name)` → **假通过**：名字在第一行的工具清单里就有，
+  //    于是「每条指路根本没带工具名」（· 先用它定位… 的「它」指谁？）也照样绿。断言查错了对象。
+  const lines = text.split('\n');
+  const notInText = PROMPT_GUIDE.filter((g) => !lines.some((l) => l.includes(g.tool + '：'))).map((g) => g.tool);
+  if (notInText.length) bad.push('这些工具的指路没有和工具名写在同一行（读的人不知道「它」是谁）：' + notInText.join(', '));
+  const noWhy = PROMPT_GUIDE.filter((g) => !g.when || g.when.length < 8);
+  if (noWhy.length) bad.push('有指路项没写「什么时候用」：' + noWhy.map((g) => g.tool).join(', '));
+  if (bad.length) {
+    fail += 1;
+    failures.push('[prompt] 系统提示段覆盖不全：' + bad.join('；'));
+  } else {
+    console.log(`✓ 系统提示段覆盖 ${PROMPT_GUIDE.length}/${names.length} 个工具（豁免 ${[...PROMPT_SKIP].join(',') || '无'}）`
+      + `，正文 ${text.length} 字（工具 schema 的 ${Math.round(text.length / names.reduce((s, n) => {
+        const t = TOOLS.find((x) => x.name === n);
+        return s + t.description.length + JSON.stringify(t.parameters).length;
+      }, 0) * 100)}%）`);
+    pass += 1;
+  }
+}
+
 /* ---- 版本一致性（2026-09-23 加：README 第一段曾一路停在 0.0.1 —— 六次发布没人发现，
  *      因为**没有任何断言在管它**。典型的「不变量缺失」：功能都对，门面上写着旧版本。）---- */
 {
@@ -254,7 +294,7 @@ for (const [toolName, args] of CASES) {
     fail += 1;
     failures.push('[version] 版本号不一致：' + bad.join('；'));
   } else {
-    console.log(`✓ 版本号三处一致 → package.json / index.js VERSION / README 第一段 / 安装示例 都是 ${pkg.version}`);
+    console.log(`✓ 版本号四处一致 → package.json / index.js VERSION / README 第一段 / 安装示例 都是 ${pkg.version}`);
     pass += 1;
   }
 }
