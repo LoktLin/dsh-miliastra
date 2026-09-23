@@ -1,0 +1,11 @@
+# 统一行尾：文本一律 LF（跨平台 clone 不会因为 CRLF 产生假 diff）
+* text=auto eol=lf
+
+# 二进制：不要做任何行尾/编码转换
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+
+# 生成物：diff 里不显示
+package-lock.json -diff
