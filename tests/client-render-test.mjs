@@ -546,12 +546,16 @@ check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`*
       __uiInfo: { ok: true, count: 3, likelyTemplates: [{ id: 1073741867, name: '文本框', parent: null }],
         records: [{ id: 1073741867, name: '文本框', parent: null }, { id: 1073741863, name: '容器节点', parent: null }] },
       __uiRaw: true,
-      // 体检结论是**从 Host 拿来的**文本，里面有给 AI 看的 Markdown —— 面板必须剥掉再显示
-      __logDiag: {
-        verdict: 'stale',
-        headline: '⚠️ 最近一局是 **113 分钟前**写的（18:44:57）—— **你刚才那局没有写出日志**。',
-        why: ['① **试玩可能还在进行中** —— `.gia` 不是边玩边写', '④ 「日志」面板里 **`客户端脚本` 没勾选**'],
-        next: ['① 确认试玩是**进行中**的状态', '② 结束试玩后**再点一次取日志**'],
+      // 截图回执 / 备份说明也是**从 Host 拿来的**文本，里面有给 AI 看的 Markdown —— 面板必须剥掉再显示
+      __shot: {
+        dir: 'C:\\Users\\x\\.dsh\\miliastra\\shots', count: 2, totalBytes: 5055388, totalText: '4.8 MB',
+        newest: { name: 'game-a.png', sizeText: '2.4 MB', mtime: '2026-09-23T12:49:15.000Z' },
+        files: [
+          { name: 'game-a.png', sizeText: '2.4 MB', mtime: '2026-09-23T12:49:15.000Z' },
+          { name: 'game-b.png', sizeText: '2.4 MB', mtime: '2026-09-23T12:49:16.000Z' },
+        ],
+        lastCapture: { ok: true, file: 'game-a.png', process: 'YuanShen', pid: 3284, title: '原神',
+          width: 1456, height: 939, mode: 'printwindow', blackRatio: 0.0312, suspect: false },
       },
       __logs: [{ time: 't', tag: 'A', text: '正常', raw: '[A] 正常' }, { time: 't', tag: 'A', text: '失败', bad: true, raw: '[A] 失败' }],
     })],
@@ -619,38 +623,6 @@ check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者
   return '位置 + 固定名 + 一键还原 + ★标记 + 确认后果；缺固定名时给解释';
 });
 
-check('★ 试玩体检：最近一局不新鲜时，把「原因 + 下一步」摆在日志卡片最上面', () => {
-  const stale = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
-    __logDiag: {
-      verdict: 'stale',
-      headline: '⚠️ 最近一局是 113 分钟前写的（18:44:57）—— 你刚才那局没有写出日志。',
-      why: ['① 试玩可能还在进行中 —— .gia 不是边玩边写', '② 或者其实没点「试玩」'],
-      next: ['① 在编辑器里确认试玩是进行中的状态', '② 结束试玩后再点一次取日志'],
-    },
-  }));
-  const flat = stale.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-
-  // ① 结论要在，而且要说清「没有写出日志」（不能只端上旧日志让人自己发现）
-  assert(/没有写出日志/.test(flat), '没说清「刚才那局没写出日志」');
-  assert(/可能原因/.test(flat), '没列可能原因');
-  assert(/下一步/.test(flat), '没给下一步');
-  assert(/不是边玩边写/.test(flat), '没解释 .gia 的落盘时机（这是用户最容易误解的点）');
-  // ② 要用醒目样式（-err），不能混在普通提示里
-  assert(/dsh-miliastra-err/.test(stale), '没用醒目样式（-err）');
-  // ③ 要有个「试玩体检」按钮随时能再问一次
-  assert(/试玩体检<\/button>/.test(stale), '缺「试玩体检」按钮');
-
-  // 反过来：fresh 时不该刷一个红框出来（只留一句淡色说明）
-  const fresh = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
-    __logDiag: { verdict: 'fresh', headline: '最近一局是 30 秒前写的 —— 这应该就是你刚才那局。', why: [], next: ['直接「取日志」即可'] },
-  }));
-  const freshFlat = fresh.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert(/30 秒前/.test(freshFlat), 'fresh 的说明没显示');
-  assert(!/可能原因/.test(freshFlat), 'fresh 时不该列「可能原因」');
-  return 'stale：醒目框 + 原因 + 下一步 + 按钮；fresh：只一句说明';
-});
 
 check('★ 截图卡片：存到哪 / 多少张 / 不会自动删，三件事都必须在卡片上', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
@@ -694,7 +666,20 @@ check('★ 截图卡片：存到哪 / 多少张 / 不会自动删，三件事都
     },
   }));
   assert(/dsh-miliastra-err/.test(suspect), 'suspect=true 时没用醒目样式');
-  return '存放目录 + 张数体积 + 不会自动删 + 三按钮 + 窗口身份；可疑时醒目';
+
+  // ⑦ 缩略图预览（作者要求「图片最好有缩略图预览」）——
+  //    关键不只是「有 <img>」，而是**图走的是 Host 的小图路由**，不是把 2.4 MB 的原图塞进页面
+  const imgs = html.match(/<img[^>]*>/g) || [];
+  const shotImgs = imgs.filter((t) => /\/miliastra\/shot\?name=/.test(t));
+  assert(shotImgs.length >= 2, '截图卡片里的缩略图不够（应至少有 1 张放大 + 1 张网格），实际 ' + shotImgs.length);
+  // 页面上的每一张图要么是内联的入口图标（data:），要么走 Host 小图路由 —— 不许有别的来源
+  assert(imgs.every((t) => /\/miliastra\/shot\?name=/.test(t) || /src="data:image\//.test(t)),
+    '有图片不是走 Host 的 /miliastra/shot 路由：' + imgs.filter((t) => !/\/miliastra\/shot\?name=/.test(t) && !/src="data:image\//.test(t)).join(' | '));
+  assert(shotImgs.some((t) => /thumb=1/.test(t)), '缩略图没有请求缩小版（会直接拉 2.4 MB 的原图）');
+  assert(/loading="lazy"/.test(html), '缩略图没有 lazy 加载（一次十几张会拖慢面板）');
+  // 点开要看原图：外链必须存在，且指向不带 thumb=1 的那个 URL
+  assert(/href="\/miliastra\/shot\?name=[^"]*"/.test(html), '缩略图不能点开看原图');
+  return '存放目录 + 张数体积 + 不会自动删 + 三按钮 + 窗口身份 + 缩略图走小图路由；可疑时醒目';
 });
 
 check('★ 清理要两步：先看将删哪些，确认按钮才出现', () => {

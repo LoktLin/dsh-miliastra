@@ -23,7 +23,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.2';
+const VERSION = '0.0.3';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -33,12 +33,12 @@ import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.m
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
-import { diagnoseLogs } from './lib/logdiag.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
   shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture,
+  thumbPathFor, resolveShotFile, ensureThumbnail,
 } from './lib/shot.mjs';
 
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
@@ -446,18 +446,16 @@ const TOOLS = [
       TITLE + '：读客户端运行时日志 `.gia`。**这是运行时取证（Lua 里 print 出来的东西）的唯一入口**，'
       + '比让人手动复制粘贴可靠得多。'
       + 'op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；'
-      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）；'
-      + '**op=diagnose 回答「我刚试玩了，为什么没有日志？」** —— 把「最近一局多久前写的 / 游戏进程在不在跑 / '
-      + '地图最后存盘时间」摆出来，给出结论与下一步。'
+      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）。'
       + '记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。'
-      + '\n\n⚠️ **「试玩了却没有新日志」是常见现象，先跑 op=diagnose 定位是哪一环，别急着怀疑脚本。**'
-      + '2026-09-23 实测：作者玩了一会儿、回来发现磁盘上**一个新的 .gia 都没有** —— 最后查明是'
-      + '**忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）。diagnose 会把「最近一局多久前写的 / '
-      + '进程在不在跑 / 地图最后存盘时间」摆出来给结论。',
+      + '\n\n⚠️ **「试玩了却没有新日志」先看这里**：`.gia` 里**只有脚本自己 `print` 出来的东西**。'
+      + '实测最坑的一次是**压根忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）——'
+      + '另一种是编辑器「日志」面板里 `客户端脚本` 没勾上。工具不再替这种现象下结论，'
+      + '只如实回「最近一局是什么时候写的」；是不是刚玩过，你自己看一眼就知道。',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'diagnose'], description: '默认 tail。' },
+        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags'], description: '默认 tail。' },
         level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
@@ -476,58 +474,6 @@ const TOOLS = [
       if (op === 'sessions') {
         const files = listGia(dir, Number.isFinite(args.limit) ? args.limit : 40);
         return { ok: true, op, dir, count: files.length, files };
-      }
-      /*
-       * op=diagnose —— 回答「我刚试玩了，为什么没有日志？」
-       *
-       * 背景（2026-09-23 实机踩到）：作者试玩了一局，**磁盘上一个新的 .gia 都没有**，
-       * 而面板/工具当时只会安安静静地把「上一次的旧日志」端上来 —— 用户根本不知道自己漏了哪一步。
-       *
-       * 这个 op 就是把「人肉判断」变成可断言的东西：把现场证据摆出来，给出结论 + 下一步。
-       * 判据只用**能拿到的事实**（时间 / 进程 / 存盘时间），不做无根据的猜测。
-       */
-      if (op === 'diagnose') {
-        const files = listGia(dir, 5);
-        const procs = clientProcesses();
-        const gilSt = lv.gil && lv.gil.path ? (() => { try { return fsMod.statSync(lv.gil.path); } catch { return null; } })() : null;
-        // 判据抽在 lib/logdiag.mjs（纯函数）—— 这里是「取事实 + 组装回执」
-        const d = diagnoseLogs({
-          files,
-          procs: procs ? procs.summary : null,
-          gilMtimeMs: gilSt ? gilSt.mtimeMs : null,
-          now: Date.now(),
-        });
-
-        // 顺带报一下最近一局的 channel（关卡 / 模式名）—— 帮用户判断「这是不是我那张图」
-        let newestChannel = null;
-        if (files[0]) {
-          try {
-            const g = readGia(files[0].path);
-            if (g.ok) {
-              const withMsg = g.records.filter((r) => r.message);
-              const last = withMsg[withMsg.length - 1] || g.records[g.records.length - 1];
-              newestChannel = last ? last.channel : null;
-            }
-          } catch { /* 读不到就算了，不影响结论 */ }
-        }
-
-        return {
-          ok: true, op, dir, level: { levelId: lv.levelId },
-          verdict: d.verdict, headline: d.headline, why: d.why, next: d.next,
-          evidence: Object.assign({}, d.facts, {
-            newest: files[0] ? {
-              name: files[0].name, size: files[0].size, mtime: files[0].mtime,
-              ageSec: d.facts.newestAgeSec,
-              writtenAt: new Date(Date.parse(files[0].mtime)).toLocaleString(),
-              channel: newestChannel,
-            } : null,
-            otherRecent: files.slice(1).map((f) => ({ name: f.name, mtime: f.mtime, size: f.size })),
-            processes: procs ? procs.summary : null,
-            gameMemoryMB: procs ? (procs.entries || []).filter((e) => e.running).map((e) => e.label + ' ' + e.memoryMB + 'MB') : null,
-            mapSavedAt: gilSt ? gilSt.mtime.toISOString() : null,
-            mapSize: gilSt ? gilSt.size : null,
-          }),
-        };
       }
       const file = args.file
         ? (args.file.includes('\\') ? args.file : dir + '\\' + args.file)
@@ -588,6 +534,11 @@ const TOOLS = [
             + '。默认 game。',
         },
         process: { type: 'string', description: '直接指定进程名（不带 .exe），覆盖 target。' },
+        window: {
+          type: 'string',
+          description: '按窗口标题子串挑窗口。**一个进程往往有多个窗口**（实测 BeyondEditor 同时有'
+            + ' 900×800 的日志窗和 160×28 的最小化残片）——默认取**面积最大**的，不满意再用这个指定。',
+        },
         label: { type: 'string', description: '文件名里的标签，如「试玩第1局」「控件对齐」（允许中文；非法字符会被清掉）。' },
         dir: { type: 'string', description: '覆盖截图目录（默认插件数据目录下的 shots\\）。' },
         keepLast: { type: 'number', description: 'op=clean：至少保留最新的 N 张（保护网，任何模式下都生效）。' },
@@ -688,6 +639,9 @@ const TOOLS = [
 
       const r = await captureWindow({
         processName, out,
+        title: args.window ? String(args.window) : '',
+        // 顺带出一张预览：**同一个 bitmap**，不额外起 PowerShell（起进程约 1 秒，面板一开就要十几张）
+        thumbOut: thumbPathFor(dir, name),
         bringToFront: args.bringToFront === false ? 0 : 1,
         keepWindowOnTop: args.keepWindowOnTop === true ? 1 : 0,
       });
@@ -698,9 +652,13 @@ const TOOLS = [
           ok: false, op, target: targetKey, process: processName, dir,
           error: r.error || '截图失败',
           stderr: r.stderr || null,
+          // PS 侧把**所有**候选窗口列出来了 —— 「一个进程有多个窗口」是这个功能最容易出错的地方，
+          // 选窗口的依据必须能看见（实测就是靠它定位到 160x28 那个被最小化的窗口的）
+          candidates: r.candidates || null,
           runningWindows: (procs.entries || []).map((e) => `${e.file}=${e.running === null ? 'unknown' : e.running}`),
-          hint: `进程 "${processName}" 没在跑、或者它没有主窗口。`
-            + '游戏本体是 YuanShen.exe（要先把客户端开起来）；换别的目标用 process= 或 target=editor。',
+          hint: `进程 "${processName}" 没在跑、没有可见窗口、或者最大的窗口太小。`
+            + '游戏本体是 YuanShen.exe（要先把客户端开起来）；换别的目标用 process= 或 target=editor；'
+            + '一个进程有多个窗口时用 window=<标题子串> 指定。',
         };
       }
 
@@ -714,7 +672,13 @@ const TOOLS = [
         process: r.process, pid: r.pid, title: r.title,
         path: r.path, file: name, dir,
         width: r.width, height: r.height, mode: r.mode, front: r.front,
-        blackRatio: r.blackRatio, size, sizeText: size === null ? null : humanSize(size),
+        blackRatio: r.blackRatio, uniformRatio: r.uniformRatio,
+        candidates: r.candidates || null,
+        size, sizeText: size === null ? null : humanSize(size),
+        thumb: r.thumbPath ? pathBasenameOf(r.thumbPath) : null,
+        // 面板直接用这两个 URL 显示预览 / 原图（路由只允许读截图目录内的 .png）
+        thumbUrl: r.thumbPath ? PREFIX + '/shot?name=' + encodeURIComponent(name) + '&thumb=1' : null,
+        viewUrl: PREFIX + '/shot?name=' + encodeURIComponent(name),
         suspect: judge.suspect, warning: judge.warning,
         shots: {
           count: s.count, totalBytes: s.totalBytes, totalText: humanSize(s.totalBytes),
@@ -724,7 +688,7 @@ const TOOLS = [
           + '**不会自动删**（磁盘是你的）。不用了就：miliastra_shot op=clean keepLast=5 olderThanDays=7'
           + ' → 看将删哪些 → 再加 dryRun=false confirm=true 真删。',
         nextSteps: [
-          '用图片查看器打开上面的 path 看观感（面板里也会列出最近几张）。',
+          '面板「游戏截图」卡片里会显示缩略图，点开看原图。',
           judge.suspect ? '⚠️ 本次标记 suspect=true，先读 warning 再决定要不要信这张图。' : null,
           '要对照日志用 miliastra_log；要看控件挂载用 miliastra_map op=clientui。',
         ].filter(Boolean),
@@ -1069,7 +1033,8 @@ function shotsSummary() {
       newest: s.files.length
         ? { name: s.files[0].name, mtime: s.files[0].mtime, sizeText: humanSize(s.files[0].size) }
         : null,
-      files: s.files.slice(0, 12).map((f) => ({ name: f.name, mtime: f.mtime, sizeText: humanSize(f.size) })),
+      // 面板默认只显示 6 张缩略图，「展开全部」到 24 张；多给一点省得再要一次
+      files: s.files.slice(0, 24).map((f) => ({ name: f.name, mtime: f.mtime, sizeText: humanSize(f.size) })),
     };
   } catch (e) {
     return { dir: shotsDir(), count: 0, totalBytes: 0, totalText: '0 B', newest: null, files: [], error: (e && e.message) || String(e) };
@@ -1112,6 +1077,33 @@ function makeHandler() {
     const url = new URL(req.url || PREFIX, 'http://127.0.0.1');
     const route = url.pathname.replace(/\/+$/, '') || PREFIX;
     try {
+      // 给面板显示截图用。**这是插件里唯一会返回非 JSON 的路由**，所以路径守卫写死在这里：
+      // 只认截图目录里的 .png，name 不许带路径分隔符（见 lib/shot.mjs 的 resolveShotFile）。
+      if (route === PREFIX + '/shot') {
+        const dir = shotsDir();
+        const want = url.searchParams.get('name') || '';
+        const r = resolveShotFile(dir, want);
+        if (!r.ok) { sendJson(res, 400, { ok: false, error: r.error }); return; }
+        const useThumb = url.searchParams.get('thumb') === '1';
+        let file = r.path;
+        if (useThumb) {
+          // 缩略图新鲜就直接用；没有就现场生成一张（截图时其实已经顺带生成过，这里只是兜底）
+          file = (await ensureThumbnail(dir, r.name)) || r.path;
+        }
+        let buf;
+        try { buf = fsMod.readFileSync(file); } catch (e) {
+          sendJson(res, 404, { ok: false, error: '读不到这张图：' + ((e && e.message) || String(e)) });
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Content-Length': buf.length,
+          // 文件名里带时间戳，所以同一 URL 的内容不会再变 → 允许浏览器缓存
+          'Cache-Control': 'private, max-age=31536000, immutable',
+        });
+        res.end(buf);
+        return;
+      }
       if (route === PREFIX || route === PREFIX + '/status') { sendJson(res, 200, { ok: true, data: await selfStatus() }); return; }
       if (route === PREFIX + '/tools') {
         sendJson(res, 200, {

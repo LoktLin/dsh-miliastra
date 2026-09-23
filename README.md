@@ -133,7 +133,7 @@ dsh web
 | **`miliastra_health`** | 扫出所有客户端安装 / 关卡 / 活文件 / 地图 / 日志目录，并判定「当前正在开发的关卡」 | **任何操作前先调它**。路径随账号与换图变化，禁止写死 |
 | **`miliastra_code`** | 活文件的 读 / 部署 / 体检 / 还原。部署一律：**先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 BOM**，并**先做 Lua 结构校验**（见下） | 改完本地脚本要投进沙箱时 |
 | **`miliastra_map`** | 读 `<关卡ID>.gil`：关卡信息、**客户端控件谱系**（控件模板索引 / 名字 / 父 / 子）、脚本源码快照比对 | 判断「哪些控件能被脚本动态创建」、判断「跑的是不是本地这版代码」 |
-| **`miliastra_log`** | 读 `.gia` 运行时日志：列局面、结构化读正文、按 TAG / 正则过滤、汇总标签、**`op=diagnose` 试玩体检**（「我刚试玩了，为什么没有日志？」） | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
+| **`miliastra_log`** | 读 `.gia` 运行时日志：列局面、结构化读正文、按 TAG / 正则过滤、汇总标签 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
 | **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
 | **`miliastra_shot`** | **截图**（见下）：`capture` 截游戏/编辑器窗口、`list` 看截到哪了、`clean` 清理（默认只报告） | 需要「看画面对不对」时 —— 日志回答不了观感 |
 | `miliastra_echo` | 回显参数 | 怀疑插件没生效 / 参数丢了时先调它 |
@@ -174,7 +174,34 @@ miliastra_shot op=clean all=true dryRun=false confirm=true   # 真删（双钥�
 | `mode: "printwindow"` | 让窗口自己渲染（`PrintWindow` + `PW_RENDERFULLCONTENT`）。**不需要窗口在前台**，被遮挡也行 |
 | `mode: "screen"` | 退回屏幕抓取。**只有目标窗口真在前台才对** → 此时 `front:false` 会被标成 `suspect:true` |
 | `blackRatio` | 量出来的黑像素占比。> 98.5% 判 `suspect`（Unity/D3D 的 swap chain 偶尔让 PrintWindow 返回全黑） |
-| `pid` / `title` | 明确告诉你**截到的到底是哪个窗口** |
+| `uniformRatio` | **单一颜色**占比。> 98.5% 判 `suspect` —— 因为**全白的空图能通过「全黑」检查**，必须单独量这一项 |
+| `pid` / `title` / `candidates` | 明确告诉你**截到的是哪个窗口**，以及它是在哪几个候选之间挑出来的 |
+| `suspect` / `warning` | 上面任何一条不过关就置位，并给出原因。**别忽略它**：`ok:true` 不代表这张图有用 |
+
+### 一个进程有多个窗口 —— 选窗规则（踩过两次）
+
+**进程不等于一个窗口。** 本机实测 `BeyondEditor.exe` 同时有 **900×800 的日志窗**和
+**160×28 的最小化残片**，而 `Process.MainWindowHandle` 指向了后者 ——
+于是「截编辑器」返回了一张 **160×28 的菜单栏碎片**，回执照样是 `ok:true`。
+
+现在的规则：
+
+1. **枚举该进程的每一个可见顶层窗口**，按**面积从大到小**取第一个（同等大小优先没最小化的）；
+2. 最大的那个仍小于 **200×150** → **直接拒绝**（报错并列出所有候选），
+   因为这么小的图永远不是想要的，写进截图目录只会变成要清理的垃圾；
+3. 想指定就用 `window=<标题子串>`（例如 `window=日志`）；
+4. 回执里带 `candidates[]`（每个候选的 `title / w / h / area / minimized`），选窗依据**看得见**。
+
+### 缩略图预览
+
+面板里看得到缩略图，但**页面不会去拉原图**：一张原图 2.4 MB，列十几张就是 30 MB。
+所以 Host 在**截图时顺手生成一张 ~320px 的预览**（同一个 bitmap，不额外起进程），
+面板只加载预览、`loading="lazy"`，点开才在新标签页看原图。
+
+- 预览放在 `<shots>\_thumbs\`，**同名**；`listShots` 只收顶层文件，所以预览不会被当成截图
+- `miliastra_shot op=clean` 删截图时会**连预览一起删**（否则 `_thumbs` 会攒一堆孤儿）
+- 面板上的图走 `GET /miliastra/shot?name=<文件名>[&thumb=1]` —— 这是插件里**唯一**返回非 JSON 的路由，
+  所以守卫写死在那里：只允许截图目录内的 `.png`，`name` 不许带路径分隔符（`../`、绝对路径、子目录一律 400）
 
 > ⚠️ 截图在 Windows 上由 `lib/capture-window.ps1` 完成（Node 没有内建窗口截图能力）。
 > 那个脚本**刻意保持纯 ASCII**：PowerShell 5.1 在 `.ps1` 没有 BOM 时按 ANSI 解码，任何中文都会变乱码。
@@ -333,22 +360,16 @@ miliastra_code op=inspect file=角色B.lua    # 指定活文件体检（含 SHA-
 - ❌ 不做场景写操作：工具全部只读或只写「活文件」（脚本本身），不碰地图数据。
 - ❌ **不做任何侵入行为**：不读游戏内存、不连游戏进程的端口、不驱动编辑器/游戏。
 
-### 「试玩」按钮为什么不能自动化（查清了，别再试）
+### 「试玩」按钮没有自动化通道
 
-蛋仔派对那套「一键试玩」在千星奇域**走不通**。三个通道逐条查过：
+蛋仔派对那套「一键试玩」在千星奇域**走不通**：编辑器没有官方 CLI、没有插件/本地 RPC 通道，
+而主界面是 **Unity 自绘**的（UIA 子孙节点 = 0），没有可驱动的原生控件。
 
-| 通道 | 蛋仔派对 | 千星奇域 | 证据 |
-|---|---|---|---|
-| 编辑器官方 CLI（`editor-cli`） | ✅ | ❌ | 安装目录只有 `Resource` / `Astrolabe` / `cs` / `Log`，没有 CLI |
-| 编辑器插件 + 本地 RPC 桥 | ✅ H5 插件 + `127.0.0.1:19860` | ❌ | `Documents\res\plugin`、`Documents\ugc_plugin` 都不存在；`BeyondEditor` 无监听端口 |
-| UIA / AutomationId | ✅ Qt 界面有稳定 id | ❌ | 原神窗口类 `UnityWndClass` → **UIA 子孙节点 = 0**（Unity 自绘，没有原生控件可驱动）；`千星沙箱` 窗口虽是**可访问的 WPF**，但它是**节点图资源管理器**，114 个元素里没有试玩按钮 |
-| ⚠️ 编辑器↔客户端私有通道 | — | **存在但放弃** | 实测 `BeyondEditor.exe`(5608) 连到 `YuanShen.exe`(3284) 的 `127.0.0.1:55324`。协议是私有的，要驱动它就得**冒充编辑器** —— 这属于侵入行为，**明确不做** |
+→ **结论：不做。** 试玩由人在编辑器里点；插件负责把人的动作接住（试玩完自动取回最新一局日志），
+**不做任何越界的事**（不读游戏内存、不连游戏进程的端口、不冒充编辑器）。
 
-→ **结论：不做。** 试玩由人在编辑器里点；插件负责把人的动作接住
-（`miliastra_log op=diagnose` 试玩体检 + 试玩完自动取回最新一局）。
-
-> 另外注意：**3D 编辑视图在游戏客户端窗口里**，`target=editor` 截到的「千星沙箱」只是节点图资源管理器。
-> 想看画面用 `target=game`。
+> 注意：**3D 编辑视图在游戏客户端窗口里**，`target=editor` 截到的「千星沙箱」是它的日志/节点图窗口。
+> 想看游戏画面用 `target=game`。
 
 ---
 
@@ -375,9 +396,8 @@ node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / �
 node tests/deploy-test.mjs        # 部署与备份**安全**：备份失败不覆盖 / 原子写 / 固定名 / 回滚 / 双钥匙 / 自覆盖拦截（28 项，临时目录）
 node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（10 项）
 node tests/lualint-test.mjs       # Lua 结构校验器：合法构造不误报 / 写坏的必须报对行号 / 15 个真文件回归（32 项）
-node tests/logdiag-test.mjs       # 试玩体检判据：四种结论 / 阈值边界 / 拿不到进程也不能乱猜（9 项）
-node tests/shot-test.mjs          # 截图：命名 / 目录解析 / 清理规划 / 可信度判据 / 真删双钥匙 + 真机调用失败路径（59 项）
-node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵 / 日志格式化 / 备份卡片 / 读界面控件 / 截图卡片（30 项）
+node tests/shot-test.mjs          # 截图：命名 / 目录解析 / 清理规划 / 可信度判据 / 路径守卫 / 缩略图 / 真删双钥匙（86 项）
+node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵 / 日志格式化 / 备份卡片 / 读界面控件 / 截图卡片与缩略图（29 项）
 
 # —— 开发用小工具（不随包发布）——
 node tools/lint-probes.mjs         # 把 5 个探针模板渲染出来逐个校验，出错打印上下文行
@@ -385,8 +405,9 @@ node tools/lint-all.mjs ../../code # 对整个 code/ 目录跑结构校验
 node tools/live-render-check.mjs   # **向运行中的 Host** 要模板渲染结果并校验（防「跑着的是旧版」）
 node tools/render-probe.mjs api-surface   # **从磁盘**渲染模板并落到 code/<玩法>/（Host 是旧版时用这个）
 node tools/dump-panel-text.mjs 探针  # 把面板**渲染后的纯文字**打出来 —— 改文案时先自己读一遍用户会看到什么
-node tools/shot-live.mjs game      # **真机截图**并把路径打出来 —— 截图对不对只有看图才知道
-node tools/shot-live.mjs --list    # 只看截图目录里有什么
+node tools/shot-live.mjs           # **真机截图**（默认游戏）+ 打印原图/预览路径 —— 截图对不对只有看图才知道
+node tools/shot-live.mjs editor --window 日志   # 编辑器有多个窗口时按标题挑
+node tools/shot-live.mjs --list    # 只看截图目录里有什么（含预览是否新鲜）
 node tools/shot-live.mjs --cleanup # 清理演练（dryRun，不删）
 
 # —— L4 真机（改完 Host 半边、重启 dsh web 之后）——
@@ -419,11 +440,11 @@ node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 | 层 | 命令 | 证明了什么 | 证明不了什么 |
 |---|---|---|---|
 | L1 | 技能 `selftest.mjs`（16 项） | 两个半边的契约、工具注册形状、路由信封、cleanup 可回收 | 真实渲染、真实装配 |
-| L1 | 上面六个单元测试（168 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删 | 同上 |
-| L3 | `client-render-test.mjs`（30 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 备份卡片 / 读界面控件 / 截图卡片 讲清后果** | 壳会不会把它挂上去 |
+| L1 | 上面五个单元测试（**186** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过 | 同上 |
+| L3 | `client-render-test.mjs`（29 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 备份卡片 / 读界面控件 / 截图卡片与缩略图 讲清后果** | 壳会不会把它挂上去 |
 | L4 | `live-check.mjs`（9 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
 
-**合计 214 项**（198 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
+**合计 231 项**（215 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
 `shot-test.mjs` 里另有 2 项走**真实 `powershell` 调用**，但只走失败路径（进程不存在 / 脚本不存在），
 所以既不依赖游戏开着，也不产生图片。
 

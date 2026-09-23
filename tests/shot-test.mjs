@@ -19,6 +19,7 @@ import path from 'node:path';
 import {
   SHOT_TARGETS, sanitizeLabel, stampOf, shotFileName, nextFreeName, isShotName, humanSize,
   planClean, judgeCapture, dataRoot, shotsDir, listShots, removeShots, captureWindow,
+  thumbsDir, thumbPathFor, resolveShotFile, thumbIsFresh,
 } from '../lib/shot.mjs';
 
 let pass = 0;
@@ -110,13 +111,65 @@ ok('humanSize 非数字当 0', humanSize(undefined) === '0 B', humanSize(undefin
   ok('judgeCapture 失败即 suspect', judgeCapture({ ok: false, error: 'x' }).suspect === true);
   ok('judgeCapture 失败带原因', judgeCapture({ ok: false, error: 'x' }).warning === 'x');
   ok('printwindow + 正常黑比 → 不可疑',
-    judgeCapture({ ok: true, mode: 'printwindow', blackRatio: 0.03, front: false }).suspect === false);
-  ok('全黑 → suspect', judgeCapture({ ok: true, mode: 'printwindow', blackRatio: 0.99 }).suspect === true);
+    judgeCapture({ ok: true, mode: 'printwindow', width: 1456, height: 939, blackRatio: 0.03, uniformRatio: 0.03 }).suspect === false);
+  ok('全黑 → suspect', judgeCapture({ ok: true, mode: 'printwindow', width: 900, height: 800, blackRatio: 0.99 }).suspect === true);
   ok('screen + 不在前台 → suspect（这就是抓错浏览器那次）',
-    judgeCapture({ ok: true, mode: 'screen', blackRatio: 0.02, front: false }).suspect === true);
-  const scr = judgeCapture({ ok: true, mode: 'screen', blackRatio: 0.02, front: true });
+    judgeCapture({ ok: true, mode: 'screen', width: 900, height: 800, blackRatio: 0.02, front: false }).suspect === true);
+  const scr = judgeCapture({ ok: true, mode: 'screen', width: 900, height: 800, blackRatio: 0.02, uniformRatio: 0.02, front: true });
   ok('screen + 在前台 → 不可疑但要留话', scr.suspect === false && /屏幕抓取/.test(scr.warning), String(scr.warning));
-  ok('黑比 NaN 不误判', judgeCapture({ ok: true, mode: 'printwindow', blackRatio: NaN }).suspect === false);
+  ok('黑比 NaN 不误判', judgeCapture({ ok: true, mode: 'printwindow', width: 900, height: 800, blackRatio: NaN }).suspect === false);
+
+  // —— 实测踩到的第二个坑：160×28 的标题栏碎片，当时照样是 ok:true ——
+  const tiny = judgeCapture({ ok: true, mode: 'printwindow', width: 160, height: 28, blackRatio: 0, uniformRatio: 0.09 });
+  ok('尺寸小得离谱 → suspect', tiny.suspect === true && /160×28/.test(tiny.warning), String(tiny.warning));
+  ok('宽度不够也算小', judgeCapture({ ok: true, mode: 'printwindow', width: 199, height: 800, blackRatio: 0 }).suspect === true);
+  ok('高度不够也算小', judgeCapture({ ok: true, mode: 'printwindow', width: 900, height: 149, blackRatio: 0 }).suspect === true);
+  ok('刚好到门槛不算小', judgeCapture({ ok: true, mode: 'printwindow', width: 200, height: 150, blackRatio: 0, uniformRatio: 0 }).suspect === false);
+
+  // —— 实测踩到的第三个坑：**全白**能通过黑像素检查，必须单独量「单一颜色」比例 ——
+  const blank = judgeCapture({ ok: true, mode: 'printwindow', width: 900, height: 800, blackRatio: 0, uniformRatio: 1 });
+  ok('单一颜色（全白空图）→ suspect', blank.suspect === true && /单一颜色/.test(blank.warning), String(blank.warning));
+  ok('      且说明白了「全黑检查抓不到全白」', /全白/.test(blank.warning));
+  ok('有内容的图不会被误判成空图',
+    judgeCapture({ ok: true, mode: 'printwindow', width: 900, height: 800, blackRatio: 0, uniformRatio: 0.09 }).suspect === false);
+  ok('uniformRatio 缺失时不误判', judgeCapture({ ok: true, mode: 'printwindow', width: 900, height: 800, blackRatio: 0 }).suspect === false);
+}
+
+/* ---- 缩略图路径 +「只读截图目录」的路径守卫 ---- */
+{
+  ok('thumbsDir 是截图目录下的 _thumbs',
+    thumbsDir('C:\\x\\shots') === path.join('C:\\x\\shots', '_thumbs'), thumbsDir('C:\\x\\shots'));
+  ok('thumbPathFor 同名放进 _thumbs',
+    thumbPathFor('C:\\x\\shots', 'game-a.png') === path.join('C:\\x\\shots', '_thumbs', 'game-a.png'),
+    thumbPathFor('C:\\x\\shots', 'game-a.png'));
+
+  const dir = 'C:\\x\\shots';
+  ok('resolveShotFile 正常名字放行', resolveShotFile(dir, 'game-a.png').ok === true);
+  ok('resolveShotFile 拒绝 ..\\', resolveShotFile(dir, '..\\a.png').ok === false);
+  ok('resolveShotFile 拒绝 子目录\\', resolveShotFile(dir, 'sub\\a.png').ok === false);
+  ok('resolveShotFile 拒绝正斜杠', resolveShotFile(dir, '../a.png').ok === false);
+  ok('resolveShotFile 拒绝绝对路径', resolveShotFile(dir, 'C:\\windows\\a.png').ok === false);
+  ok('resolveShotFile 拒绝非 png', resolveShotFile(dir, 'a.txt').ok === false);
+  ok('resolveShotFile 拒绝空', resolveShotFile(dir, '').ok === false);
+  ok('resolveShotFile 拒绝 `..`', resolveShotFile(dir, '..').ok === false);
+  ok('resolveShotFile 结果确实在目录内',
+    path.dirname(resolveShotFile(dir, 'a.png').path) === path.resolve(dir));
+
+  // 缩略图新鲜度：比原图旧 = 要重做（不然改过的图会一直显示旧预览）
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mshot-thumb-'));
+  const src = path.join(tmp, 'a.png'); const th = path.join(tmp, 't.png');
+  fs.writeFileSync(src, 'x');
+  ok('缩略图不存在 → 不新鲜', thumbIsFresh(th, src) === false);
+  fs.writeFileSync(th, '');
+  ok('缩略图是空文件 → 不新鲜', thumbIsFresh(th, src) === false);
+  fs.writeFileSync(th, 'yy');
+  const nowT = Date.now() / 1000;
+  fs.utimesSync(th, nowT, nowT);
+  fs.utimesSync(src, nowT - 10, nowT - 10);   // 原图更旧 → 预览算新鲜
+  ok('缩略图比原图新 → 新鲜', thumbIsFresh(th, src) === true);
+  fs.utimesSync(src, nowT + 10, nowT + 10);   // 原图更新 → 预览过期
+  ok('原图更新后 → 过期（会重新生成）', thumbIsFresh(th, src) === false);
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 /* ---- 目录解析 ---- */
@@ -154,6 +207,20 @@ ok('humanSize 非数字当 0', humanSize(undefined) === '0 B', humanSize(undefin
   ok('removeShots 删掉真实存在的', del.removed.length === 1, String(del.removed.length));
   ok('removeShots 失败进 failed 而不是抛', del.failed.length === 1 && /不存在\.png/.test(del.failed[0].path), JSON.stringify(del.failed));
   ok('removeShots 之后列表少一张', listShots(tmp).count === 1);
+
+  // 删截图要连预览一起删，否则 _thumbs 里会攒一堆孤儿文件
+  const b = path.join(tmp, 'b.png');
+  fs.mkdirSync(thumbsDir(tmp), { recursive: true });
+  fs.writeFileSync(thumbPathFor(tmp, 'b.png'), 'preview');
+  const del2 = removeShots([b]);
+  ok('removeShots 顺带删掉对应预览', del2.removed.length === 1 && del2.thumbsRemoved.length === 1, JSON.stringify(del2));
+  ok('      预览文件真的没了', !fs.existsSync(thumbPathFor(tmp, 'b.png')));
+  // 没有预览的截图也要能正常删（不是每张都生成过预览）
+  fs.writeFileSync(path.join(tmp, 'c.png'), 'x');
+  const del3 = removeShots([path.join(tmp, 'c.png')]);
+  ok('没有预览时也照删不误报失败', del3.removed.length === 1 && del3.failed.length === 0 && del3.thumbsRemoved.length === 0, JSON.stringify(del3));
+  // _thumbs 目录本身不能被当成一张截图
+  ok('listShots 不会把 _thumbs 目录算成截图', listShots(tmp).files.every((f) => f.name !== '_thumbs'));
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
