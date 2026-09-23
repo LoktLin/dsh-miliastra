@@ -64,6 +64,40 @@ dsh web     # 重启 Web GUI —— Host 半边是启动时加载的快照，不
 
 ---
 
+## 发布到 npm
+
+```powershell
+npm login                                   # 浏览器 / 2FA；没账号先到 npmjs.com 注册并验证邮箱
+npm publish --dry-run                       # 先看会发什么（不真发）
+npm publish                                 # 真发；开了 2FA 时加 --otp=123456
+npm view dsh-miliastra version              # 验证：打印版本号即成功
+```
+
+发布后的使用方式就回到上面「方式二」：
+
+```powershell
+dsh plugin --profile web add dsh-miliastra@0.0.1   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
+dsh web
+```
+
+**发布前请确认：**
+
+- `private` **必须是 false 或不存在** —— 写了 `"private": true` 时 npm 会直接拒绝
+- `files` 是**白名单**：没列进去的文件不会进包（`CHANGELOG.md` 就是后补进去的）
+- `license` 与仓库里的 `LICENSE` 一致
+- `repository` / `homepage` / `bugs` 指向真实地址
+- registry 指向**官方源**（`npm config get registry` 应是 `https://registry.npmjs.org/`；
+  指向淘宝等镜像时发布必失败）
+- `prepublishOnly` 会自动跑测试 —— 本项目配置为 `npm test`（4 套测试，不过就发不出去）
+
+**三条不可逆的注意点：**
+
+1. **同名同版本不能重发** —— 改完要 `npm version patch`（→ `0.0.2`）再发
+2. **72 小时内**可以 `npm unpublish`，超过就再也撤不回来了
+3. 包名是**全局唯一**的，先占先得
+
+---
+
 ## 工具
 
 | 工具 | 干什么 | 什么时候用 |
