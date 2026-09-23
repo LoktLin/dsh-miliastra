@@ -33,6 +33,7 @@ import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFil
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
 import { PROBE_TEMPLATES, renderProbe } from './lib/probes.mjs';
+import { clientProcesses } from './lib/proc.mjs';
 
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
 
@@ -156,6 +157,8 @@ const TOOLS = [
         levelCount: levels.length,
         current: cur ? brief(cur) : null,
         levels: (args.all ? levels : levels.slice(0, 12)).map(brief),
+        // 编辑器 / 游戏进程（best-effort，带缓存；拿不到就 available:false，不影响其它字段）
+        processes: clientProcesses(),
         hint: cur
           ? (cur.luaFiles.length
             ? '活文件（' + cur.luaFiles.length + ' 个）=' + cur.luaFiles.map((f) => f.path).join('  |  ')

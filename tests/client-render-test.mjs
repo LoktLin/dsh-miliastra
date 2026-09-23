@@ -239,6 +239,32 @@ check('面板初始为关闭态：渲染结果里没有浮层（不该一上来�
   return '未渲染浮层';
 });
 
+// 空状态把**整个面板**渲染一遍：三栏骨架 + 每张卡片都必须在场。
+// 这条能抓到「卡片被写坏 / 少一个孩子 / 引用了不存在的变量」这类一渲染就炸的错
+// （历史上踩过一次：编辑时打断了 mapKids 的定义，靠这层才发现）。
+check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸）', () => {
+  const PanelComp = clientExports.__testPanel;
+  assert(typeof PanelComp === 'function', '没暴露 __testPanel，无法做整面板渲染测试');
+  let html;
+  try {
+    html = renderToStaticMarkup(React.createElement(PanelComp, {
+      open: true, setOpen: () => {}, rootRef: { current: null },
+    }));
+  } catch (e) {
+    throw new Error('整面板渲染抛错：' + e.message);
+  }
+  assert(html.includes('dsh-miliastra-panel'), '没渲染出面板根');
+  for (const head of ['① 关卡', '② 代码', '③ 日志']) {
+    assert(html.includes(head), '缺栏目：' + head);
+  }
+  for (const card of ['关卡</div>', '关卡与文件', '地图体检', '活文件', '活文件体检', '脚本一致性',
+    '备份', '部署到活文件', '运行时日志', '探针', '刷新']) {
+    assert(html.includes(card), '缺卡片/按钮：' + card);
+  }
+  assert(html.includes('dsh-miliastra-col'), '三栏容器没渲染');
+  return `${html.length} 字符，三栏 + ${10} 张卡片齐备`;
+});
+
 check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
   cleanup();
   let again = null;

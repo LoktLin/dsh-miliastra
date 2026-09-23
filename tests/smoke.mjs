@@ -94,6 +94,35 @@ for (const [toolName, args] of CASES) {
   pass += 1;
 }
 
+// ---- 额外断言：形状必须稳定，且"拿不到"时也不能抛 ----
+
+{
+  const health = TOOLS.find((t) => t.name === 'miliastra_health');
+  const d = await health.execute({}, {});
+  const p = d && d.processes;
+  if (!p || typeof p.available !== 'boolean' || !Array.isArray(p.entries)) {
+    fail += 1;
+    failures.push('[shape] miliastra_health.processes 形状不对：' + JSON.stringify(p));
+  } else {
+    const shaped = p.entries.every((e) => typeof e.file === 'string' && typeof e.label === 'string'
+      && (e.running === true || e.running === false || e.running === null)
+      && typeof e.instances === 'number' && typeof e.memoryMB === 'number');
+    if (!shaped) {
+      fail += 1;
+      failures.push('[shape] processes.entries 元素形状不对：' + JSON.stringify(p.entries));
+    } else {
+      console.log(`✓ miliastra_health.processes 形状稳定 → available=${p.available} `
+        + p.entries.map((e) => `${e.file}:${e.running === null ? 'unknown' : e.running}`).join('  '));
+      pass += 1;
+    }
+    // 缓存必须生效：连调两次不应各起一次 tasklist（这里只验"第二次标记为 cached"）
+    const again = (await health.execute({}, {})).processes;
+    if (again && again.available === true && again.cached !== true) {
+      console.log('  （提示：第二次调用没命中缓存 —— 仅影响性能，不计失败）');
+    }
+  }
+}
+
 console.log('');
 if (failures.length) {
   console.log('====== 失败明细 ======');
