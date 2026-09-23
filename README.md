@@ -109,6 +109,7 @@
 |---|---|---|
 | 本文件 | 本仓库 `README.md` | 装 / 用 / 关键知识 / 能力边界 |
 | 变更记录 | 本仓库 [`CHANGELOG.md`](CHANGELOG.md) | 每个版本加了什么、修了什么、怎么验的 |
+| 发布说明 | 本仓库 [`.github/release-notes/`](.github/release-notes/) | 每个版本的 Release 文案（**中英双语**）+ 发版五步清单 |
 | 许可 | 本仓库 [`LICENSE`](LICENSE) | Apache-2.0 |
 
 **配套的离线知识库不在本仓库里**（内容是官方文档的抽取产物，版权归米哈游；
