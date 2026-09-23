@@ -49,11 +49,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/REPLACE_ME/dsh-miliastra.git"
+    "url": "https://github.com/LoktLin/dsh-miliastra.git"
   },
   "bugs": {
-    "url": "https://github.com/REPLACE_ME/dsh-miliastra/issues"
+    "url": "https://github.com/LoktLin/dsh-miliastra/issues"
   },
-  "homepage": "https://github.com/REPLACE_ME/dsh-miliastra#readme",
+  "homepage": "https://github.com/LoktLin/dsh-miliastra#readme",
   "author": "linyq"
 }
