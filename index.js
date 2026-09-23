@@ -24,16 +24,16 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.4';
+const VERSION = '0.0.5';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
 import pathMod from 'node:path';
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
-import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand } from './lib/codefile.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
-import { readGia, listGia, filterRecords } from './lib/gia.mjs';
+import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
   playtestSummary, shouldHit,
@@ -75,6 +75,84 @@ function clampNum(v, dflt, lo, hi) {
   const n = Number(v);
   if (!Number.isFinite(n)) return dflt;
   return Math.min(hi, Math.max(lo, Math.round(n)));
+}
+
+/**
+ * 扫 `ErrorLog.txt`。
+ *
+ * 为什么要有这一条：**循环调用 / 挂载失败这类错不进 `.gia`** ——
+ * 官方文档（`doc_客户端控件和客户端脚本` §五.8(2)，见 `docs/官方文档对比-7.1正式vs内测.md` 第 9 条）
+ * 说得很清楚：正常日志里**不报**，要去客户端脚本同目录看 `ErrorLog.txt`。
+ * 也就是说「`.gia` 里干干净净」**不等于**「脚本没出事」—— 所以每次体检都顺手扫一眼，
+ * **没有也要如实显示「没有」**（省一次人工翻目录）。
+ */
+function scanErrorLog(...dirs) {
+  const tried = [];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const p = pathMod.join(dir, 'ErrorLog.txt');
+    tried.push(p);
+    let st;
+    try { st = fsMod.statSync(p); } catch (e) {
+      if (e && e.code === 'ENOENT') continue;
+      return { exists: null, path: p, tried, error: (e && e.message) || String(e) };
+    }
+    let head = null; let lineCount = null; let textError = null;
+    try {
+      const text = fsMod.readFileSync(p, 'utf8');
+      const lines = text.split(/\r?\n/).filter((l) => l.trim() !== '');
+      lineCount = lines.length;
+      head = lines.slice(0, 8);
+    } catch (e) { textError = (e && e.message) || String(e); }
+    return {
+      exists: true, path: p, size: st.size, mtime: st.mtime.toISOString(),
+      lineCount, head, textError, tried,
+      warn: '⚠️ ErrorLog.txt 有内容 —— 循环调用 / 挂载失败这类错**不进 .gia**，只写在这里；先看上面几行。',
+    };
+  }
+  return {
+    exists: false, tried,
+    note: '没有 ErrorLog.txt。这条也要如实看：**循环调用 / 挂载失败只会写这个文件，不写 .gia**，'
+      + '所以「.gia 里很干净」不能单独当成「脚本没出事」的证据。',
+  };
+}
+
+/**
+ * 部署后对账：**地图里嵌的脚本** vs **刚投进去的活文件**。
+ *
+ * 为什么需要（2026-09-23 真踩）：部署完没重新开局，白等了 8 分钟才发现「根本没开局」。
+ * 更隐蔽的一种是：**编辑器把活文件内容吃进 `.gil` 的时机取决于它自己**（实测一次保存让 `.gil`
+ * 涨了 ≈ 那次部署的脚本增量）—— 所以「部署成功」不代表「编辑器已经拿的是新版」。
+ * 直接把结论写进回执，人不用自己推。
+ */
+function reconcileWithGil(lv, livePath) {
+  try {
+    if (!lv.gil || !lv.gil.path) return { ok: false, reason: '这个关卡下没有 .gil（编辑器里还没存过盘？）' };
+    const gil = readGil(lv.gil.path);
+    if (!gil.ok) return { ok: false, reason: '地图读不出来：' + gil.error, gilPath: lv.gil.path };
+    if (!gil.script) {
+      return {
+        ok: false, gilPath: lv.gil.path,
+        reason: '地图里没有脚本映射记录 —— 说明编辑器还没把脚本挂到这个关卡上（或没存盘）',
+      };
+    }
+    const cur = inspect(livePath);
+    const match = gil.script.sourceSha256 === cur.sha256;
+    return {
+      ok: true, gilPath: lv.gil.path,
+      match,
+      embeddedSha256: gil.script.sourceSha256,
+      liveSha256: cur.sha256,
+      embeddedBytes: gil.script.sourceBytes,
+      liveBytes: cur.size,
+      conclusion: match
+        ? '地图里嵌的脚本 == 刚部署的活文件 → **可以试玩了**（记得停掉上一局再重开）'
+        : '⚠️ 地图里嵌的**还是旧版**（编辑器未重新加载 / 未存盘）→ **先别急着试玩**：'
+          + '在编辑器里存一次盘，或确认脚本面板已经是新版',
+    };
+  } catch (e) {
+    return { ok: false, reason: (e && e.message) || String(e) };
+  }
 }
 
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
@@ -184,6 +262,9 @@ const TOOLS = [
         levelCount: levels.length,
         current: cur ? brief(cur) : null,
         levels: (args.all ? levels : levels.slice(0, 12)).map(brief),
+        // `ErrorLog.txt` 巡检：**循环调用 / 挂载失败这类错不进 `.gia`**，只写这个文件。
+        // 「没有」也要如实显示 —— 省一次人工翻目录，也避免把「.gia 干净」当成「没事」。
+        errorLog: cur ? scanErrorLog(cur.luaDir, cur.levelDir) : null,
         // 编辑器 / 游戏进程（best-effort，带缓存；拿不到就 available:false，不影响其它字段）
         processes: clientProcesses(),
         hint: cur
@@ -216,11 +297,19 @@ const TOOLS = [
       + '④备份就在**被替换文件的旁边**：`<活文件目录>\\_backup\\`；'
       + '⑤每次备份都写**两份** —— 固定名 `<原名>.bak`（还原默认用它）+ 一份带**本地时间**戳的历史（永不自动删）；'
       + '⑥`noBackup` 必须同时传 `allowNoBackup:true` 才生效（不给随手绕过安全网）；'
-      + '⑦所有写操作都回执 `restoreWith` —— 照着它跑就能还原。',
+      + '⑦所有写操作都回执 `restoreWith` —— 照着它跑就能还原。'
+      + '\n\n**两条防「静默丢代码」的机制**：'
+      + '· **部署指纹** —— `op=deploy` 成功后会在备份目录写一份 `.miliastra-deploy.json`（记下这一版的 SHA/字节/行数/来源）。'
+      + '之后 `op=inspect` 会比对：活文件与上次部署**不一致**就直说「多半是编辑器把脚本面板里的内存版存回了磁盘」'
+      + '（实测会发生），并给出字节差/行数差 —— 而不是让你以为跑的还是刚投进去那版。'
+      + '· **`op=fixbom`** —— 活文件带 UTF-8 BOM 时**只去掉那 3 个字节**（原神实测会打印 '
+      + '"Read text file with BOM header may cause Lua error"）。BOM 不是本工具加的，'
+      + '实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → '
+      + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore'], description: '默认 inspect。' },
+        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom'], description: '默认 inspect。' },
         level: { type: 'string', description: '关卡 ID / 品牌 / 脚本名片段；省略=当前关卡。' },
         file: {
           type: 'string',
@@ -261,13 +350,19 @@ const TOOLS = [
       const destPath = target ? target.path : (args.file ? lv.luaDir + '\\' + args.file : null);
 
       if (op === 'inspect') {
+        const info = destPath ? inspect(destPath) : null;
+        // 「上次部署的是哪一版」↔「现在磁盘上是哪一版」—— 不一致就直接说，别让人以为跑的是刚投进去那版
+        const fp = destPath ? readDeployFingerprint(destPath, { backupDir: args.backupDir }) : null;
         return {
           ok: true,
           op,
           level: { brand: lv.brand, levelId: lv.levelId, accountId: lv.accountId },
           luaDir: lv.luaDir,
           files: lv.luaFiles.map((f) => ({ name: f.name, size: f.size, mtime: f.mtime, ...(f.auxiliary ? { auxiliary: true } : {}) })),
-          inspected: destPath ? inspect(destPath) : null,
+          inspected: info,
+          deploy: fp ? { recordPath: fp.path, ...fingerprintDelta(fp.record || null, info) } : null,
+          // 「.gia 里很干净」不等于「脚本没出事」—— 循环调用/挂载失败只写这个文件
+          errorLog: scanErrorLog(lv.luaDir, lv.levelDir),
         };
       }
       if (op === 'read') {
@@ -330,13 +425,40 @@ const TOOLS = [
           allowNoBackup: args.allowNoBackup === true,
           lintMode: args.lintMode,
         });
+        // 成功后记一笔「这次投进去的是哪一版」—— 这是之后能发现「活文件被编辑器写回旧版」的唯一依据。
+        // ⚠️ 写指纹失败**不影响部署成败**，只降级成一条 warning。
+        let fp = null;
+        let rec = null;
+        if (r.ok && destPath) {
+          fp = writeDeployFingerprint(destPath, inspect(destPath), { backupDir: args.backupDir, source: args.source });
+          if (!fp.ok) {
+            r.warnings = (r.warnings || []).concat(['部署已成功，但写「部署指纹」失败（只影响「活文件被外部改写」的检测）：' + fp.error]);
+          }
+          // 部署完立刻对账：地图里嵌的是不是刚投进去这版（不然「可以试玩了」是句空话）
+          rec = reconcileWithGil(lv, destPath);
+        }
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
           lintSummary: r.lint ? (r.lint.ok ? '结构正常' : '发现问题') : '（未校验）',
+          deployFingerprint: fp ? { ok: fp.ok, path: fp.path, sha256: (fp.record || {}).sha256 || null, atLocal: (fp.record || {}).atLocal || null } : null,
+          reconcile: rec,
           restoreWith: r.fixedBackup
             ? restoreCommand(null, destPath)
             : (r.backup ? restoreCommand(r.backup, destPath) : null),
-          nextStep: r.ok ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果' : null,
+          nextStep: r.ok
+            ? (rec && rec.match === true
+              ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果'
+              : '先在编辑器里存盘（地图里嵌的还不是这一版）→ 再重新试玩一局')
+            : null,
+        };
+      }
+      if (op === 'fixbom') {
+        if (!destPath) throw new Error('没找到活文件路径。');
+        const r = stripBomFile(destPath, { backupDir: args.backupDir });
+        return {
+          ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
+          error: r.error || null,
+          restoreWith: r.restoreWith || restoreCommand(null, destPath),
         };
       }
       throw new Error('未知 op：' + op);
@@ -460,7 +582,10 @@ const TOOLS = [
       TITLE + '：读客户端运行时日志 `.gia`。**这是运行时取证（Lua 里 print 出来的东西）的唯一入口**，'
       + '比让人手动复制粘贴可靠得多。'
       + 'op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；'
-      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）。'
+      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）；'
+      + '**op=runs 按「局」切分** —— 一个 `.gia` 里可能装多局（实测 `21-24-16_155` 装了两段完整生命周期），'
+      + 'op=runs 给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / 错误样式）**并和上一局做 diff**，'
+      + '省掉「把 30 多条倒过来再分清哪段属于哪局」这一步。'
       + '记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。'
       + '\n\n⚠️ **「试玩了却没有新日志」先看这里**：`.gia` 里**只有脚本自己 `print` 出来的东西**。'
       + '实测最坑的一次是**压根忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）——'
@@ -469,12 +594,17 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags'], description: '默认 tail。' },
+        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs'], description: '默认 tail。' },
         level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用它对应的日志目录）。' },
-        file: { type: 'string', description: 'op=tail/grep：日志文件名或绝对路径；省略=最新那个。' },
+        file: { type: 'string', description: 'op=tail/grep/runs：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
         pattern: { type: 'string', description: '正文正则过滤。' },
-        limit: { type: 'number', description: '最多返回多少条（默认 120）。' },
+        run: {
+          type: 'string',
+          description: 'op=tail/grep/tags：**只看某一局**。给 epoch 秒（如 1790170177）或 instance 片段。'
+            + 'op=runs 的 epochSec 与 miliastra_playtest 报的是同一个值。',
+        },
+        limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120）；op=runs：最多返回几局（默认 10）；op=sessions：几个文件（默认 40）。' },
         withRaw: { type: 'boolean', description: 'true=把整段结构化记录一起回传（默认只回 time/message 等要点）。' },
       },
       additionalProperties: false,
@@ -497,9 +627,39 @@ const TOOLS = [
       if (!gia.ok) return { ok: false, op, file, error: gia.error };
       const withMsg = gia.records.filter((r) => r.message);
 
+      // 按局过滤：run 可以是 epoch 秒，也可以是 instance 的任意片段
+      const runQ = args.run == null || String(args.run).trim() === '' ? null : String(args.run).trim();
+      const pool = runQ ? withMsg.filter((r) => String(r.instance || '').includes(runQ)) : withMsg;
+
+      if (op === 'runs') {
+        const runs = groupRuns(withMsg);
+        const play = playRunsOf(runs);
+        return {
+          ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+          runCount: runs.length,
+          playRunCount: play.length,
+          runs: summarizeRuns(runs, Number.isFinite(args.limit) ? args.limit : 10),
+          // 局间 diff 只比「试玩局」（90003 是编辑器主屏会话，跨多局不变，混进来会误导）
+          diff: compareRuns(play[play.length - 2], play[play.length - 1]),
+          hint: '一局 = instance 第一段 `47504`（`90003` 是编辑器主屏会话，跨多局不变）。'
+            + 'epochSec 就是「该局开跑时刻」，与 miliastra_playtest 报的是同一个值 —— '
+            + '所以「实时看到开跑」和「事后读这局日志」能对上号：'
+            + 'miliastra_log op=tail run=<epochSec> 就只看那一局。',
+          caveat: 'faultCount / errorSample 是按**通用词**（重生/死亡/失败/nil value…）归的「疑似」计数，'
+            + '不是平台给的分类；具体含义以脚本里那行 print 自己的文案为准。',
+        };
+      }
+
+      if (runQ && !pool.length) {
+        return {
+          ok: false, op, file,
+          error: '这个文件里没有 instance 含 "' + runQ + '" 的记录。先用 op=runs 看有哪些局（instance / epochSec）。',
+        };
+      }
+
       if (op === 'tags') {
         const counter = new Map();
-        for (const r of withMsg) {
+        for (const r of pool) {
           const m = /\[([A-Za-z0-9_\-]{1,24})\]/.exec(r.message);
           const k = m ? m[1] : '(无标签)';
           counter.set(k, (counter.get(k) || 0) + 1);
@@ -508,7 +668,7 @@ const TOOLS = [
         return { ok: true, op, file, recordCount: gia.recordCount, tags };
       }
       const limit = Number.isFinite(args.limit) ? args.limit : 120;
-      const { records, error } = filterRecords(withMsg, { tag: args.tag, pattern: args.pattern, limit });
+      const { records, error } = filterRecords(pool, { tag: args.tag, pattern: args.pattern, limit });
       if (error) return { ok: false, op, file, error };
       const slim = records.map((r) => (args.withRaw
         ? r

@@ -193,6 +193,10 @@ ok('humanSize 非数字当 0', humanSize(undefined) === '0 B', humanSize(undefin
 
   fs.writeFileSync(path.join(tmp, 'a.png'), Buffer.alloc(100));
   fs.writeFileSync(path.join(tmp, 'b.png'), Buffer.alloc(200));
+  // 显式把 a 的 mtime 推早 10 秒：连着写两个文件很可能落在**同一毫秒**里，
+  // 那样「新的在前」就成了碰运气（实测偶发失败：拿到 a,b 而不是 b,a）。
+  const older = new Date(Date.now() - 10000);
+  fs.utimesSync(path.join(tmp, 'a.png'), older, older);
   fs.writeFileSync(path.join(tmp, 'ignore.txt'), 'x');
   fs.mkdirSync(path.join(tmp, 'sub.png'));   // 目录名叫 .png，不能被当成截图
 

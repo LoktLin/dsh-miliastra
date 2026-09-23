@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { deploy, inspect, sha256, hasBom, backupFile, listBackups, restore, defaultBackupDir, stampOfName, atomicWriteFile, rollbackTo, fixedBackupPath, isAuxiliaryLuaName, pickLuaFile } from '../lib/codefile.mjs';
+import { deploy, inspect, sha256, hasBom, backupFile, listBackups, restore, defaultBackupDir, stampOfName, atomicWriteFile, rollbackTo, fixedBackupPath, isAuxiliaryLuaName, pickLuaFile, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from '../lib/codefile.mjs';
 
 let pass = 0;
 let fail = 0;
@@ -421,6 +421,100 @@ check('备份目录可用环境变量覆盖（MILIASTRA_BACKUP_DIR）', () => {
   } finally {
     if (saved === undefined) delete process.env.MILIASTRA_BACKUP_DIR; else process.env.MILIASTRA_BACKUP_DIR = saved;
   }
+});
+
+/* ---------------------------------------- 0.0.4：部署指纹 + 去 BOM */
+
+check('★ 部署指纹：部署后写、inspect 能发现「活文件被外部改写」', () => {
+  const d = path.join(tmp, 'fp');
+  fs.mkdirSync(d, { recursive: true });
+  const live = path.join(d, 'x.lua');
+  const srcFile = path.join(tmp, 'fp-src.lua');
+  fs.writeFileSync(srcFile, '-- 第一版\nlocal a = 1\n', 'utf8');
+  fs.writeFileSync(live, '-- 旧版\n', 'utf8');
+
+  const r = deploy(srcFile, live, { backupDir: path.join(d, '_backup') });
+  assert(r.ok, '部署失败：' + JSON.stringify(r.errors));
+  // 部署本身不会自动写指纹（那一步在工具层）；这里模拟工具层写一次
+  const w = writeDeployFingerprint(live, inspect(live), { backupDir: path.join(d, '_backup'), source: srcFile });
+  assert(w.ok, '写指纹失败：' + w.error);
+  assert(fs.existsSync(w.path), '指纹文件没落盘：' + w.path);
+  assert(path.basename(w.path) === DEPLOY_FINGERPRINT_NAME, '指纹文件名不对：' + path.basename(w.path));
+  // 指纹不许放在活文件目录里（会污染「这个目录里的 .lua 就是活文件」的判断）
+  assert(path.dirname(w.path) !== d, '指纹被写进了活文件目录');
+
+  const fp = readDeployFingerprint(live, { backupDir: path.join(d, '_backup') });
+  assert(fp.ok, '读不回指纹');
+  const same = fingerprintDelta(fp.record, inspect(live));
+  assert(same.hasFingerprint === true && same.sameAsDeploy === true && same.changedSinceDeploy === false,
+    '刚部署完就报「变了」：' + JSON.stringify(same));
+  assert(same.bytesDelta === 0 && same.lineDelta === 0, '刚部署完差值不为 0');
+
+  // 模拟「编辑器把内存里的旧版存回磁盘」——内容变了、行数少了
+  // 部署进去的是 `-- 第一版\nlocal a = 1\n` = 25 字节 2 行；
+  // 被写回的是 `-- 被编辑器写回的旧版\n` = 31 字节 1 行 → **字节 +6、行数 −1**（方向也要对，别把公式写反）
+  fs.writeFileSync(live, '-- 被编辑器写回的旧版\n', 'utf8');
+  const diff = fingerprintDelta(fp.record, inspect(live));
+  assert(diff.changedSinceDeploy === true && diff.sameAsDeploy === false, '被改写了却没发现');
+  assert(diff.bytesDelta === 6, '字节差不对（应为 +6，实际 ' + diff.bytesDelta + '）');
+  assert(diff.lineDelta === -1, '行数差不对（应为 −1，实际 ' + diff.lineDelta + '）');
+  // ⚠️ `inspect().lineCount` 沿用既有约定 = `text.split(/\r?\n/).length`，
+  //    所以**结尾换行会多算一行**：`-- 第一版\nlocal a = 1\n` 是 **3**，不是 2。
+  assert(diff.deployedBytes === 25 && diff.deployedLines === 3, '没把「部署时那一版」的体量报出来：'
+    + JSON.stringify({ bytes: diff.deployedBytes, lines: diff.deployedLines }));
+  assert(/编辑器/.test(diff.note), '没解释「多半是编辑器存的」：' + diff.note);
+
+  // 没有指纹时必须**如实说没有**，不能假装一致
+  const none = fingerprintDelta(null, inspect(live));
+  assert(none.hasFingerprint === false && /没有部署记录/.test(none.note), '没有指纹时的说法不对：' + JSON.stringify(none));
+  return '部署后写指纹 / 一致时 sameAsDeploy / 被改写时报 changed + 差值 + 解释 / 没指纹不假装一致';
+});
+
+check('★ fixbom：只去那 3 个字节，且本来没有 BOM 就什么都不做', () => {
+  const d = path.join(tmp, 'bom');
+  fs.mkdirSync(d, { recursive: true });
+  const live = path.join(d, 'bom.lua');
+  const bd = path.join(d, '_backup');
+  const body = Buffer.from('-- 带 BOM 的脚本\nlocal 中文 = "编码不能坏"\n', 'utf8');
+  fs.writeFileSync(live, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]));
+
+  const before = fs.readFileSync(live);
+  assert(hasBom(before), '前置条件不成立：造出来的文件没 BOM');
+
+  const r = stripBomFile(live, { backupDir: bd });
+  assert(r.ok, '去 BOM 失败：' + r.error);
+  assert(r.removedBytes === 3, '去掉的字节数不是 3：' + r.removedBytes);
+  const after = fs.readFileSync(live);
+  assert(!hasBom(after), '去完还带 BOM');
+  assert(after.length === before.length - 3, '长度不是只差 3');
+  // 关键：**只差那 3 个字节** —— 内容必须逐字节相同（中文一个字节都不能动）
+  assert(Buffer.compare(after, before.subarray(3)) === 0, '除了 BOM 之外还有别的字节被改了');
+  assert(sha256(after) === r.after.sha256, '回执里的 SHA 与实测不符');
+  assert(r.before.bom === true && r.after.bom === false, '回执的 before/after 标记不对');
+  assert(r.backup && fs.existsSync(r.backup), '没有留下备份');
+  assert(sha256(fs.readFileSync(r.backup)) === sha256(before), '备份的不是「去 BOM 前那一版」');
+  // 必须提前警告：.bak 现在指向带 BOM 那版，而 restore 会拒绝它
+  assert((r.warnings || []).some((w) => /带 BOM 的那一版/.test(w)), '没警告「固定名备份现在是带 BOM 那版」');
+
+  // 幂等反例：本来没 BOM → 不许动
+  const mtimeBefore = fs.statSync(live).mtimeMs;
+  const again = stripBomFile(live, { backupDir: bd });
+  assert(again.ok === false && again.changed === false, '对没 BOM 的文件动了手：' + JSON.stringify(again).slice(0, 160));
+  assert(/本来就没有 BOM/.test(again.error), '没说清「本来就没有 BOM」：' + again.error);
+  assert(fs.statSync(live).mtimeMs === mtimeBefore, '无 BOM 时也改了文件（mtime 变了）');
+
+  // 备份目录不可写 → 必须中止，且活文件一个字节都不许动
+  const locked = path.join(tmp, 'bom-locked');
+  const live2 = path.join(locked, 'bom2.lua');
+  fs.mkdirSync(locked, { recursive: true });
+  fs.writeFileSync(live2, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]));
+  const pre = fs.readFileSync(live2);
+  const badDir = path.join(locked, 'blocked');
+  fs.writeFileSync(badDir, 'not a directory');   // 用文件占住这个名字 → mkdir/写必定失败
+  const fail = stripBomFile(live2, { backupDir: badDir });
+  assert(fail.ok === false && fail.backupFailed === true, '备份失败没被识别：' + JSON.stringify(fail).slice(0, 160));
+  assert(Buffer.compare(fs.readFileSync(live2), pre) === 0, '备份失败却动了活文件');
+  return '只去 3 字节（逐字节比对）/ 备份正确 / 警告 .bak 副作用 / 无 BOM 时零改动 / 备份失败即中止';
 });
 
 console.log('');

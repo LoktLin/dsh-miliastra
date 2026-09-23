@@ -203,6 +203,104 @@ await check('★ 每个探针模板生成出来的 Lua 都通过结构校验（�
   return `${PROBE_TEMPLATES.length} 个模板全通过（${sizes.join(' / ')}；均为 ${/local CHUNK = (\d+)/.exec(renderProbe(PROBE_TEMPLATES[0], { tag: 'SELFTEST' }).lua)[1]} 字符分片）`;
 });
 
+/* ---------------- 0.0.4：miliastra_code 的 fixbom 与部署指纹（假存档根，工具层端到端） ---------------- */
+
+const code = TOOLS.find((t) => t.name === 'miliastra_code');
+
+await check('op=inspect：没有部署记录时**如实说没有**（不假装一致）', async () => {
+  const d = await code.execute({ op: 'inspect' }, {});
+  assert(d.ok === true, 'inspect 失败：' + JSON.stringify(d.error));
+  assert(d.inspected && d.inspected.path === livePath, '体检的不是那个假活文件：' + JSON.stringify(d.inspected && d.inspected.path));
+  assert(d.deploy && d.deploy.hasFingerprint === false, '从没部署过却说有指纹：' + JSON.stringify(d.deploy));
+  assert(/没有部署记录/.test(d.deploy.note), '说法不对：' + d.deploy.note);
+  return '没有记录 → hasFingerprint:false + 说明';
+});
+
+await check('op=deploy：部署成功后**自动写指纹**，再 inspect 就是「一致」', async () => {
+  const srcFile = path.join(fakeRoot, 'v2.lua');
+  fs.writeFileSync(srcFile, '-- v2（工具层测试）\r\nlocal x = 2\r\n', 'utf8');
+  const d = await code.execute({ op: 'deploy', source: srcFile }, {});
+  assert(d.ok === true, '部署失败：' + JSON.stringify(d.errors));
+  assert(d.deployFingerprint && d.deployFingerprint.ok === true, '部署成功但没写指纹：' + JSON.stringify(d.deployFingerprint));
+  assert(/\.miliastra-deploy\.json$/.test(d.deployFingerprint.path), '指纹文件名不对：' + d.deployFingerprint.path);
+  assert(path.dirname(d.deployFingerprint.path) === path.join(luaDir, '_backup'), '指纹没落在备份目录：' + d.deployFingerprint.path);
+
+  const after = await code.execute({ op: 'inspect' }, {});
+  assert(after.deploy.hasFingerprint === true && after.deploy.sameAsDeploy === true,
+    '刚部署完却说变了：' + JSON.stringify(after.deploy));
+
+  // 模拟编辑器把内存里的旧版存回磁盘 → 下一次 inspect 必须报「被改写」
+  fs.writeFileSync(livePath, '-- 被编辑器写回的旧版\r\nlocal x = 2\r\nlocal y = 3\r\n', 'utf8');
+  const drift = await code.execute({ op: 'inspect' }, {});
+  assert(drift.deploy.changedSinceDeploy === true, '被改写了却没报：' + JSON.stringify(drift.deploy));
+  assert(/编辑器/.test(drift.deploy.note), '没解释原因：' + drift.deploy.note);
+  return '写指纹 → sameAsDeploy → 改写后 changedSinceDeploy（差 ' + drift.deploy.bytesDelta + 'B/' + drift.deploy.lineDelta + ' 行）';
+});
+
+await check('op=fixbom：**本来没有 BOM 就什么都不做**（真机上最常走的那条路）', async () => {
+  const before = fs.readFileSync(livePath);
+  const stBefore = fs.statSync(livePath).mtimeMs;
+  const d = await code.execute({ op: 'fixbom' }, {});
+  assert(d.ok === false && d.changed === false, '对没 BOM 的文件动了手：' + JSON.stringify(d).slice(0, 200));
+  assert(/本来就没有 BOM/.test(d.error), '没说清原因：' + d.error);
+  assert(Buffer.compare(fs.readFileSync(livePath), before) === 0, '活了文件被改了');
+  assert(fs.statSync(livePath).mtimeMs === stBefore, '无 BOM 时也碰了文件（mtime 变了）');
+  return '零改动，如实回「本来就没有 BOM」';
+});
+
+await check('op=fixbom：带 BOM 时只去 3 字节（工具层端到端）', async () => {
+  const body = Buffer.from('-- 带 BOM\r\nlocal 中文 = "编码"\r\n', 'utf8');
+  fs.writeFileSync(livePath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]));
+  const d = await code.execute({ op: 'fixbom' }, {});
+  assert(d.ok === true, '去 BOM 失败：' + JSON.stringify(d.error || d));
+  assert(d.removedBytes === 3 && d.after.bom === false, '没去掉 3 字节：' + JSON.stringify({ r: d.removedBytes }));
+  assert(Buffer.compare(fs.readFileSync(livePath), body) === 0, '除了 BOM 还动了别的字节');
+  assert(d.restoreWith && /op=restore/.test(d.restoreWith), '没给可照抄的还原命令');
+  // 去完再体检：bom 必须是 false，中文还在
+  const ins = await code.execute({ op: 'inspect' }, {});
+  assert(ins.inspected.bom === false && ins.inspected.hasChinese === true, '去完 BOM 后体检不对：'
+    + JSON.stringify({ bom: ins.inspected.bom, cn: ins.inspected.hasChinese }));
+  return '3 字节 / 逐字节比对通过 / 中文未损 / 回执带 restoreWith';
+});
+
+/* ---------------- 0.0.5：ErrorLog 巡检 + 部署后对账（同样是假存档根） ---------------- */
+
+await check('ErrorLog 巡检：先如实报「没有」，放一个之后能报出内容与行数', async () => {
+  // ① 没有的时候 —— 「没有」这件事本身也要显示（否则「.gia 干净」容易被当成「脚本没事」）
+  const none = await code.execute({ op: 'inspect' }, {});
+  assert(none.errorLog && none.errorLog.exists === false, '没如实报「没有 ErrorLog」：' + JSON.stringify(none.errorLog).slice(0, 160));
+  assert(/循环调用/.test(none.errorLog.note), '没说清「这类错不进 .gia」：' + none.errorLog.note);
+
+  // ② 有的时候
+  fs.writeFileSync(path.join(luaDir, 'ErrorLog.txt'),
+    'attempt to call a nil value (global \'nope\')\r\nstack traceback:\r\n\tmain.lua:12\r\n', 'utf8');
+  const hit = await code.execute({ op: 'inspect' }, {});
+  assert(hit.errorLog.exists === true, '放了 ErrorLog.txt 却没报出来：' + JSON.stringify(hit.errorLog).slice(0, 160));
+  assert(hit.errorLog.lineCount === 3, '行数不对：' + hit.errorLog.lineCount);
+  assert(/nil value/.test((hit.errorLog.head || []).join(' ')), '没把首几行带出来');
+  assert(/不进 \.gia/.test(hit.errorLog.warn || ''), '没给出「这类错只写这里」的提醒');
+
+  // health 也要顺带报（人最先调的是它）
+  const h = await health.execute({}, {});
+  assert(h.errorLog && h.errorLog.exists === true, 'health 没有带 ErrorLog 状态');
+  fs.rmSync(path.join(luaDir, 'ErrorLog.txt'), { force: true });
+  const gone = await health.execute({}, {});
+  assert(gone.errorLog.exists === false, '删掉之后没回到「没有」');
+  return '没有 → exists:false + 说明 / 有 → 行数+首几行+warn / health 也带';
+});
+
+await check('部署后对账：假根没有 .gil 时**如实说对不了账**（不假装一致）', async () => {
+  const srcFile = path.join(fakeRoot, 'v3.lua');
+  fs.writeFileSync(srcFile, '-- v3 对账测试\r\nlocal x = 3\r\n', 'utf8');
+  const d = await code.execute({ op: 'deploy', source: srcFile }, {});
+  assert(d.ok === true, '部署失败：' + JSON.stringify(d.errors));
+  assert(d.reconcile && d.reconcile.ok === false, '没有 .gil 却说对上了：' + JSON.stringify(d.reconcile));
+  assert(/没有 \.gil/.test(d.reconcile.reason), '原因没说清：' + d.reconcile.reason);
+  // 对不了账时 nextStep 不许说「可以试玩了」
+  assert(!/重新试玩一局，然后/.test(d.nextStep || ''), '对不了账却给了「可以试玩」的下一步：' + d.nextStep);
+  return '没有 .gil → ok:false + 原因；nextStep 不含「可以试玩」';
+});
+
 console.log('');
 try { fs.rmSync(fakeRoot, { recursive: true, force: true }); } catch { /* ignore */ }
 if (failures.length) {

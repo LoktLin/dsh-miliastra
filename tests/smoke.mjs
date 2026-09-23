@@ -59,6 +59,7 @@ const CASES = [
   ['miliastra_log', { op: 'sessions', limit: 5 }],
   ['miliastra_log', { op: 'tags' }],
   ['miliastra_log', { op: 'tail', limit: 5 }],
+  ['miliastra_log', { op: 'runs' }],                          // 只读：按局切分 + 局间 diff
   ['miliastra_playtest', { op: 'status' }],                  // 只读：读 output_log.txt
   ['miliastra_shot', { op: 'targets' }],
   ['miliastra_shot', { op: 'list' }],
@@ -164,6 +165,38 @@ for (const [toolName, args] of CASES) {
     failures.push('[shape] 截图失败时必须回 ok:false + error + runningWindows：' + JSON.stringify(cap).slice(0, 200));
   } else {
     console.log('✓ miliastra_shot 截不到的进程时如实报错并列出可截窗口');
+    pass += 1;
+  }
+}
+
+// ---- 0.0.5：ErrorLog 巡检 + 部署指纹在**真机**上的形状（只读；不改任何文件）----
+
+{
+  const health = TOOLS.find((t) => t.name === 'miliastra_health');
+  const code = TOOLS.find((t) => t.name === 'miliastra_code');
+
+  const h = await health.execute({}, {});
+  const el = h.errorLog;
+  if (!el || typeof el.exists !== 'boolean' || (el.exists === false && !el.note)) {
+    fail += 1;
+    failures.push('[shape] health.errorLog 形状不对（要 exists + 没有时给说明）：' + JSON.stringify(el).slice(0, 200));
+  } else {
+    console.log(`✓ miliastra_health 带 ErrorLog 巡检 → ${el.exists
+      ? '有 ' + el.size + 'B（循环调用/挂载失败只写这里，需人看）'
+      : '没有（如实说明，不当成「脚本没出事」的证据）'}`);
+    pass += 1;
+  }
+
+  const ins = await code.execute({ op: 'inspect' }, {});
+  const d = ins.deploy;
+  if (!d || typeof d.hasFingerprint !== 'boolean') {
+    fail += 1;
+    failures.push('[shape] code op=inspect 没带 deploy 指纹块：' + JSON.stringify(d).slice(0, 200));
+  } else {
+    console.log(`✓ miliastra_code op=inspect 带部署指纹 → hasFingerprint=${d.hasFingerprint}`
+      + (d.hasFingerprint
+        ? `  sameAsDeploy=${d.sameAsDeploy}（差 ${d.bytesDelta}B / ${d.lineDelta} 行）`
+        : `  「${d.note}」`));
     pass += 1;
   }
 }
