@@ -3,7 +3,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
-**版本 `0.0.1`**（首个版本，见 [CHANGELOG](CHANGELOG.md)） · MIT
+**版本 `0.0.1`**（首个版本，见 [CHANGELOG](CHANGELOG.md)） · Apache-2.0
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 这套工具链是**在正式服上排一次真实的 bug 排出来的**（「动态创建控件恒返回 nil」→ 根因是模板库为空），
@@ -296,4 +296,6 @@ compose 好的 boot 图（也就是 `window.__DSH_BOOT__`），确认本包那�
 
 ## License
 
-MIT
+[Apache License 2.0](LICENSE) · Copyright 2026 LoktLin
+
+可自由使用、修改、分发（含商用），需保留版权与许可声明，且不提供任何担保。完整条款见 [LICENSE](LICENSE)。
