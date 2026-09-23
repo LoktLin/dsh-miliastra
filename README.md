@@ -18,6 +18,27 @@
 
 ---
 
+## 30 秒上手（**不用读完全文**）
+
+哪怕你第一次见到这个插件、只知道「原神千星奇域的脚本在本地某个目录里」，按这三步就能干活：
+
+| 第几步 | 调什么 | 你会拿到什么 |
+|---|---|---|
+| **① 定位** | `miliastra_health {}` | 当前正在开发的关卡 / 活文件绝对路径 / 地图 `.gil` / 日志目录 —— **这些路径每次都变，禁止写死** |
+| **② 读或写代码** | `miliastra_code {"op":"inspect"}` 先看病 → `miliastra_code {"op":"deploy","source":"<本地 .lua 绝对路径>"}` 投进去 | 体检（BOM / 行数 / SHA / 有没有被编辑器写回旧版）；部署**自带备份 + SHA 校验 + Lua 结构校验**，失败**不碰活文件** |
+| **③ 验证** | `miliastra_playtest {"op":"status"}` → 请人点试玩 → `miliastra_log {"op":"tail","tag":"<脚本里打的 TAG>"}` | 是否在试玩 / 开了几秒；脚本 `print` 的运行时正文（**运行时结果只能靠 `print` + 取证，别靠猜**） |
+
+**三条铁律**（先记住，能省掉大部分返工）：
+
+1. **路径不写死** —— 换账号、换图、重建关卡都会换目录，一律从 `miliastra_health` 拿。
+2. **写操作只发生在 `miliastra_code` / `miliastra_probe`** —— 都自带备份、审计与双钥匙；其余工具**一个字节都不写**。
+3. **不做越界的事** —— 不读游戏内存、不连游戏进程的端口、不冒充编辑器；**试玩按钮只能人点**（没有自动化通道，也不做）。
+
+> 不知道自己该调哪条 → 看下一节的「[工具](#工具)」表（一屏导航），
+> 或者直接翻「[工具速查](#每个工具的完整说明自动生成别手改)」（每个工具的每个 op 与参数，**自动生成，不会过时**）。
+
+---
+
 ## 文档索引
 
 | 文档 | 位置 | 内容 |
@@ -58,7 +79,7 @@
 - `.gia` 是二进制日志，`print` 出来的东西肉眼很难捞。
 
 结果就是每次排障都在「人肉找路径 → 手动拷贝 → 复制日志给 AI」里打转。
-本插件把这套动作变成 6 个工具 + 一个侧边栏面板。
+本插件把这套动作变成 **8 个工具 + 一个侧边栏面板**。
 
 ---
 
@@ -128,18 +149,182 @@ dsh web
 
 ## 工具
 
+<!-- BEGIN MANUAL:tool-picker -->
+> 这一屏是**导航**（按问题找工具）。每个工具的**每个 op 与参数**在下面「完整说明」里 —— 那一节是**生成的**，不会过时。
+
 | 工具 | 干什么 | 什么时候用 |
 |---|---|---|
 | **`miliastra_health`** | 扫出所有客户端安装 / 关卡 / 活文件 / 地图 / 日志目录，并判定「当前正在开发的关卡」 | **任何操作前先调它**。路径随账号与换图变化，禁止写死 |
-| **`miliastra_code`** | 活文件的 读 / 部署 / 体检 / 还原 / **去 BOM** / **`levels` 读关卡表算几何事实**（见下，`stage=N` 选第几关、`summaryOnly` 省上下文）。部署一律：**先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 BOM**，并**先做 Lua 结构校验**（见下）；部署成功后在备份目录写**部署指纹**，之后 `op=inspect` 会报「活文件是不是被编辑器写回了旧版」；回执里带**部署后对账**结论 | 改完本地脚本要投进沙箱时；想知道「这块平台和那块有没有叠上 / 头顶还剩几 px」时 |
-| **`miliastra_map`** | 读 `<关卡ID>.gil`：关卡信息、**客户端控件谱系**（控件模板索引 / 名字 / 父 / 子）、脚本源码快照比对 | 判断「哪些控件能被脚本动态创建」、判断「跑的是不是本地这版代码」 |
+| **`miliastra_code`** | 活文件的 **8 个 op**：`read` 读正文 / `deploy` 投进沙箱 / `inspect` 体检 / `backup`+`backups` 备份与清单 / `restore` 还原 / **`fixbom` 只去掉那 3 字节 BOM** / **`levels` 读关卡表算几何事实**（见下，`stage=N` 选第几关、`summaryOnly` 省上下文）。部署一律：**先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 BOM**，并**先做 Lua 结构校验**（见下）；部署成功后在备份目录写**部署指纹**，之后 `op=inspect` 会报「活文件是不是被编辑器写回了旧版」；回执里带**部署后对账**结论 | 改完本地脚本要投进沙箱时；想知道「这块平台和那块有没有叠上 / 头顶还剩几 px」时 |
+| **`miliastra_map`** | 读 `<关卡ID>.gil`（4 个 op：`summary` 概况 / `clientui` **客户端控件谱系**（控件模板索引 / 名字 / 父 / 子） / `script` 脚本源码快照比对 / `strings` 提可读字符串，存盘前后 diff 用） | 判断「哪些控件能被脚本动态创建」、判断「跑的是不是本地这版代码」 |
 | **`miliastra_log`** | 读 `.gia` 运行时日志：`sessions` 列局面、`tail` 结构化读正文、`grep` 按 TAG / 正则过滤、`tags` 汇总标签、**`runs` 按「局」切分 + 局间 diff**、**`metrics` 指标汇总**（见下）。可用 `run=<epoch>` 只看某一局 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
 | **`miliastra_playtest`** | **试玩开跑 / 结束的实时侦测**（见下）：`status` 看现在在不在试玩、开了几秒；`wait` 等下一次开跑（可 `afterSec` 要「开跑 N 秒后」） | 想知道「开跑那一刻」时 —— 这是**唯一**能看到开跑的通道，`.gia` 不行 |
-| **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
-| **`miliastra_shot`** | **截图**：`capture` 截游戏/编辑器窗口、**`burst` 连拍**（`awaitPlaytest:true` 可「等开跑 → 等 N 秒 → 连拍」，**一次调用**；`dryRun` 先看计划）、`list` 看截到哪了、`clean` 清理（默认只报告） | 需要「看画面对不对」时 —— 日志回答不了观感 |
+| **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档（`list` 先看每个模板的白话说明）。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
+| **`miliastra_shot`** | **截图**（5 个 op）：`capture` 截游戏/编辑器窗口、**`burst` 连拍**（`awaitPlaytest:true` 可「等开跑 → 等 N 秒 → 连拍」，**一次调用**；`dryRun` 先看计划）、`list` 看截到哪了、`clean` 清理（默认只报告）、`targets` 列出当前**能截哪些窗口** | 需要「看画面对不对」时 —— 日志回答不了观感 |
 | `miliastra_echo` | 回显参数 | 怀疑插件没生效 / 参数丢了时先调它 |
+<!-- END MANUAL:tool-picker -->
 
-### 试玩开跑侦测（`miliastra_playtest`）
+### 每个工具的完整说明（**自动生成**，别手改）
+
+> 下面这段由 `node tools/gen-readme-tools.mjs --write` 从 `index.js` 的 `TOOLS` **生成** ——
+> **工具的唯一真身是 schema**，本文件只是它的投影。改了工具（加 op / 加参数 / 改描述）就跑一次生成器：
+> `tests/readme-test.mjs` 会**逐字比对**，忘了跑就**红**。
+> 所以这一节**不会过时** —— 而手写的清单一定会（实测：本文件第一段曾把版本号停在 `0.0.1`，六次发布没人发现）。
+
+<!-- BEGIN GENERATED:tools -->
+#### `miliastra_health`
+
+Miliastra Wonderland 工具链：环境体检。**任何时候要操作原神 UGC，先调它。**返回：扫到的客户端安装（正式服/Beta）、所有关卡、当前判定为「正在开发」的关卡、活文件（沙箱 .lua）清单与大小、地图存档 .gil、运行时日志目录与日志文件数。编辑器 UI 操作（建模板/挂脚本）没有自动化通道——本工具只做文件层体检，替代不了人点编辑器。
+
+**典型调用**：`{}`（当前关卡速览）｜`{"all":true}`（全部关卡）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `all` | `boolean` | 否 | `true` / `false` |
+
+#### `miliastra_code`
+
+Miliastra Wonderland 工具链：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。**部署一律：先备份旧文件 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM。**（不带 BOM 是硬要求：原神实测会打印 "Read text file with BOM header may cause Lua error"。）op=read 读活文件正文；op=deploy 把 source 指向的本地文件投进沙箱（**覆盖前自动备份**）；**部署前先做 Lua 结构校验**（缺 end / 括号不配平 / 字符串没闭合这类错投进去，试玩会静默不生效、日志里什么都没有 —— 这是最难查的一类失败）；默认 lintMode:"strict" 直接拒绝，确认没问题可 lintMode:"warn" 只提示、"off" 跳过。op=inspect 只体检不改动；op=backups 列出该活文件的全部备份（时间/SHA/是否带 BOM）；op=backup 手动备份一份；op=restore 用它覆盖活文件 —— **backup 可以不传**，不传就用固定名那份 `<原名>.bak`。⚠️ 部署不会热加载正在进行的试玩：要 停试玩 → 部署 → 重开试玩。
+
+**安全约定（写活文件的地方都遵守，别绕过）**：①活文件是**唯一副本**（没有 git、没有撤销），所以**备份失败就中止覆盖**，绝不带着「没有备份」去写；②**原子写**（同目录临时文件 → fsync → rename），断电/崩溃不会留下半截损坏的文件；③写完必校验 SHA，**校验不过自动回滚**到覆盖前那一版；④备份就在**被替换文件的旁边**：`<活文件目录>\_backup\`；⑤每次备份都写**两份** —— 固定名 `<原名>.bak`（还原默认用它）+ 一份带**本地时间**戳的历史（永不自动删）；⑥`noBackup` 必须同时传 `allowNoBackup:true` 才生效（不给随手绕过安全网）；⑦所有写操作都回执 `restoreWith` —— 照着它跑就能还原。
+
+**两条防「静默丢代码」的机制**：· **部署指纹** —— `op=deploy` 成功后会在备份目录写一份 `.miliastra-deploy.json`（记下这一版的 SHA/字节/行数/来源）。之后 `op=inspect` 会比对：活文件与上次部署**不一致**就直说「多半是编辑器把脚本面板里的内存版存回了磁盘」（实测会发生），并给出字节差/行数差 —— 而不是让你以为跑的还是刚投进去那版。· **`op=fixbom`** —— 活文件带 UTF-8 BOM 时**只去掉那 3 个字节**（原神实测会打印 "Read text file with BOM header may cause Lua error"）。BOM 不是本工具加的，实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → 备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。
+
+**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜`{"op":"deploy","source":"D:\\code\\双相\\双相_v9.lua"}`（投代码）｜`{"op":"levels","summaryOnly":true}`（先扫全部关卡几何）→ `{"op":"levels","stage":3}`（再钻第 3 关）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `op` | `string` | 否 | `read` / `deploy` / `inspect` / `backups` / `backup` / `restore` / `fixbom` / `levels` |
+| `level` | `string` | 否 | —— |
+| `file` | `string` | 否 | —— |
+| `source` | `string` | 否 | —— |
+| `backup` | `string` | 否 | —— |
+| `backupDir` | `string` | 否 | —— |
+| `noBackup` | `boolean` | 否 | `true` / `false` |
+| `allowNoBackup` | `boolean` | 否 | `true` / `false` |
+| `lintMode` | `string` | 否 | `strict` / `warn` / `off` |
+| `head` | `number` | 否 | —— |
+| `stage` | `string` | 否 | —— |
+| `summaryOnly` | `boolean` | 否 | `true` / `false` |
+| `nearPx` | `number` | 否 | —— |
+
+#### `miliastra_map`
+
+Miliastra Wonderland 工具链：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**——每条控件的「控件模板索引 / 名字 / 父 / 子」，是判断「哪些控件能被脚本动态创建」的唯一正解；op=script 比对地图里嵌的脚本源码与本地活文件（用来判断"跑的是不是本地这版代码"）；op=strings 提取可读字符串（偏移+文本），存盘前后 diff 用。判据：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**；画布上摆的实例、以及模板控件的子节点，一律返回 nil。
+
+**典型调用**：`{"op":"summary"}`（版本/脚本映射/模板数）｜`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `op` | `string` | 否 | `summary` / `clientui` / `script` / `strings` |
+| `level` | `string` | 否 | —— |
+| `file` | `string` | 否 | —— |
+| `summaryOnly` | `boolean` | 否 | `true` / `false` |
+| `path` | `string` | 否 | —— |
+| `limit` | `number` | 否 | —— |
+| `match` | `string` | 否 | —— |
+
+#### `miliastra_log`
+
+Miliastra Wonderland 工具链：读客户端运行时日志 `.gia`。**这是运行时取证（Lua 里 print 出来的东西）的唯一入口**，比让人手动复制粘贴可靠得多。op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）；**op=runs 按「局」切分** —— 一个 `.gia` 里可能装多局（实测 `21-24-16_155` 装了两段完整生命周期），op=runs 给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / 错误样式）**并和上一局做 diff**，省掉「把 30 多条倒过来再分清哪段属于哪局」这一步。记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。
+
+⚠️ **「试玩了却没有新日志」先看这里**：`.gia` 里**只有脚本自己 `print` 出来的东西**。实测最坑的一次是**压根忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）——另一种是编辑器「日志」面板里 `客户端脚本` 没勾上。工具不再替这种现象下结论，只如实回「最近一局是什么时候写的」；是不是刚玩过，你自己看一眼就知道。
+
+**典型调用**：`{"op":"runs"}`（这一局/这几局发生了什么，含局间 diff）｜`{"op":"metrics"}`（死亡位置分布与集中区，**不用改脚本**）｜`{"op":"tail","tag":"yuan-code","limit":30}`（按标签读正文）｜`{"op":"tail","run":1790171162}`（只看那一局）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `op` | `string` | 否 | `sessions` / `tail` / `grep` / `tags` / `runs` / `metrics` |
+| `level` | `string` | 否 | —— |
+| `file` | `string` | 否 | —— |
+| `tag` | `string` | 否 | —— |
+| `pattern` | `string` | 否 | —— |
+| `run` | `string` | 否 | —— |
+| `limit` | `number` | 否 | —— |
+| `evt` | `string` | 否 | —— |
+| `summaryOnly` | `boolean` | 否 | `true` / `false` |
+| `bins` | `number` | 否 | —— |
+| `withRaw` | `boolean` | 否 | `true` / `false` |
+
+#### `miliastra_playtest`
+
+Miliastra Wonderland 工具链：**试玩开跑 / 结束的实时侦测** —— 回答「现在在不在试玩 / 开跑到第几秒了」，并支持**等下一次开跑**。信号来自游戏客户端自己写的 Unity 日志 `output_log.txt`（每行带毫秒时间戳、持续追加）：开跑 = `BeyondLevelPlayModule SetCurLevelData … isTrial:True`，结束 = `StartQuickSwitchSceneAction … QuickSwitchToBeyondSettleSceneNormally`。**实测延迟 0.07~0.18 秒**（2026-09-23 真机：日志在 21:46:02.420 写下，21:46:02.600 已读到）。它是**平台级**标记：脚本一行都不 print、磁盘上没有 `.gia` 的局，它照样记。⚠️ **别用 `.gia` 判开跑** —— `.gia` 不是实时的：实测那局 21:46:58 结束，`…21-46-05_157.gia` 到 **21:47:07** 才落盘；**局在跑的时候磁盘上根本没有这个文件**。op=status 看当前状态 + 最近几局；op=wait 等下一次开跑（`backSec` 可回扫刚过去那局，`afterSec` 要「开跑 N 秒后」）——命中后接着调 `miliastra_shot` 截一张，就是「游戏开跑 N 秒后的画面」。op=wait 超时**不报错**，如实回 `hit:false`。
+
+**典型调用**：`{"op":"status"}`（现在在不在试玩）｜`{"op":"wait","afterSec":3}`（等开跑再等 3 秒 —— 但**要截图就别用这条**：直接 `miliastra_shot {"op":"burst","awaitPlaytest":true,"afterSec":3}` 一次调用更准）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `op` | `string` | 否 | `status` / `wait` |
+| `level` | `string` | 否 | —— |
+| `backSec` | `number` | 否 | —— |
+| `timeoutSec` | `number` | 否 | —— |
+| `afterSec` | `number` | 否 | —— |
+| `pollMs` | `number` | 否 | —— |
+
+#### `miliastra_shot`
+
+Miliastra Wonderland 工具链：截图 —— 把「现在画面上是什么」变成一张 PNG。运行时日志（miliastra_log）能回答「代码跑了没、print 了什么」，回答不了「画面对不对」（控件到底挂上去了没、位置歪没歪、颜色对不对）；这一环靠它。op=capture（默认）立刻截一张，目标 `target=game`（原神客户端，默认）/ `editor`（千星沙箱），也可以用 `process` 指定任意进程名；op=list 看截到哪去了、有多少张、占多大；op=clean 清理，**默认只报告不删**。**截图存在插件的数据目录**（默认 `~/.dsh/miliastra/shots`，`MILIASTRA_DATA_DIR` 可整体覆盖）——既不放游戏存档目录（那是米哈游的地盘），也不放包目录（插件升级会整个替换掉它）。**不会自动删**：清理要显式给条件（`all` 或 `olderThanDays`），真删还要 `confirm:true`。回执恒带 `pid / process / title` —— 明确告诉你**截到的到底是哪个窗口**（第一版抓错了程序，光看 `ok:true` 根本发现不了）。
+
+**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜`{"op":"burst","awaitPlaytest":true,"afterSec":3,"count":5}`（**等开跑 → 等 3 秒 → 连拍 5 张**，一次调用）｜`{"op":"burst","dryRun":true}`（先看要多久、拍几张）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `op` | `string` | 否 | `capture` / `burst` / `list` / `clean` / `targets` |
+| `target` | `string` | 否 | `game` / `editor` |
+| `process` | `string` | 否 | —— |
+| `window` | `string` | 否 | —— |
+| `label` | `string` | 否 | —— |
+| `level` | `string` | 否 | —— |
+| `dir` | `string` | 否 | —— |
+| `keepLast` | `number` | 否 | —— |
+| `olderThanDays` | `number` | 否 | —— |
+| `all` | `boolean` | 否 | `true` / `false` |
+| `dryRun` | `boolean` | 否 | `true` / `false` |
+| `confirm` | `boolean` | 否 | `true` / `false` |
+| `bringToFront` | `boolean` | 否 | `true` / `false` |
+| `keepWindowOnTop` | `boolean` | 否 | `true` / `false` |
+| `count` | `number` | 否 | —— |
+| `burstMs` | `number` | 否 | —— |
+| `awaitPlaytest` | `boolean` | 否 | `true` / `false` |
+| `afterSec` | `number` | 否 | —— |
+| `timeoutSec` | `number` | 否 | —— |
+| `backSec` | `number` | 否 | —— |
+
+#### `miliastra_probe`
+
+Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具**。探针是一段临时替掉活文件的小程序，只在试玩那几秒跑一次，把游戏内部信息打到日志里。为什么需要它：有些事光读代码看不出来（某个控件号能不能被创建、某个按键枚举到底叫什么名），必须让游戏真跑一遍才知道 —— 用它，别猜。**代价**：部署会**临时覆盖活文件**，所以试玩那一局你的玩法不会跑（Host 会先自动备份，用完一键还原）。**四步**：① op=deploy template=<名字> → ② 在编辑器里**重新**试玩一局（不会热加载）→ ③ op=collect 收回结论 → ④ 用 miliastra_code op=restore 还原你的脚本。**5 个模板**（先 op=list 看详情）：`api-surface` 翻字典=把游戏里的枚举和它们的成员列出来（比如某个按键到底叫什么名）；`tree` 看控件=看屏幕上现在挂着哪些客户端控件、画布多大；`instantiate` 试钥匙=拿一串索引号去试，看哪个真能被脚本创建出来；`ping` 探活=确认「脚本到底有没有跑起来」；`api-check` 核文档=官方文档写的那些接口，真机上到底有没有。另：op=render 只生成 Lua 不部署（要先看代码用这个）。探针只读，不做场景写操作。
+
+**典型调用**：`{"op":"deploy","template":"ping"}` → 人重新试玩 → `{"op":"collect","tag":"P1"}` → **还原**：`miliastra_code {"op":"restore"}`（不传 backup 就是用固定名那份）
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `op` | `string` | 否 | `list` / `render` / `deploy` / `collect` |
+| `template` | `string` | 否 | `api-surface` / `tree` / `instantiate` / `ping` / `api-check` |
+| `tag` | `string` | 否 | —— |
+| `level` | `string` | 否 | —— |
+| `file` | `string` | 否 | —— |
+| `ids` | `array<number>` | 否 | —— |
+| `from` | `number` | 否 | —— |
+| `to` | `number` | 否 | —— |
+| `saveTo` | `string` | 否 | —— |
+| `lintMode` | `string` | 否 | `strict` / `warn` / `off` |
+
+#### `miliastra_echo`
+
+调试用：把 text 原样回显，并带上插件版本与本机存档根目录。**怀疑「插件没生效 / 面板调不通 Host / 工具参数丢了」时先调它** ——返回里带着你传进来的字符串，就不用猜参数到底有没有传到 Host。
+
+**典型调用**：`{"text":"ping"}`
+
+| 参数 | 类型 | 必填 | 取值 |
+|---|---|---|---|
+| `text` | `string` | **是** | —— |
+<!-- END GENERATED:tools -->
+
+### 深入：几个容易搞反的点
+
+（工具本身怎么调看上面；下面这些是**知识**，翻车过的地方）
+
+#### 试玩开跑侦测（`miliastra_playtest`）
 
 **先说一件事：`.gia` 不是实时的。**
 
@@ -683,9 +868,10 @@ miliastra_code op=inspect file=角色B.lua    # 指定活文件体检（含 SHA-
 
 ```powershell
 # —— L1 契约 / 单元 ——
-node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例 + 截图删除双保险（45 项）
-node tests/deploy-test.mjs        # 部署与备份**安全**：备份失败不覆盖 / 原子写 / 固定名 / 回滚 / 双钥匙 / 自覆盖拦截（28 项，临时目录）
-node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（10 项）
+node tests/readme-test.mjs        # 本文件与代码的一致性：工具/op/参数清单**逐字对比 TOOLS**、导航表覆盖 8/8、无幽灵工具名（10 项）
+node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例 + 截图删除双保险 + 四条 AI 不变量（46 项）
+node tests/deploy-test.mjs        # 部署与备份**安全**：备份失败不覆盖 / 原子写 / 固定名 / 回滚 / 双钥匙 / 自覆盖拦截（30 项，临时目录）
+node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（16 项）
 node tests/lualint-test.mjs       # Lua 结构校验器：合法构造不误报 / 写坏的必须报对行号 / 15 个真文件回归（32 项）
 node tests/shot-test.mjs          # 截图：命名 / 目录解析 / 清理规划 / 可信度判据 / 路径守卫 / 缩略图 / 真删双钥匙 / **连拍计划与回执（实测帧距）**（103 项）
 node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵 / 日志格式化 / 自动取回判据 / 开跑触发判据 / 备份卡片 / 读界面控件 / 截图卡片与缩略图 / 试玩卡片（31 项）
@@ -701,6 +887,7 @@ node tools/lint-probes.mjs         # 把 5 个探针模板渲染出来逐个校�
 node tools/lint-all.mjs ../../code # 对整个 code/ 目录跑结构校验
 node tools/live-render-check.mjs   # **向运行中的 Host** 要模板渲染结果并校验（防「跑着的是旧版」）
 node tools/render-probe.mjs api-surface   # **从磁盘**渲染模板并落到 code/<玩法>/（Host 是旧版时用这个）
+node tools/gen-readme-tools.mjs --write   # **改了工具就跑这个**：把本文件的「工具速查」块从 TOOLS 重新生成（不跑 → tests/readme-test.mjs 会红）
 node tools/dump-panel-text.mjs 探针  # 把面板**渲染后的纯文字**打出来 —— 改文案时先自己读一遍用户会看到什么
 node tools/shot-live.mjs           # **真机截图**（默认游戏）+ 打印原图/预览路径 —— 截图对不对只有看图才知道
 node tools/shot-live.mjs editor --window 日志   # 编辑器有多个窗口时按标题挑
@@ -737,11 +924,11 @@ node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 | 层 | 命令 | 证明了什么 | 证明不了什么 |
 |---|---|---|---|
 | L1 | 技能 `selftest.mjs`（16 项） | 两个半边的契约、工具注册形状、路由信封、cleanup 可回收 | 真实渲染、真实装配 |
-| L1 | 上面九个单元测试（**397** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过、**连拍不虚报帧距**，**试玩开跑判据不误触发也不连拍**，**按局切分不把两局揉成一局**，**关卡表认不出时如实报行号、几何事实不带判决**，**指标汇总不带判决**，**AI 调用三条不变量（典型调用 / 无 `which` / `summaryOnly` 真省且不丢数字）** | 同上 |
+| L1 | 上面十个单元测试（**408** 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报，截图清理判据不误删、路径守卫不被绕过、**连拍不虚报帧距**，**试玩开跑判据不误触发也不连拍**，**按局切分不把两局揉成一局**，**关卡表认不出时如实报行号、几何事实不带判决**，**指标汇总不带判决**，**AI 调用四条不变量（典型调用 / 无 `which` / `summaryOnly` 真省且不丢数字 / 系统提示段覆盖每个工具）**，**本文件的工具清单与代码逐字一致** | 同上 |
 | L3 | `client-render-test.mjs`（31 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 开跑触发判据 / 备份卡片 / 读界面控件 / 截图卡片与缩略图 / 试玩卡片 讲清后果** | 壳会不会把它挂上去 |
 | L4 | `live-check.mjs`（9 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
 
-**合计 444 项**（397 + L3 31 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
+**合计 455 项**（408 + L3 31 + 自检 16；不含需要 `dsh web` 在跑的 L4 那 9 项）。
 `shot-test.mjs` 里另有 2 项走**真实 `powershell` 调用**，但只走失败路径（进程不存在 / 脚本不存在），
 所以既不依赖游戏开着，也不产生图片。
 
