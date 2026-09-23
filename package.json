@@ -19,7 +19,8 @@
     "lib/**/*.mjs",
     "lib/assets/*",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20.0.0",
@@ -42,7 +43,6 @@
     "ugc"
   ],
   "license": "Apache-2.0",
-  "private": true,
   "devDependencies": {
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
@@ -61,5 +61,12 @@
       "name": "LoktLin",
       "url": "https://github.com/LoktLin"
     }
-  ]
+  ],
+  "scripts": {
+    "test": "node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/client-render-test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }
