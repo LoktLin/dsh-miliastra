@@ -369,6 +369,12 @@ const TOOLS = [
         return {
           ok: true, op, path: gilPath, size: gil.size,
           level: gil.level, account: gil.account, version: gil.version,
+          // ↓ 2026-09-23 新增的三项「静态读」：不用试玩、不碰任何文件
+          clientVersion: gil.versionInfo ? gil.versionInfo.client : null,
+          resourceVersions: gil.versionInfo ? gil.versionInfo.resources : null,
+          levelConfig: gil.levelConfig,
+          sceneObjectCount: gil.sceneObjects ? gil.sceneObjects.count : null,
+          sceneObjectSample: gil.sceneObjects ? gil.sceneObjects.sample : null,
           script: gil.script ? { name: gil.script.name, file: gil.script.file, mappingId: gil.script.mappingId, sourceBytes: gil.script.sourceBytes, sourceSha256: gil.script.sourceSha256 } : null,
           controlCount: gil.clientUI.length,
           templateCount: templates.length,

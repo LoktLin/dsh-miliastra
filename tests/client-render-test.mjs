@@ -511,20 +511,22 @@ check('★ 部署后（已部署状态）渲染出「第 4 步：还原我的脚
 });
 
 check('★ Host 清单比磁盘少时，探针卡片提示「Host 是旧版 + 重启 dsh web」', () => {
-  // 模拟「运行中的 Host 还是旧版」：只返回 3 个模板（磁盘上已有 4 个）
+  // 用 Host 的**真实**模板清单构造两种情形 —— 写死清单会在加模板时变成假失败（踩过）
+  const missingTpl = PROBE_TEMPLATES[PROBE_TEMPLATES.length - 1];
+  const partial = PROBE_TEMPLATES.filter((t) => t !== missingTpl);
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv({
-    __probeInfo: { templates: ['ping', 'tree', 'instantiate'], info: [], overview: {} },
+    __probeInfo: { templates: partial, info: [], overview: {} },
   })));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert(/Host 是旧版/.test(flat), '没提示「运行中的 Host 是旧版」');
-  assert(/api-surface/.test(flat), '没点名少了哪个模板');
+  assert(flat.includes(missingTpl), '没点名少了哪个模板（应为 ' + missingTpl + '）');
   assert(/重启 dsh web/.test(flat), '提示里没给下一步动作（重启 dsh web）');
   // 反过来：Host 清单齐全时不该有这条噪音
   const ok = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv({
-    __probeInfo: { templates: ['ping', 'tree', 'instantiate', 'api-surface'], info: [], overview: {} },
+    __probeInfo: { templates: PROBE_TEMPLATES.slice(), info: [], overview: {} },
   })));
   assert(!/Host 是旧版/.test(ok.replace(/<[^>]+>/g, ' ')), 'Host 清单齐全时不该提示旧版');
-  return '缺模板时提示 + 点名缺失项 + 给出动作；齐全时不提示';
+  return '缺 ' + missingTpl + ' 时提示 + 点名 + 给动作；齐全时不提示';
 });
 
 check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）', () => {
