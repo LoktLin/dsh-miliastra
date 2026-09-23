@@ -708,6 +708,76 @@ check('★ 清理要两步：先看将删哪些，确认按钮才出现', () => 
   return '未规划不给确认按钮；规划后列出清单 + 确认 + 取消';
 });
 
+check('★ 开跑自动截图的判据：只在「新开跑」触发、同一局不连拍（纯函数）', () => {
+  const step = clientExports.__testPtStep;
+  assert(typeof step === 'function', '缺少 __testPtStep（开跑触发无法回归）');
+  const run = (n) => ({ ok: true, inPlaytest: true, startedAtMs: 1000 + n, elapsedSec: 5 });
+
+  // ① 第一次调用只建基线 —— 面板一开就发现「上一局在跑」，那不是新开跑，不该补截
+  const a = step(null, run(0), { autoShot: true, delaySec: 3 });
+  assert(a.action === 'none' && a.next.seeded === true, '首次调用不该触发：' + JSON.stringify(a));
+
+  // ② 真正的新一局 + 开关打开 → 触发，且要说清「等几秒」
+  const b = step(a.next, run(1), { autoShot: true, delaySec: 3 });
+  assert(b.action === 'shot', '新开跑没触发：' + JSON.stringify(b));
+  assert(/3 秒/.test(b.reason), '没说清等几秒：' + b.reason);
+
+  // ③ 同一局的复查不许再触发（2 秒轮一次，不然会连拍十几张）
+  const c = step(b.next, run(1), { autoShot: true, delaySec: 3 });
+  assert(c.action === 'none', '同一局重复触发（会连拍）：' + JSON.stringify(c));
+
+  // ④ 开关关着 → 只报告、不触发
+  const d = step(a.next, run(2), { autoShot: false, delaySec: 3 });
+  assert(d.action === 'none' && d.phase === 'started', '关着开关还触发：' + JSON.stringify(d));
+
+  // ⑤ 跑完之后 startedAtMs 变 null —— 绝不能把「结束」误判成「开跑」
+  const e = step(b.next, { ok: true, inPlaytest: false, startedAtMs: null }, { autoShot: true, delaySec: 3 });
+  assert(e.action === 'none', '把「跑完」当成新开跑了：' + JSON.stringify(e));
+
+  // ⑥ 读不到日志 → unknown，静默不触发
+  const f2 = step(a.next, { ok: false, error: 'x' }, { autoShot: true, delaySec: 3 });
+  assert(f2.action === 'none' && f2.phase === 'unknown', '读不到日志还触发：' + JSON.stringify(f2));
+
+  return '首次建基线 / 新局触发一次 / 同局不连拍 / 关了不触发 / 跑完不误触发 / 读不到不触发';
+});
+
+check('★ 试玩卡片：状态 + 来源 + 实测延迟 + 「别用 .gia 判」都要看得见', () => {
+  const live = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __pt: {
+      ok: true, inPlaytest: true, startedAt: '21:46:02.420', startedAtMs: 1790171162420,
+      elapsedSec: 12, epochSec: 1790171162, endedAt: null,
+      logPath: 'C:\\Users\\x\\AppData\\LocalLow\\miHoYo\\原神\\output_log.txt',
+      lastRun: { startedAt: '21:29:37.378', endedAt: '21:31:33.372', durationSec: 116, epochSec: 1790170177, token: 1037286, closed: 'seen' },
+      recentRuns: [
+        { startedAt: '21:29:37.378', endedAt: '21:31:33.372', durationSec: 116, epochSec: 1790170177, closed: 'seen' },
+        { startedAt: '21:46:02.420', endedAt: null, durationSec: null, epochSec: 1790171162 },
+      ],
+    },
+  }));
+  const flat = live.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  assert(/试玩开跑/.test(flat), '没有「试玩开跑」这张卡');
+  assert(/试玩中/.test(flat) && /12 秒/.test(flat), '没显示「在试玩 + 已跑多久」');
+  assert(/21:46:02/.test(flat), '没显示开跑时刻');
+  assert(/1790171162/.test(flat), '没显示「本局编号」（与 .gia 对号用）');
+  assert(/output_log\.txt/.test(flat), '没说信号来自哪个文件');
+  assert(/0\.07~0\.18 秒/.test(flat), '没写实测延迟 —— 用户没法判断它灵不灵');
+  assert(/不能用 \.gia 判开跑/.test(flat), '没警告「别用 .gia 判开跑」');
+  assert(/21:29:37/.test(flat) && /1 分 56 秒/.test(flat), '最近几局没显示（开跑时刻 + 时长）');
+  // 自动截图必须默认关：磁盘是用户的，没人点过就不该自己往里写图片
+  assert(/开跑自动截图：关/.test(live), '自动截图默认不是「关」');
+  assert(/3 秒<\/button>/.test(live), '缺「开跑后几秒」的秒数选择');
+
+  // 不在试玩时也得有话说（不能空着让人猜）
+  const idle = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __pt: { ok: true, inPlaytest: false, startedAtMs: null, logPath: 'C:\\x\\output_log.txt', lastRun: null, recentRuns: [] },
+  }));
+  assert(/未在试玩/.test(idle.replace(/<[^>]+>/g, ' ')), '没在试玩时没给状态文案');
+  return '状态 + 开跑时刻 + 本局编号 + 来源 + 实测延迟 + 别用 .gia 判 + 最近几局 + 默认关';
+});
+
 check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
   cleanup();
   let again = null;

@@ -59,6 +59,7 @@ const CASES = [
   ['miliastra_log', { op: 'sessions', limit: 5 }],
   ['miliastra_log', { op: 'tags' }],
   ['miliastra_log', { op: 'tail', limit: 5 }],
+  ['miliastra_playtest', { op: 'status' }],                  // 只读：读 output_log.txt
   ['miliastra_shot', { op: 'targets' }],
   ['miliastra_shot', { op: 'list' }],
   ['miliastra_shot', { op: 'clean' }],                       // 默认 dryRun，不删任何东西
@@ -163,6 +164,35 @@ for (const [toolName, args] of CASES) {
     failures.push('[shape] 截图失败时必须回 ok:false + error + runningWindows：' + JSON.stringify(cap).slice(0, 200));
   } else {
     console.log('✓ miliastra_shot 截不到的进程时如实报错并列出可截窗口');
+    pass += 1;
+  }
+}
+
+// ---- 试玩侦测：超时必须能被 timeoutSec 打断，且如实回 hit:false（不许挂死）----
+
+{
+  const pt = TOOLS.find((t) => t.name === 'miliastra_playtest');
+  const st = await pt.execute({ op: 'status' }, {});
+  if (st.ok !== true || typeof st.inPlaytest !== 'boolean' || !st.logPath) {
+    fail += 1;
+    failures.push('[shape] op=status 必须回 ok / inPlaytest / logPath：' + JSON.stringify(st).slice(0, 200));
+  } else {
+    const last = st.startedAt || (st.lastRun && st.lastRun.startedAt) || '无';
+    console.log(`✓ miliastra_playtest op=status → 在试玩=${st.inPlaytest}  最近开跑=${last}  历史局数=${(st.recentRuns || []).length}`);
+    pass += 1;
+  }
+
+  const t0 = Date.now();
+  const to = await pt.execute({ op: 'wait', timeoutSec: 5, pollMs: 500 }, {});
+  const cost = Date.now() - t0;
+  // 正常情况是「5 秒没人开局 → 超时」；万一这 5 秒里真有人开局，命中也算对。
+  const shapeOk = to.ok === true && (to.hit === true || to.timedOut === true);
+  if (!shapeOk || cost > 20000) {
+    fail += 1;
+    failures.push('[safety] op=wait 必须能被 timeoutSec 打断并如实回报（不许挂死）：'
+      + JSON.stringify({ ok: to.ok, hit: to.hit, timedOut: to.timedOut, cost }));
+  } else {
+    console.log(`✓ miliastra_playtest op=wait 超时可打断且如实回报（${(cost / 1000).toFixed(1)}s，hit=${to.hit}）`);
     pass += 1;
   }
 }

@@ -8,6 +8,7 @@
  *   miliastra_code    活文件：读、部署（带备份+SHA校验+无BOM检查）、体检、还原
  *   miliastra_map     地图存档 .gil：关卡信息、客户端控件谱系、可读字符串
  *   miliastra_log     运行时日志 .gia：列出局面、结构化读正文、按 TAG 过滤
+ *   miliastra_playtest 试玩开跑/结束**实时**侦测（output_log.txt，实测延迟 0.07~0.18s）
  *   miliastra_probe   探针：模板化渲染 → 部署 → 试玩后回收结论
  *
  * 边界（务必知道）：**编辑器 UI 里的操作（建模板 / 挂脚本 / 建容器）没有自动化通道**，
@@ -23,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.0.3';
+const VERSION = '0.0.4';
 const TITLE = 'Miliastra Wonderland 工具链';
 const STARTED_AT = Date.now();
 
@@ -33,6 +34,10 @@ import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.m
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
+import {
+  playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
+  playtestSummary, shouldHit,
+} from './lib/playtest.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import {
@@ -61,6 +66,15 @@ function lossless(value) {
 
 class HttpError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'HttpError'; this.status = status; }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 数值参数取值：非数字给默认，超出区间夹住（不静默接受离谱值）。 */
+function clampNum(v, dflt, lo, hi) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(hi, Math.max(lo, Math.round(n)));
 }
 
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
@@ -504,6 +518,126 @@ const TOOLS = [
         matched: records.length, returned: slim.length,
         filter: { tag: args.tag || null, pattern: args.pattern || null },
         records: slim,
+      };
+    },
+  },
+
+  {
+    name: 'miliastra_playtest',
+    description:
+      TITLE + '：**试玩开跑 / 结束的实时侦测** —— 回答「现在在不在试玩 / 开跑到第几秒了」，'
+      + '并支持**等下一次开跑**。'
+      + '信号来自游戏客户端自己写的 Unity 日志 `output_log.txt`（每行带毫秒时间戳、持续追加）：'
+      + '开跑 = `BeyondLevelPlayModule SetCurLevelData … isTrial:True`，'
+      + '结束 = `StartQuickSwitchSceneAction … QuickSwitchToBeyondSettleSceneNormally`。'
+      + '**实测延迟 0.07~0.18 秒**（2026-09-23 真机：日志在 21:46:02.420 写下，21:46:02.600 已读到）。'
+      + '它是**平台级**标记：脚本一行都不 print、磁盘上没有 `.gia` 的局，它照样记。'
+      + '⚠️ **别用 `.gia` 判开跑** —— `.gia` 不是实时的：实测那局 21:46:58 结束，'
+      + '`…21-46-05_157.gia` 到 **21:47:07** 才落盘；**局在跑的时候磁盘上根本没有这个文件**。'
+      + 'op=status 看当前状态 + 最近几局；op=wait 等下一次开跑（`backSec` 可回扫刚过去那局，'
+      + '`afterSec` 要「开跑 N 秒后」）——命中后接着调 `miliastra_shot` 截一张，'
+      + '就是「游戏开跑 N 秒后的画面」。op=wait 超时**不报错**，如实回 `hit:false`。',
+    parameters: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['status', 'wait'], description: '默认 status。' },
+        level: { type: 'string', description: '关卡 ID / 品牌；省略=当前关卡（用来定位该品牌的 output_log.txt）。' },
+        backSec: { type: 'number', description: 'op=wait：回扫窗口秒数 —— 调用之前 backSec 秒内已经开跑的也算命中（默认 0）。人点了试玩再叫 AI 时用得上。' },
+        timeoutSec: { type: 'number', description: 'op=wait：最多等多少秒（默认 90，上限 300）。' },
+        afterSec: { type: 'number', description: 'op=wait：命中开跑后再等 N 秒才返回（默认 0，上限 120）—— 这就是「开跑 N 秒后」。' },
+        pollMs: { type: 'number', description: 'op=wait：轮询间隔毫秒（默认 400，100~5000）。' },
+      },
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
+    async execute(args = {}) {
+      const op = String(args.op || 'status');
+      if (op !== 'status' && op !== 'wait') throw new HttpError('op 只能是 status / wait，收到：' + op, 400);
+      const lv = resolveLevel(args.level);
+      const logPath = playtestLogPath(lv.brand);
+      const base = scanLog(logPath);
+      if (!base.ok) {
+        throw new HttpError(
+          '读不到试玩日志 ' + logPath + '（' + (base.error || '未知原因') + '）。'
+          + '这个文件由游戏客户端在启动时创建 —— 确认 ' + lv.brand + ' 客户端开着、且这台机器上跑过。',
+          404,
+        );
+      }
+      const common = {
+        level: { brand: lv.brand, levelId: lv.levelId },
+        logPath,
+        logSize: base.size,
+        logTruncated: base.truncated,
+        newestGia: lv.latestLog ? { name: lv.latestLog.name, size: lv.latestLog.size, mtime: lv.latestLog.mtime } : null,
+      };
+
+      if (op === 'status') {
+        return {
+          ok: true, op, ...common, ...playtestSummary(base.state),
+          note: '开跑/结束读的是 output_log.txt（实时）。`.gia` 是**这一局结束之后**才落盘的，'
+            + '所以「本局的运行时日志」要等局结束才有 —— 局中要看画面对不对只能截图。',
+        };
+      }
+
+      /* op === wait */
+      const timeoutSec = clampNum(args.timeoutSec, 90, 5, 300);
+      const afterSec = clampNum(args.afterSec, 0, 0, 120);
+      const backSec = clampNum(args.backSec, 0, 0, 3600);
+      const pollMs = clampNum(args.pollMs, 400, 100, 5000);
+      const t0 = Date.now();
+
+      let state = base.state;
+      let offset = base.size;
+      let hit = null;
+      if (backSec > 0) {
+        const pre = shouldHit(state, t0, { backSec });
+        if (pre.hit) hit = { backHit: true, atMs: state.lastStartAtMs, epochSec: state.epochSec, token: state.token };
+      }
+
+      while (!hit && Date.now() - t0 < timeoutSec * 1000) {
+        await sleep(pollMs);
+        const inc = readIncrement(logPath, offset);
+        if (!inc.ok) throw new HttpError('读试玩日志出错：' + inc.error, 500);
+        if (inc.rotated) {
+          // 游戏重启 → 日志换代 → 从头对齐，别拿旧 offset 读新文件
+          offset = 0;
+          state = createPlaytestState();
+          continue;
+        }
+        if (!inc.text) continue;
+        offset = inc.size;
+        const before = state.lastStartAtMs;
+        state = reduceLogLines(state, inc.text.split(/\r?\n/)).state;
+        if (state.lastStartAtMs !== before && Number.isFinite(state.lastStartAtMs)) {
+          hit = { backHit: false, atMs: state.lastStartAtMs, epochSec: state.epochSec, token: state.token };
+        }
+      }
+
+      const waitedSec = Math.round((Date.now() - t0) / 100) / 10;
+      if (!hit) {
+        return {
+          ok: true, op, ...common,
+          hit: false, timedOut: true, waitedSec, timeoutSec,
+          hint: '这段时间里没有新的「试玩开跑」。确认人在编辑器里真的点了「试玩」；'
+            + '如果是刚点过一小会儿，用 backSec=60 回扫那一局。',
+        };
+      }
+
+      if (afterSec > 0) await sleep(afterSec * 1000);
+      const now = playtestSummary(state);
+      return {
+        ok: true, op, ...common,
+        hit: true, backHit: !!hit.backHit,
+        startedAt: state.startedAtText || null,
+        startedAtMs: Number.isFinite(hit.atMs) ? hit.atMs : null,
+        epochSec: hit.epochSec,
+        token: hit.token,
+        waitedSec, afterSec,
+        inPlaytest: now.inPlaytest,
+        elapsedSec: now.elapsedSec,
+        stillRunning: now.inPlaytest,
+        nextSteps: '现在调 `miliastra_shot op=capture target=game` 拿到的就是「开跑后约 ' + afterSec + ' 秒」的画面；'
+          + '运行时日志（.gia）要等这一局结束之后再用 `miliastra_log` 取。',
       };
     },
   },
