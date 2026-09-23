@@ -43,6 +43,7 @@ import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/
 import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './lib/leveldata.mjs';
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
+import { simOp, disposeSimAll, simRuntimeInfo } from './lib/sim.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
   shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture,
@@ -253,6 +254,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
+  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它 —— 不占用真机、不需要试玩按钮；但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
 ];
 
 export const PROMPT_RULES = [
@@ -320,6 +322,7 @@ const TOOLS = [
         errorLog: cur ? scanErrorLog(cur.luaDir, cur.levelDir) : null,
         // 编辑器 / 游戏进程（best-effort，带缓存；拿不到就 available:false，不影响其它字段）
         processes: clientProcesses(),
+        sim: simRuntimeInfo(),
         hint: cur
           ? (cur.luaFiles.length
             ? '活文件（' + cur.luaFiles.length + ' 个）=' + cur.luaFiles.map((f) => f.path).join('  |  ')
@@ -1348,6 +1351,39 @@ const TOOLS = [
   },
 
   {
+    name: 'miliastra_sim',
+    description:
+      '内置**千星模拟器**（引擎吸收自 miliastra-beyond-simulator，GPL-3.0-only）：在游戏之外搭界面、跑 levelScript、出画面 PNG。'
+      + 'op=state 看工程/控件树/属性；op=patch 改工程（add/set/remove/setCanvas/addScript…，数据写要带 expectedRevision）；'
+      + 'op=play 控制试玩（start/step/pointer/key/click/pause/serverGet/serverSet/serverSend/stop）；'
+      + 'op=shot 出 PNG（target=ui 编辑器视图 / target=play 试玩画面，Host 按引擎场景树渲染，不需要窗口在前台）；'
+      + 'op=load 列/读模拟器工作区存档；op=save 存进该工作区；op=reset 清空工程。'
+      + '⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
+      + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
+      + '\n\n**典型调用**：`{"op":"state","summaryOnly":true}`；跑一局看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`',
+    parameters: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['state', 'patch', 'play', 'shot', 'load', 'save', 'reset'], description: '默认 state。' },
+        summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
+        treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树，默认 200。' },
+        patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。', additionalProperties: true },
+        action: { type: 'string', description: 'op=play 的动作：start / device / view / get / step / pointer / key / click / pause / resume / stop / serverGet / serverSet / serverSend。' },
+        args: { type: 'object', description: 'op=play 的参数，如 {"x":640,"y":360} / {"dt":0.033} / {"type":"click","x":640,"y":360}。', additionalProperties: true },
+        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 的取景：ui=编辑器视图（静态），play=试玩画面（需先 op=play action=start）。' },
+        label: { type: 'string', description: 'op=shot 的文件名标签（便于事后认图）。' },
+        archive: { type: 'string', description: 'op=load 的存档相对路径；省略=列出工作区里的存档。' },
+        path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
+      },
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
+    async execute(args = {}) {
+      return await simOp(args, {});
+    },
+  },
+
+  {
     name: 'miliastra_echo',
     description:
       '调试用：把 text 原样回显，并带上插件版本与本机存档根目录。'
@@ -1401,6 +1437,11 @@ export function apply(ctx) {
       }
       log('已注册 ' + n + '/' + TOOLS.length + ' 个工具');
     });
+  }
+
+  // 模拟器：插件卸载/重挂时收掉所有会话的试玩 Worker，不留幽灵进程
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => { void disposeSimAll(); }, name + ': sim dispose');
   }
 
   if (typeof ctx.inject === 'function') {
@@ -1745,6 +1786,15 @@ function makeHandler() {
             })),
           },
         });
+        return;
+      }
+      // 模拟器路由：面板的「模拟器」tab 走这条（与工具共用同一个 simOp，状态不分裂）
+      if (route === PREFIX + '/engine' && req.method === 'POST') {
+        const body = await readBody(req);
+        const args = body && typeof body === 'object'
+          ? (body.args && typeof body.args === 'object' ? body.args : body)
+          : {};
+        sendJson(res, 200, { ok: true, data: lossless(await simOp(args, {})) });
         return;
       }
       if (route === PREFIX + '/tool' && req.method === 'POST') {

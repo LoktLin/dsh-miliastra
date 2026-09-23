@@ -150,15 +150,21 @@ check('信封剥离正确：unwrap 拿到的是**业务返回体**，不是 wrap
 // ---------- ③ 用 stub ctx 跑 apply，截获组件 ----------
 let Registered = null;
 let registeredSpec = null;
+let registeredBySlot = null;
 let cleanup = null;
 check('apply(stubCtx) 走槽位路线并交出组件 + cleanup', () => {
+  const injectedSlots = [];
+  registeredBySlot = {};
   const ctx = {
     effect(fn) { const d = fn(); return typeof d === 'function' ? d : () => {}; },
     slots: {
-      inject(name, cb) { assert(name === 'sidebar.footer.action', '注入了别的槽位：' + name); return cb(); },
+      // 0.1.0 起 apply 会注入两个槽位：sidebar.footer.action（入口）+ conversation.view（三个 tab）
+      inject(name, cb) { injectedSlots.push(name); return cb(); },
       register(spec, Component) {
-        registeredSpec = spec; Registered = Component;
-        return () => { Registered = null; };
+        const slot = spec && spec.name;
+        (registeredBySlot[slot] = registeredBySlot[slot] || []).push({ spec, Component });
+        if (slot === 'sidebar.footer.action') { registeredSpec = spec; Registered = Component; }
+        return () => { if (slot === 'sidebar.footer.action') Registered = null; };
       },
     },
   };
@@ -167,7 +173,23 @@ check('apply(stubCtx) 走槽位路线并交出组件 + cleanup', () => {
   assert(registeredSpec && registeredSpec.name === 'sidebar.footer.action', '槽位名不对');
   assert(registeredSpec.id === 'dsh-miliastra', 'list 型槽位必须带 id');
   assert(typeof cleanup === 'function', 'apply 必须返回 cleanup');
-  return registeredSpec.name + '#' + registeredSpec.id + '  order=' + registeredSpec.order;
+  assert(injectedSlots.includes('sidebar.footer.action'), '没有注入侧边栏入口槽位');
+  assert(injectedSlots.includes('conversation.view'), '没有注入会话区 tab 槽位');
+
+  // 会话区三个 tab（初级功能 / 高级功能 / 模拟器）
+  const views = registeredBySlot['conversation.view'] || [];
+  assert(views.length === 3, 'conversation.view 应注册 3 个 tab，实际 ' + views.length);
+  const tabs = clientExports.__testViewTabs;
+  assert(Array.isArray(tabs) && tabs.length === 3, '__testViewTabs 缺失或不是 3 项');
+  for (const t of tabs) {
+    const hit = views.find((v) => v.spec && v.spec.id === t.id);
+    assert(hit, '缺少 tab：' + t.id);
+    const label = typeof hit.spec.label === 'function' ? hit.spec.label() : hit.spec.label;
+    assert(label === t.label, 'tab 文案不对：' + label + ' vs ' + t.label);
+    assert(hit.spec.order === t.order, 'tab order 不对：' + t.id);
+    assert(typeof hit.Component === 'function', 'tab 没有组件：' + t.id);
+  }
+  return registeredSpec.name + '#' + registeredSpec.id + '  + tabs=' + views.map((v) => (typeof v.spec.label === 'function' ? v.spec.label() : v.spec.label)).join('/');
 });
 
 check('样式已注入 <style data-plugin="dsh-miliastra">，且带 id 便于回收', () => {
@@ -810,6 +832,57 @@ check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
   clientExports.apply(ctx2);
   assert(again, 'cleanup 后重挂失败');
   return '已重挂';
+});
+
+// ---------- ⑤ 0.1.0：会话区三个 tab（初级功能 / 高级功能 / 模拟器）----------
+
+check('三个 tab 的注册计划是纯数据（id / 文案 / 顺序写坏 = tab 静默消失）', () => {
+  const tabs = clientExports.__testViewTabs;
+  assert(Array.isArray(tabs) && tabs.length === 3, 'tab 计划不是 3 项');
+  const labels = tabs.map((t) => t.label).join('/');
+  assert(labels === '初级功能/高级功能/模拟器', 'tab 文案不对：' + labels);
+  const ids = tabs.map((t) => t.id);
+  assert(new Set(ids).size === 3, 'tab id 有重复');
+  assert(ids.every((id) => id.indexOf('dsh-miliastra-') === 0), 'tab id 前缀不对：' + ids.join(','));
+  assert(tabs.map((t) => t.order).join(',') === '30,31,32', 'tab 顺序不对');
+  return labels + '  ids=' + ids.join(',');
+});
+
+check('「初级功能」视图：SSR 真渲染，只出 ① 关卡 + ② 代码', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'basic' }));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(text.includes('① 关卡'), '缺 ① 关卡');
+  assert(text.includes('② 代码'), '缺 ② 代码');
+  assert(!text.includes('③ 日志与画面'), 'basic 视图不该出 ③ 日志与画面');
+  assert(html.includes('dsh-miliastra-inline'), '没有 inline 样式类 —— 视图模式没生效（会仍按浮层渲染）');
+  return '两栏，无 ③';
+});
+
+check('「高级功能」视图：只出 ③ 日志与画面（含高级诊断），不重复 ①②', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'advanced' }));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(text.includes('③ 日志与画面'), '缺 ③ 日志与画面');
+  assert(!text.includes('① 关卡'), 'advanced 视图不该出 ① 关卡');
+  assert(!text.includes('② 代码'), 'advanced 视图不该出 ② 代码');
+  return '一栏（③ + 高级诊断）';
+});
+
+check('inline 视图里没有关闭按钮（视图不该有"关掉自己"这回事）', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'basic' }));
+  assert(!/dsh-miliastra-x/.test(html), 'inline 视图里出现了关闭按钮');
+  return '无 ×';
+});
+
+check('「模拟器」视图能真渲染（不是占位）：7 个动作 + 诚实空态', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorView, {}));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(text.includes('模拟器'), '缺标题');
+  for (const label of ['刷新', '编辑器画面', '开始试玩', '单步', '刷新画面', '停止', '重置工程']) {
+    assert(text.includes(label), '缺按钮：' + label);
+  }
+  assert(text.includes('还没有画面'), '没给「还没取到画面」的诚实提示（空着让人猜）');
+  assert(html.includes('dsh-miliastra-inline'), '模拟器视图没走全宽 inline 布局');
+  return '7 个动作 + 空态提示 + 全宽布局';
 });
 
 console.log('');

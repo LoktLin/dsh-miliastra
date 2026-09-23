@@ -33,7 +33,8 @@
 **三条铁律**（先记住，能省掉大部分返工）：
 
 1. **路径不写死** —— 换账号、换图、重建关卡都会换目录，一律从 `miliastra_health` 拿。
-2. **写操作只发生在 `miliastra_code` / `miliastra_probe`** —— 都自带备份、审计与双钥匙；其余工具**一个字节都不写**。
+2. **写操作只发生在 `miliastra_code` / `miliastra_probe` / `miliastra_sim`** —— 前两个自带备份、审计与双钥匙；
+   `miliastra_sim` 只写**本插件数据目录**下的 `simulator/`（工程存档）与 `shots/`（PNG），**不碰游戏存档、地图与活文件**；其余工具**一个字节都不写**。
 3. **不做越界的事** —— 不读游戏内存、不连游戏进程的端口、不冒充编辑器；**试玩按钮只能人点**（没有自动化通道，也不做）。
 
 > 不知道自己该调哪条 → 看下一节的「[工具](#工具)」表（一屏导航），
@@ -47,7 +48,7 @@
 > (Genshin Impact UGC) into native DSH tools — locate the live `levelScript`/client script, deploy it
 > safely, read the map archive and runtime logs, take screenshots, and run probes — so an AI agent
 > can debug a UGC level without you copy-pasting files and logs.
-> **8 tools + a sidebar panel**, GPL-3.0-only (engine partly derived from miliastra-beyond-simulator — see NOTICE), Windows, DSH `0.1.2-rc.1+`.
+> **9 tools + a sidebar panel**, GPL-3.0-only (engine partly derived from miliastra-beyond-simulator — see NOTICE), Windows, DSH `0.1.2-rc.1+`.
 > The Chinese sections above/below are the full manual; this page is the one-screen entry point.
 
 **30-second quick start**
@@ -69,6 +70,7 @@
 | **`miliastra_playtest`** | **Live** start/end detection from `output_log.txt` (measured 0.07–0.18 s). The only channel that sees the moment a run starts — `.gia` is written only after a run ends |
 | **`miliastra_shot`** | Screenshots: `capture` / **`burst`** (one call: wait for start → wait N s → shoot N frames) / `list` / `clean` / `targets` |
 | **`miliastra_probe`** | 5 read-only diagnostic templates (`ping` / `tree` / `instantiate` / `api-surface` / `api-check`): deploy → playtest → `collect` |
+| **`miliastra_sim`** | **Built-in simulator**: `state` / `patch` (build controls, set fields, mount scripts) / `play` (`start`/`step`/`pointer`/`key`/`click`/`serverSet`…) / `shot` (PNG of the editor view or the running play scene) / `load`+`save`. Runs Lua outside the game — **passing the simulator is not passing on device** |
 | **`miliastra_echo`** | Echoes its arguments, to rule out "the plugin isn't loaded / the argument was dropped" |
 
 > **Full parameter reference** (every op, every argument, defaults and allowed values) is the
@@ -93,8 +95,9 @@
 **Ground rules**
 
 1. **Never hardcode paths** — they change with account / level / map.
-2. **Only `miliastra_code` and `miliastra_probe` write to disk**; both back up first and use double-key
-   confirmations for destructive actions. Every other tool writes nothing.
+2. **Only `miliastra_code`, `miliastra_probe` and `miliastra_sim` write to disk**; the first two back up first and use
+   double-key confirmations for destructive actions. `miliastra_sim` writes only inside the plugin data directory
+   (`simulator/` archives, `shots/` PNGs) — never to game saves, maps or live script files. Every other tool writes nothing.
 3. **Nothing out of bounds** — no reading game memory, no connecting to game process ports, no
    impersonating the editor. **Playtest can only be clicked by a human** (there is no automation channel,
    and we do not build one).
@@ -225,6 +228,7 @@ dsh web
 | **`miliastra_log`** | 读 `.gia` 运行时日志：`sessions` 列局面、`tail` 结构化读正文、`grep` 按 TAG / 正则过滤、`tags` 汇总标签、**`runs` 按「局」切分 + 局间 diff**、**`metrics` 指标汇总**（见下）。可用 `run=<epoch>` 只看某一局 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
 | **`miliastra_playtest`** | **试玩开跑 / 结束的实时侦测**（见下）：`status` 看现在在不在试玩、开了几秒；`wait` 等下一次开跑（可 `afterSec` 要「开跑 N 秒后」） | 想知道「开跑那一刻」时 —— 这是**唯一**能看到开跑的通道，`.gia` 不行 |
 | **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档（`list` 先看每个模板的白话说明）。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
+| **`miliastra_sim`** | **内置模拟器**：`state` 看工程/控件树/属性、`patch` 改工程（加控件/改字段/挂脚本）、`play` 控制试玩（`start`/`step`/`pointer`/`key`/`click`/`serverSet`…）、`shot` 出 PNG（`ui` 编辑器视图 / `play` 试玩画面）、`load`/`save` 模拟器工作区存档 | **想在游戏之外先跑一遍**（搭界面 / 改控件 / 跑 levelScript / 看画面）时。⚠️ 引擎吸收自 `miliastra-beyond-simulator`；**模拟器通过 ≠ 真机通过** |
 | **`miliastra_shot`** | **截图**（5 个 op）：`capture` 截游戏/编辑器窗口、**`burst` 连拍**（`awaitPlaytest:true` 可「等开跑 → 等 N 秒 → 连拍」，**一次调用**；`dryRun` 先看计划）、`list` 看截到哪了、`clean` 清理（默认只报告）、`targets` 列出当前**能截哪些窗口** | 需要「看画面对不对」时 —— 日志回答不了观感 |
 | `miliastra_echo` | 回显参数 | 怀疑插件没生效 / 参数丢了时先调它 |
 <!-- END MANUAL:tool-picker -->
@@ -237,6 +241,8 @@ dsh web
 > 所以这一节**不会过时** —— 而手写的清单一定会（实测：本文件第一段曾把版本号停在 `0.0.1`，六次发布没人发现）。
 
 <!-- BEGIN GENERATED:tools -->
+> ⚠️ **新工具**（还没进 `ORDER`，已排在最后）：`miliastra_sim`
+
 #### `miliastra_health`
 
 Miliastra Wonderland 工具链：环境体检。**任何时候要操作原神 UGC，先调它。**返回：扫到的客户端安装（正式服/Beta）、所有关卡、当前判定为「正在开发」的关卡、活文件（沙箱 .lua）清单与大小、地图存档 .gil、运行时日志目录与日志文件数。编辑器 UI 操作（建模板/挂脚本）没有自动化通道——本工具只做文件层体检，替代不了人点编辑器。
@@ -383,6 +389,25 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 参数 | 类型 | 必填 | 取值 | 说明 |
 |---|---|---|---|---|
 | `text` | `string` | **是** | —— | 要回显的字符串。 |
+
+#### `miliastra_sim`
+
+内置**千星模拟器**（引擎吸收自 miliastra-beyond-simulator，GPL-3.0-only）：在游戏之外搭界面、跑 levelScript、出画面 PNG。op=state 看工程/控件树/属性；op=patch 改工程（add/set/remove/setCanvas/addScript…，数据写要带 expectedRevision）；op=play 控制试玩（start/step/pointer/key/click/pause/serverGet/serverSet/serverSend/stop）；op=shot 出 PNG（target=ui 编辑器视图 / target=play 试玩画面，Host 按引擎场景树渲染，不需要窗口在前台）；op=load 列/读模拟器工作区存档；op=save 存进该工作区；op=reset 清空工程。⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。
+
+**典型调用**：`{"op":"state","summaryOnly":true}`；跑一局看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`
+
+| 参数 | 类型 | 必填 | 取值 | 说明 |
+|---|---|---|---|---|
+| `op` | `string` | 否 | `state` / `patch` / `play` / `shot` / `load` / `save` / `reset` | 默认 state。 |
+| `summaryOnly` | `boolean` | 否 | `true` / `false` | 只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。 |
+| `treeLimit` | `number` | 否 | —— | op=state 在 summaryOnly 下最多回多少条控件树，默认 200。 |
+| `patch` | `object` | 否 | —— | op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。 |
+| `action` | `string` | 否 | —— | op=play 的动作：start / device / view / get / step / pointer / key / click / pause / resume / stop / serverGet / serverSet / serverSend。 |
+| `args` | `object` | 否 | —— | op=play 的参数，如 {"x":640,"y":360} / {"dt":0.033} / {"type":"click","x":640,"y":360}。 |
+| `target` | `string` | 否 | `ui` / `play` | op=shot 的取景：ui=编辑器视图（静态），play=试玩画面（需先 op=play action=start）。 |
+| `label` | `string` | 否 | —— | op=shot 的文件名标签（便于事后认图）。 |
+| `archive` | `string` | 否 | —— | op=load 的存档相对路径；省略=列出工作区里的存档。 |
+| `path` | `string` | 否 | —— | op=save 的存档文件名（默认 qxqy-simulator.save.json）。 |
 <!-- END GENERATED:tools -->
 
 ### 深入阅读（**按需加载**，别一次读所有）
@@ -393,6 +418,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 你手上在做的事 | 读这个 |
 |---|---|
 | 试玩：开跑那一刻 / 连拍 / 截图选窗 / 缩略图 | [`docs/功能详解.md`](docs/功能详解.md) |
+| **模拟器**：三个 tab 怎么挂的 / 画面怎么来的 / 失控脚本护栏 / 哪些还没验证 | [`docs/模拟器与视图.md`](docs/模拟器与视图.md) |
 | 部署安全：备份与还原 / 部署指纹 / `fixbom` / `lintMode` | [`docs/功能详解.md`](docs/功能详解.md) |
 | 读日志：按「局」切分 / 指标汇总 / 关卡表几何事实 | [`docs/功能详解.md`](docs/功能详解.md) |
 | 面板怎么用（三栏 / 自动跟随 / 多活文件 / 一键还原） | [`docs/面板与活文件安全.md`](docs/面板与活文件安全.md) |

@@ -280,12 +280,14 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 工单 | 内容 | 验收（量化） | 依赖 | 状态 |
 |---|---|---|---|---|
 | **W1** | 许可与声明 → GPL-3.0-only（`LICENSE` / `NOTICE` / `package.json` / `README`） | 三处声明一致；既有 462 项仍全绿 | 无 | ✅ 已完成（`c76da4d`，与 W2 同批落地） |
-| **W2** | 引擎子树搬入 + 依赖 + esbuild 构建脚本 | 引擎测试在本仓可跑（非 skip） | W1 | 🟡 进行中：搬入 + 依赖 + **129 项引擎测试已绿**；**esbuild 构建脚本待做** |
+| **W2** | 引擎子树搬入 + 依赖 + esbuild 构建脚本 | 引擎测试在本仓可跑（非 skip） | W1 | 🟡 进行中：搬入 + 依赖 + **129 项引擎测试已绿**；**esbuild 构建脚本待做**（面板当前走 Host 出 PNG，不依赖浏览器产物） |
+| **W3** | Host 适配层（路由 + 工具，命名按 QT3） | 新路由/工具契约测试绿；`readme-test` 逐字比对过 | W2 | ✅ 已完成：`lib/sim.mjs` + `miliastra_sim` 工具（9 个 op/动作）+ `POST /miliastra/engine`；README 工具块已重生成，`readme-test` 14/0 |
+| **W4** | `conversation.view` 三 tab 骨架（UI 自写） | 三 tab 可切、状态独立、互不白屏 | 无（不依赖 W2/W3） | ✅ 已完成：`dsh-miliastra-basic` / `-advanced` / `-simulator`，SSR 断言 5 项（`client-render-test` 37/0） |
 | **W3** | Host 适配层（路由 + 工具，命名按 QT3） | 新路由/工具契约测试绿；`readme-test` 逐字比对过 | W2 | 待确认 |
 | **W4** | `conversation.view` 三 tab 骨架（UI 自写） | 三 tab 可切、状态独立、互不白屏 | 无（不依赖 W2/W3） | 待确认 |
-| **W5** | 初级/高级卡片归类搬家（QT1 定稿后） | 现有 10 张卡功能不变形；462 项绿 | W4 | 待确认 |
-| **W6** | 模拟器视图（接引擎 API 渲染 + 交互） | 读 `.gil` 出控件树/画布；写回经官方编辑器验证 | W2 W3 | 待确认 |
-| **W7** | 搬对方测试子集进回归 | 引擎 129 + 我们 462 一起全绿，断言数只增不减 | W2 | 🟡 部分：129 项已跑绿（`npm run test:engine`），**尚未并入 `npm test`** |
+| **W5** | 初级/高级卡片归类搬家（QT1 定稿后） | 现有 10 张卡功能不变形；462 项绿 | W4 | ✅ 已完成：`Panel` 加 `inline`+`group`（basic = ①② / advanced = ③ 含高级诊断 / all = 浮层三栏），侧边栏入口保留 |
+| **W6** | 模拟器视图（接引擎 API 渲染 + 交互） | 读 `.gil` 出控件树/画布；写回经官方编辑器验证 | W2 W3 | 🟡 部分：视图 + 7 个动作（编辑器画面/开始试玩/单步/刷新画面/停止/居中点击/重置）+ 控件树 + 试玩日志可用；**写回 `.gil` 的真机验证仍未做**（保持 `pending`） |
+| **W7** | 搬对方测试子集进回归 | 引擎 129 + 我们的一起全绿，断言数只增不减 | W2 | ✅ 已完成：引擎 129 项 + 新增 `tests/sim-test.mjs` 31 项都进 `npm test`；`npm test` 退出码 0 |
 
 ---
 
@@ -302,6 +304,11 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 2026-09-24 | **引擎测试 129 项全绿**（0 失败 / 0 跳过 / 1.9s） | `npm run test:engine`；注：129 是引擎三包（studio+lua-runtime+server），对方全仓 169 还含 `dsh-plugin`/`web`/`mcp` 三套（按 Q5 **未搬**） |
 | 2026-09-24 | 许可同批落地：`LICENSE`→GPL-3.0-only、新增 `NOTICE`、README 四处同步、`readme-test` 的 docs 可达性补链后 14/0 | 同 commit `c76da4d` |
 | 2026-09-24 | 既有套件复核：11 子集 + 自检**全绿**（client-render 32 / deploy 30 / giaruns 25 / leveldata 44 / live-check 9 / lualint 32 / metrics 39 / playtest 63 / probe-deploy 16 / readme 14 / shot 103 / smoke 48） | 逐个跑，见输出 |
+| 2026-09-24 | **W3 完成**：`lib/sim.mjs`（会话级控制器 + `simOp` 七个 op）+ `miliastra_sim` 工具 + `POST /miliastra/engine` 路由 | `tests/sim-test.mjs` **31/0**；`readme-test` 14/0；README 生成块 25 253 → 27 002 字符 |
+| 2026-09-24 | **W4/W5 完成**：会话区三 tab（初级功能/高级功能/模拟器）+ `Panel(inline, group)` 复用（浮层入口保留） | `client-render-test` 32 → **37/0**（新增：tab 计划纯数据、两视图分组、inline 无关闭按钮、模拟器视图空态） |
+| 2026-09-24 | **W7 完成**：引擎 129 + sim 31 并入 `npm test` | `npm test` 退出码 **0**；另跑 giaruns 25 / leveldata 44 / metrics 39 / playtest 63 / live-check 9 全绿 |
+| 2026-09-24 | 安全护栏实测：`while true do end` 的脚本超时后返回错误、Worker 被 terminate、随后 `stop` 仍可用 | `tests/sim-test.mjs` 的 3 条 ★ 断言（耗时 < 12 秒） |
+| 2026-09-24 | 新文档 `docs/模拟器与视图.md`（两轴对照 / tab 契约出处 / PNG 出图 / 三条安全纪律 / 已验证 vs 未验证 / 排障） | README「深入阅读」已链接，`readme-test` 的 docs 可达性通过 |
 
 ```yaml
 handoff:
