@@ -268,11 +268,74 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
   return `${html.length} 字符，三栏 + ${10} 张卡片齐备`;
 });
 
-check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且四个模板都列出来', () => {
-  const PanelComp = clientExports.__testPanel;
-  const html = renderToStaticMarkup(React.createElement(PanelComp, {
+// 探针现在收在「高级诊断」折叠区里（默认收起），所以下面这些断言都要显式展开它。
+const openAdv = (extra) => Object.assign({
+  open: true, setOpen: () => {}, rootRef: { current: null }, __advOpen: true,
+}, extra || {});
+
+check('★ 日志格式化：拆出 时间 / [TAG] / 正文，且只对疑似异常着色', () => {
+  const p = clientExports.__testParseLogRecord;
+  assert(typeof p === 'function', '缺少 __testParseLogRecord（日志格式化无法单独回归）');
+
+  const a = p({ time: '17:04:15', message: '[P5D] 《双相》就绪（4 关，控件 12）' });
+  assert(a.time === '17:04:15', '时间没拆出来：' + a.time);
+  assert(a.tag === 'P5D', '[TAG] 没拆出来：' + a.tag);
+  assert(a.text === '《双相》就绪（4 关，控件 12）', '正文里还留着 [TAG] 前缀：' + a.text);
+  assert(a.bad === false && a.warn === false, '正常行不该被判为异常');
+
+  // 异常行要显眼
+  assert(p({ time: 't', message: '[X] 创建控件失败：返回 nil' }).bad === true, '「失败」没被判为疑似异常');
+  assert(p({ time: 't', message: '[X] Error: bad argument count' }).bad === true, 'error 没被判为疑似异常');
+  assert(p({ time: 't', message: '[X] 重试中 timeout' }).warn === true, 'timeout 没被判为警告');
+  // ⚠️ 反例：`err=nil` 是**正常**输出（探针常打），不能一见 nil 就标红
+  assert(p({ time: 't', message: '[PROBE] EnableUpdate ok=true err=nil' }).bad === false,
+    'err=nil 被误判为异常 —— 这会让「只看异常」全是噪音');
+
+  // 没有 [TAG] 的行也要能用
+  const noTag = p({ time: 't', message: '裸正文一行' });
+  assert(noTag.tag === '' && noTag.text === '裸正文一行', '无 TAG 的行拆错了：' + JSON.stringify(noTag));
+
+  const rows = clientExports.__testToLogRows([{ time: 't', message: '[A] 一' }, { time: 't', message: '[B] 二' }]);
+  assert(rows.length === 2 && rows[0].tag === 'A' && rows[1].tag === 'B', 'toLogRows 批量转换错了');
+  return '时间/[TAG]/正文 拆对；失败↔正常↔警告 判对（含 err=nil 反例）';
+});
+
+check('★ 超长日志行折叠成「点开看全」（1 万字符的枚举 dump 不该撑爆面板）', () => {
+  // 用一条真·超长记录渲染：走 LogRow → 应产出 <details> 而不是直接把 1 万字塞进 DOM
+  const long = 'x'.repeat(10000);
+  const rows = clientExports.__testToLogRows([{ time: 't', message: '[BIG] ' + long }]);
+  assert(rows[0].text.length === 10000, '超长正文被解析改了长度');
+  const detail = renderToStaticMarkup(React.createElement(clientExports.__testLogRow, rows[0], 0));
+  assert(detail.includes('<details'), '超长行没有折叠成 <details>');
+  assert(detail.includes('共 10000 字符'), '折叠摘要里没说总长度');
+  assert(detail.indexOf('xxxx') < detail.indexOf('<pre'), '摘要里不该直接铺满全文');
+  const short = renderToStaticMarkup(React.createElement(clientExports.__testLogRow,
+    clientExports.__testToLogRows([{ time: 't', message: '[S] 短行' }])[0], 0));
+  assert(!short.includes('<details'), '短行不该折叠');
+  return '超长行 → <details> + 总长度提示；短行不折叠';
+});
+
+check('★ 探针默认**收起**：不展开就看不到它（它主要给 AI 用，不该占创作者视线）', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
     open: true, setOpen: () => {}, rootRef: { current: null },
   }));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/高级诊断/.test(flat), '找不到「高级诊断」折叠标题');
+  assert(/AI 专用/.test(flat) && /你最好别碰/.test(flat), '没在标题上写明「AI 专用 / 你最好别碰」');
+  assert(/平时不用展开/.test(flat), '收起态没说明「平时不用展开」');
+  // 收起时：探针的按钮/正文都不该在 DOM 里（不是 width:0 藏起来，是真不渲染）
+  for (const nope of ['部署探针', '收回结论', '翻字典', '试钥匙']) {
+    assert(!flat.includes(nope), '收起态却渲染了探针内容：' + nope);
+  }
+  // 展开后必须真的出现
+  const open = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
+  const openFlat = open.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/部署探针/.test(openFlat) && /翻字典/.test(openFlat), '展开后探针内容没出来');
+  return '收起：只有标题 + AI 专用标签；展开：内容才进 DOM';
+});
+
+check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且四个模板都列出来', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
   // ① 得先回答「探针是什么」「要付什么代价」—— 作者的原话是「没看懂探针作用」
@@ -317,46 +380,40 @@ check('★ 面板兜底文案与 Host 的 PROBE_INFO 不脱节（模板清单、
 
 check('★ 部署后（已部署状态）渲染出「第 4 步：还原我的脚本」按钮', () => {
   const PanelComp = clientExports.__testPanel;
-  const html = renderToStaticMarkup(React.createElement(PanelComp, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
+  const html = renderToStaticMarkup(React.createElement(PanelComp, openAdv({
     __probeBackup: 'C:\\x\\_backup\\双相_20260923104427_备份.lua',
-  }));
+  })));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert(/探针已部署/.test(flat), '已部署状态没给出提示');
   assert(/重新试玩一局/.test(flat), '已部署状态没提醒「重新试玩」');
-  assert(/还原我的脚本/.test(flat), '缺「④ 还原我的脚本」按钮 —— 用户会忘记把探针换回去');
+  // 认按钮元素本身，别认字面 —— 收起态的提示语里也含「还原我的脚本」这几个字
+  assert(/④ 还原我的脚本<\/button>/.test(html), '缺「④ 还原我的脚本」按钮 —— 用户会忘记把探针换回去');
   // 只有「已部署」才出现，别一上来就摆一个会误点的按钮
-  const clean = renderToStaticMarkup(React.createElement(PanelComp, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
-  }));
-  assert(!/还原我的脚本/.test(clean), '未部署时不该出现「还原我的脚本」按钮');
+  const clean = renderToStaticMarkup(React.createElement(PanelComp, openAdv()));
+  assert(!/④ 还原我的脚本<\/button>/.test(clean), '未部署时不该出现「还原我的脚本」按钮');
   return '已部署：提示 + 重新试玩提醒 + 还原按钮；未部署：按钮不出现';
 });
 
 check('★ Host 清单比磁盘少时，探针卡片提示「Host 是旧版 + 重启 dsh web」', () => {
   // 模拟「运行中的 Host 还是旧版」：只返回 3 个模板（磁盘上已有 4 个）
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv({
     __probeInfo: { templates: ['ping', 'tree', 'instantiate'], info: [], overview: {} },
-  }));
+  })));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert(/Host 是旧版/.test(flat), '没提示「运行中的 Host 是旧版」');
   assert(/api-surface/.test(flat), '没点名少了哪个模板');
   assert(/重启 dsh web/.test(flat), '提示里没给下一步动作（重启 dsh web）');
   // 反过来：Host 清单齐全时不该有这条噪音
-  const ok = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
+  const ok = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv({
     __probeInfo: { templates: ['ping', 'tree', 'instantiate', 'api-surface'], info: [], overview: {} },
-  }));
+  })));
   assert(!/Host 是旧版/.test(ok.replace(/<[^>]+>/g, ' ')), 'Host 清单齐全时不该提示旧版');
   return '缺模板时提示 + 点名缺失项 + 给出动作；齐全时不提示';
 });
 
 check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）', () => {
-  const PanelComp = clientExports.__testPanel;
-  const html = renderToStaticMarkup(React.createElement(PanelComp, {
-    open: true, setOpen: () => {}, rootRef: { current: null },
-  }));
+  // 展开态一起查：折叠区里的文案同样是给人看的
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
   const text = html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
   const stars = text.match(/\*\*[^*]{1,40}\*\*/g);
   assert(!stars, '界面文案里有 Markdown 粗体记号（会原样显示）：' + (stars || []).slice(0, 4).join(' | '));

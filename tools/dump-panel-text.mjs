@@ -43,8 +43,22 @@ const exports_ = windowShim.__captured.factory((name) => {
   throw new Error('未提供的模块：' + name);
 });
 
+const SAMPLE_LOGS = [
+  { time: '17:04:12', message: '[P5D] OnInit' },
+  { time: '17:04:12', message: '[P5D] EnableUpdate ok=true err=nil' },
+  { time: '17:04:15', message: '[P5D] 《双相》就绪（4 关，控件 12，画布 1600x1000）' },
+  { time: '17:04:16', message: '[P5D] 收到首个按键事件: KeyboardCraftspersonKey38Down（来源=KeyEventType）' },
+  { time: '17:04:19', message: '[P5D] 创建控件失败：InstantiateClientUIControl 返回 nil（模板库为空？）' },
+  { time: '17:04:20', message: '[P5D] 重试中 timeout=3000' },
+  { time: '17:04:21', message: '[BIG] ' + 'Enum.KeyEventType.KeyboardCraftspersonKey1Down=…, '.repeat(200) + 'END' },
+];
+
 const html = req('react-dom/server').renderToStaticMarkup(
-  React.createElement(exports_.__testPanel, { open: true, setOpen() {}, rootRef: { current: null } }),
+  React.createElement(exports_.__testPanel, {
+    open: true, setOpen() {}, rootRef: { current: null },
+    __advOpen: process.argv.includes('--adv'),
+    __logs: process.argv.includes('--logs') ? exports_.__testToLogRows(SAMPLE_LOGS) : [],
+  }),
 );
 
 const lines = html
