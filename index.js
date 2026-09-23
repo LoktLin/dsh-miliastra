@@ -29,7 +29,7 @@ const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
-import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, fixedBackupPath } from './lib/codefile.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';

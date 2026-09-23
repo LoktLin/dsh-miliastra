@@ -14,7 +14,28 @@
 > 上图为实机截图（部分账号信息已打码）。三栏分工：
 > **① 关卡**（自动跟随换图 · 进程状态 · 地图体检）／
 > **② 代码**（活文件选择与体检 · 脚本一致性 · 备份还原 · 部署）／
-> **③ 日志**（历史局面 · TAG 汇总 · 探针一键）。
+> **③ 日志**（历史日志 · TAG 汇总 · 试玩完自动取回 · 可折叠的「高级诊断」：读界面控件 / 探针）。
+
+---
+
+## 文档索引
+
+| 文档 | 位置 | 内容 |
+|---|---|---|
+| 本文件 | 本仓库 `README.md` | 装 / 用 / 关键知识 / 能力边界 |
+| 变更记录 | 本仓库 [`CHANGELOG.md`](CHANGELOG.md) | 每个版本加了什么、修了什么、怎么验的 |
+| 许可 | 本仓库 [`LICENSE`](LICENSE) | Apache-2.0 |
+
+**配套的离线知识库不在本仓库里**（内容是官方文档的抽取产物，版权归米哈游；
+本仓库只放可发布的代码）。它们在工作区的 `docs/` 与 `tools/` 下：
+
+| 产物 | 从哪来 | 有什么用 |
+|---|---|---|
+| `docs/千星奇域_API参考.md` | `tools/extract-api-reference.mjs` | 153 个接口 + 27 张枚举表（官方原文是整页压成一行的 35KB，翻不到） |
+| `docs/千星奇域_按键事件枚举对照表.md` | `tools/extract-key-enums.mjs` | 按键真名与默认物理键（`KeyboardMoveLeftKeyDown` = A …） |
+| `docs/千星奇域_补间动画.md` | `tools/extract-api-reference.mjs` | `Tween` / `TweenSequence` / 31 条缓动曲线 |
+
+> 官方文档更新后重跑抽取脚本即可刷新，**不要手改产物**。
 
 ---
 
@@ -113,7 +134,7 @@ dsh web
 | **`miliastra_code`** | 活文件的 读 / 部署 / 体检 / 还原。部署一律：**先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 BOM**，并**先做 Lua 结构校验**（见下） | 改完本地脚本要投进沙箱时 |
 | **`miliastra_map`** | 读 `<关卡ID>.gil`：关卡信息、**客户端控件谱系**（控件模板索引 / 名字 / 父 / 子）、脚本源码快照比对 | 判断「哪些控件能被脚本动态创建」、判断「跑的是不是本地这版代码」 |
 | **`miliastra_log`** | 读 `.gia` 运行时日志：列局面、结构化读正文、按 TAG / 正则过滤、汇总标签 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
-| **`miliastra_probe`** | 探针模板化：`tree` / `instantiate` / `ping` / `api-surface` 四个只读诊断脚本，渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
+| **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
 | `miliastra_echo` | 回显参数 | 怀疑插件没生效 / 参数丢了时先调它 |
 
 ### 部署前的 Lua 结构校验（`lintMode`）
@@ -287,10 +308,10 @@ miliastra_code op=inspect file=角色B.lua    # 指定活文件体检（含 SHA-
 
 ```powershell
 # —— L1 契约 / 单元 ——
-node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例（21 项）
+node tests/smoke.mjs              # 工具层：lossless JSON / JSON Schema / 只读用例（22 项）
 node tests/deploy-test.mjs        # 部署与备份**安全**：备份失败不覆盖 / 原子写 / 固定名 / 回滚 / 双钥匙 / 自覆盖拦截（28 项，临时目录）
 node tests/probe-deploy-test.mjs  # 探针部署：用假存档根跑通 deploy→collect，不碰真活文件；含「每个模板都能过结构校验」（10 项）
-node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵 / 日志格式化 / 备份卡片（26 项）
+node tests/client-render-test.mjs # L3 真实 React 渲染：入口文案 / 窄态 / 令牌 fallback / 无幽灵 / 日志格式化 / 备份卡片 / 读界面控件（27 项）
 node tests/lualint-test.mjs       # Lua 结构校验器：合法构造不误报 / 写坏的必须报对行号 / 15 个真文件回归（32 项）
 
 # —— 开发用小工具（不随包发布）——
@@ -331,24 +352,11 @@ node tests/live-check.mjs                    # 默认 http://127.0.0.1:3080
 |---|---|---|---|
 | L1 | 技能 `selftest.mjs`（16 项） | 两个半边的契约、工具注册形状、路由信封、cleanup 可回收 | 真实渲染、真实装配 |
 | L1 | 上面四个单元测试（92 项） | 部署/探针的字节级行为，Lua 结构校验器不误报也不漏报 | 同上 |
-| L3 | `client-render-test.mjs`（26 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 备份卡片讲清后果** | 壳会不会把它挂上去 |
+| L3 | `client-render-test.mjs`（27 项） | 组件真能渲染、窄态/关闭态正确、**样式无裸色值**、**粉蓝视觉身份与结构件齐全**、**图标是合法内联 PNG**、信封剥离正确、**日志格式化 / 自动取回判据 / 备份卡片 / 读界面控件 讲清后果** | 壳会不会把它挂上去 |
 | L4 | `live-check.mjs`（9 项） | 宿主里工具可用、路由可用、`/status` 报出 `clientHalf` | **像素有没有画出来** |
 
 `live-check.mjs` 覆盖：状态路由、工具按名调用、`health` / `log` / `map` 四个只读工具真跑一遍、
 `echo` 回显、未知路由 404。**它证明不了「侧边栏面板真的渲染出来了」** —— 那需要刷新页面用眼睛看一眼。
-
-### 客户端排障：先看控制台的三条日志
-
-`lib/client.js` 故意在三个位置打了日志（client 半边默认是**全静默**的，这是排障最贵的地方）：
-
-| 控制台看到 | 说明 |
-|---|---|
-| 一条 `[dsh-miliastra]` 都没有 | bundle **根本没被执行** → 宿主侧的 client 组装问题 |
-| 有 `factory 已执行`，没有 `apply 运行中` | 模块系统没 materialize 本包 |
-| 有 `apply 运行中：react=无` | 平台没提供 react 单例 |
-| 有 `apply 运行中`，3 秒后出现 `没等到 sidebar.footer.action 的声明` | 这一版壳没渲染该槽位（或槽位名变了） |
-| 有 `入口已注册到 sidebar.footer.action` 但界面看不到 | 壳渲染了槽位但忽略了条目 |
-| 有 `factory 已执行` 但完全没有 apply 之后的日志 | apply 抛错被 catch（会有 `面板注册失败` 前缀） |
 
 ### 生效边界（实测，别猜）
 
@@ -368,10 +376,15 @@ compose 好的 boot 图（也就是 `window.__DSH_BOOT__`），确认本包那�
   "declared": true,
   "inBootGraph": true,          // ← 这一行为 true，浏览器才会加载面板
   "entryId": "dsh-miliastra",
-  "bundle": { "path": "…/lib/client.js", "size": 17523 },
+  "url": "/plugins/??dsh-miliastra/client.js&rev=<内容哈希>",
+  "rev": "1b6f8c3a25a6",
   "note": "本包的 client bundle 已进入 window.__DSH_BOOT__ 图 —— 浏览器会加载它"
 }
 ```
+
+`rev` 是 **bundle 内容的哈希**：改完 `lib/client.js` 再查 `/status`，这个值会变
+（实测从 `1c199bcb7fe6` → `be02b7acd127`）—— 所以「刷新页面能不能拿到新版」有机器凭据，
+不用靠猜。
 
 这是**不需要人眼**的最强证据（再往下就只剩「像素有没有画出来」了）。
 
