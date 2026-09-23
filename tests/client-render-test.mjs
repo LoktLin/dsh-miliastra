@@ -497,6 +497,56 @@ check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`*
   return '无 ** / 反引号 残留';
 });
 
+check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者要求的三件事都要看得见）', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __backups: {
+      ok: true, count: 2, backupDir: 'C:\\x\\external_lua_file\\_backup',
+      fixedBackup: 'C:\\x\\external_lua_file\\_backup\\双相.bak',
+      fixedExists: true,
+      entries: [
+        { name: '双相.bak', path: 'C:\\x\\external_lua_file\\_backup\\双相.bak', size: 22446, fixed: true, createdAt: '2026-09-23T19:00:00.000Z' },
+        { name: '双相.20260923-180000_备份.lua', path: 'C:\\x\\external_lua_file\\_backup\\双相.20260923-180000_备份.lua', size: 22446, fixed: false, createdAt: '2026-09-23T18:00:00.000Z' },
+      ],
+    },
+  }));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  // ① 备份写在哪 —— 作者明确要求「写到被替换的文件旁边」
+  assert(/旁边/.test(flat) && /_backup/.test(flat), '没说清备份写在哪里');
+  // ② 固定统一的备份名
+  assert(/固定名备份/.test(flat) && /双相\.bak/.test(flat), '没显示固定名备份');
+  // ③ 一键还原（不用自己挑版本）
+  assert(/还原到最新备份<\/button>/.test(html), '缺「还原到最新备份」按钮');
+  assert(/最近一次覆盖前/.test(flat), '没说明固定名那份到底是什么');
+  // 固定名那条要标星，方便在列表里认出来
+  assert(/★ 双相\.bak/.test(flat), '列表里固定名那份没有标记');
+  // 确认步骤要讲清后果（覆盖谁、会先备份、会校验回滚）—— 这是覆盖前最后一句话
+  const confirmHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __pendingRestore: '__fixed__',
+    __backups: {
+      ok: true, count: 1, backupDir: 'C:\\x\\_backup',
+      fixedBackup: 'C:\\x\\_backup\\双相.bak', fixedExists: true,
+      entries: [{ name: '双相.bak', path: 'C:\\x\\_backup\\双相.bak', size: 10, fixed: true }],
+    },
+  }));
+  const confirmFlat = confirmHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert(/覆盖当前活文件/.test(confirmFlat), '确认步骤没说覆盖谁');
+  assert(/会先把当前版本再备份一次/.test(confirmFlat), '确认步骤没说要先备份');
+  assert(/会自动回滚/.test(confirmFlat), '确认步骤没提校验/回滚');
+
+  // 没有固定名时不该出现一键按钮，而要给一句解释（Host 旧版的情况）
+  const noFixed = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+    __backups: { ok: true, count: 1, backupDir: 'C:\\x\\_backup', fixedBackup: 'C:\\x\\_backup\\双相.bak',
+      fixedExists: false, entries: [{ name: '双相.20260923-180000_备份.lua', path: 'C:\\x\\_backup\\双相.20260923-180000_备份.lua', size: 10, fixed: false }] },
+  }));
+  assert(!/还原到最新备份<\/button>/.test(noFixed), '没有固定名备份却给了一键还原按钮');
+  assert(/Host 可能是旧版/.test(noFixed.replace(/<[^>]+>/g, ' ')), '没解释为什么没有固定名备份');
+  return '位置 + 固定名 + 一键还原 + ★标记 + 确认后果；缺固定名时给解释';
+});
+
 check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
   cleanup();
   let again = null;

@@ -29,7 +29,7 @@ const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
-import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile } from './lib/codefile.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, fixedBackupPath } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords } from './lib/gia.mjs';
 import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
@@ -87,6 +87,8 @@ function resolveLevel(q) {
  *   · 没给 → 优先名字里带常见关键词的，再退到列表第一个
  * `miliastra_health` 会把**全部**活文件列出来，供调用方挑选。
  */
+const pathBasenameOf = (p) => String(p || '').split(/[\\/]/).pop();
+
 const chooseLua = (lv, name) => {
   if (!lv || !lv.luaFiles.length) return null;
   if (name) {
@@ -96,8 +98,13 @@ const chooseLua = (lv, name) => {
     }
     return hit;
   }
-  return lv.luaFiles.find((f) => /双相|测试|main|levelScript/i.test(f.name))
-    || lv.luaFiles.slice().sort((a, b) => b.mtimeMs - a.mtimeMs)[0]; // 兜底取**最近改动**的那个，而不是文件名排序第一个
+  // ⚠️ 兜底「最近改动」时必须**跳过附属文件**（探针源码 / 备份）：
+  //    早期探针部署会把 `_探针_xxx.lua` 写进活文件目录，而它是最新的 mtime，
+  //    于是后续不带 file 的操作全都打到了探针上 —— 等于在错的文件上做备份/部署/还原。
+  const real = lv.luaFiles.filter((f) => !f.auxiliary);
+  return real.find((f) => /双相|测试|main|levelScript/i.test(f.name))
+    || real.slice().sort((a, b) => b.mtimeMs - a.mtimeMs)[0]   // 兜底取**最近改动**的那个，而不是文件名排序第一个
+    || null;
 };
 
 /** 结构对象（不是客户端控件）：容器、布局、各种 HierarchyRoot，以及内置布局控件。 */
@@ -180,18 +187,42 @@ const TOOLS = [
       + '确认没问题可 lintMode:"warn" 只提示、"off" 跳过。'
       + 'op=inspect 只体检不改动；'
       + 'op=backups 列出该活文件的全部备份（时间/SHA/是否带 BOM）；op=backup 手动备份一份；'
-      + 'op=restore backup=<备份文件绝对路径> 用它覆盖活文件 —— **还原前会先把当前版本再自动备份一次**（双保险）。'
-      + '⚠️ 部署不会热加载正在进行的试玩：要 停试玩 → 部署 → 重开试玩。',
+      + 'op=restore 用它覆盖活文件 —— **backup 可以不传**，不传就用固定名那份 `<原名>.bak`。'
+      + '⚠️ 部署不会热加载正在进行的试玩：要 停试玩 → 部署 → 重开试玩。'
+      + '\n\n**安全约定（写活文件的地方都遵守，别绕过）**：'
+      + '①活文件是**唯一副本**（没有 git、没有撤销），所以**备份失败就中止覆盖**，绝不带着「没有备份」去写；'
+      + '②**原子写**（同目录临时文件 → fsync → rename），断电/崩溃不会留下半截损坏的文件；'
+      + '③写完必校验 SHA，**校验不过自动回滚**到覆盖前那一版；'
+      + '④备份就在**被替换文件的旁边**：`<活文件目录>\\_backup\\`；'
+      + '⑤每次备份都写**两份** —— 固定名 `<原名>.bak`（还原默认用它）+ 一份带**本地时间**戳的历史（永不自动删）；'
+      + '⑥`noBackup` 必须同时传 `allowNoBackup:true` 才生效（不给随手绕过安全网）；'
+      + '⑦所有写操作都回执 `restoreWith` —— 照着它跑就能还原。',
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore'], description: '默认 inspect。' },
         level: { type: 'string', description: '关卡 ID / 品牌 / 脚本名片段；省略=当前关卡。' },
-        file: { type: 'string', description: '指定活文件名（默认取该关卡最近改动的 .lua）。' },
+        file: {
+          type: 'string',
+          description: '指定活文件名（省略=该关卡最近改动的那个 .lua；**探针源码/备份这类附属文件会被自动跳过**）。'
+            + '一个关卡可以有多个活文件，拿不准先用 miliastra_health 或 op=inspect 看清单。',
+        },
         source: { type: 'string', description: 'op=deploy：要投进去的本地文件绝对路径。' },
-        backup: { type: 'string', description: 'op=restore：要还原的备份文件绝对路径（从 op=backups 拿）。' },
-        backupDir: { type: 'string', description: '备份目录（默认活文件同级 _backup；可用环境变量 MILIASTRA_BACKUP_DIR 覆盖）。' },
-        noBackup: { type: 'boolean', description: 'op=deploy：跳过备份（危险，默认 false）。' },
+        backup: {
+          type: 'string',
+          description: 'op=restore：要还原的备份文件绝对路径（从 op=backups 拿）。**省略 = 用固定名那份 `<原名>.bak`**（最近一次覆盖前的版本）。',
+        },
+        backupDir: {
+          type: 'string',
+          description: '备份目录。默认就是活文件旁边的 `_backup\\`（写在这里是为了让备份和真身待在一起）。'
+            + '可用环境变量 MILIASTRA_BACKUP_DIR 改到别处，但那会削弱「备份就在旁边」这一点，一般不要动。',
+        },
+        noBackup: {
+          type: 'boolean',
+          description: 'op=deploy：跳过备份。**默认 false，正常部署请勿使用** —— 备份是这块脚本唯一的还原手段。'
+            + '真要跳过必须同时传 allowNoBackup:true，且覆盖后无法还原。',
+        },
+        allowNoBackup: { type: 'boolean', description: 'op=deploy：确认「我知道跳过备份的后果」。仅与 noBackup:true 搭配使用。' },
         lintMode: {
           type: 'string',
           enum: ['strict', 'warn', 'off'],
@@ -215,7 +246,7 @@ const TOOLS = [
           op,
           level: { brand: lv.brand, levelId: lv.levelId, accountId: lv.accountId },
           luaDir: lv.luaDir,
-          files: lv.luaFiles.map((f) => ({ name: f.name, size: f.size, mtime: f.mtime })),
+          files: lv.luaFiles.map((f) => ({ name: f.name, size: f.size, mtime: f.mtime, ...(f.auxiliary ? { auxiliary: true } : {}) })),
           inspected: destPath ? inspect(destPath) : null,
         };
       }
@@ -237,31 +268,54 @@ const TOOLS = [
         if (!destPath) throw new Error('没找到活文件路径。');
         const r = listBackups(destPath, { backupDir: args.backupDir });
         return {
-          ok: true, op, dest: destPath, backupDir: r.dir, count: r.entries.length,
+          ok: true, op, dest: destPath, backupDir: r.dir,
+          fixedBackup: r.fixedPath,
+          fixedExists: r.entries.some((e) => e.fixed),
+          count: r.entries.length,
           entries: r.entries,
+          restoreWithFixed: r.entries.some((e) => e.fixed) ? restoreCommand(null, destPath) : null,
           note: r.entries.length
-            ? '还原用 op=restore backup=<上面的 path>。**还原前会自动把当前版本再备份一次**，还原错了还能再回来。'
-            : '还没有任何备份。首次 op=deploy 时会自动产生。',
+            ? '还原有两条路：① **不传 backup** —— 直接用固定名那份（`' + pathBasenameOf(r.fixedPath) + '`），最省事；'
+              + '② 传 backup=<上面某条 path> 指定某一版。'
+              + '**无论走哪条，还原前都会自动把当前版本再备份一次**，还原错了还能再回来。'
+            : '还没有任何备份（这个活文件从没被本工具覆盖过）。首次 op=deploy 时会自动产生（同时写一份固定名 `<原名>.bak`）。',
         };
       }
       if (op === 'backup') {
         if (!destPath) throw new Error('没找到活文件路径。');
         const r = backupFile(destPath, { backupDir: args.backupDir });
-        return { ok: r.ok, op, dest: destPath, ...r };
+        return {
+          ok: r.ok, op, dest: destPath, ...r,
+          restoreWith: restoreCommand(null, destPath),
+          note: r.ok ? '已写两份：固定名 `' + pathBasenameOf(r.fixed || '') + '`（还原默认用它）+ 一份带本地时间戳的历史。' : null,
+        };
       }
       if (op === 'restore') {
-        if (!args.backup) throw new Error('op=restore 需要 backup（备份文件绝对路径，先跑 op=backups 拿）。');
         if (!destPath) throw new Error('没找到目标活文件路径。');
-        const r = restoreFile(args.backup, destPath, { backupDir: args.backupDir });
-        return { ok: r.ok, op, level: { levelId: lv.levelId }, ...r, error: r.error || (r.errors || [])[0] || null };
+        // backup 可不传 = 用固定名那份（<原名>.bak）。这是「固定统一备份名」的用处：还原有确定目标。
+        const r = restoreFile(args.backup || null, destPath, { backupDir: args.backupDir });
+        return {
+          ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
+          error: r.error || (r.errors || [])[0] || null,
+          restoreWith: restoreCommand(null, destPath),
+          usedFixedBackup: r.usedFixedBackup === true,
+        };
       }
       if (op === 'deploy') {
         if (!args.source) throw new Error('op=deploy 需要 source（要投进去的本地文件绝对路径）。');
         if (!destPath) throw new Error('没找到目标活文件路径（关卡里还没有 .lua？先用 miliastra_health 看）。');
-        const r = deployFile(args.source, destPath, { backupDir: args.backupDir, noBackup: args.noBackup === true, lintMode: args.lintMode });
+        const r = deployFile(args.source, destPath, {
+          backupDir: args.backupDir,
+          noBackup: args.noBackup === true,
+          allowNoBackup: args.allowNoBackup === true,
+          lintMode: args.lintMode,
+        });
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
           lintSummary: r.lint ? (r.lint.ok ? '结构正常' : '发现问题') : '（未校验）',
+          restoreWith: r.fixedBackup
+            ? restoreCommand(null, destPath)
+            : (r.backup ? restoreCommand(r.backup, destPath) : null),
           nextStep: r.ok ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果' : null,
         };
       }
@@ -524,19 +578,35 @@ const TOOLS = [
         if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——先在编辑器里挂一个客户端脚本。`);
         const chosen = chooseLua(lv, args.file);
         const dest = chosen ? chosen.path : lv.luaDir + '\\' + (lv.levelId + '_probe.lua');
-        const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-        const probeSrc = (args.saveTo || (lv.luaDir + '\\_探针_' + r.template + '_' + r.tag + '_' + stamp + '.lua'));
-        if (!args.saveTo) fs.writeFileSync(probeSrc, r.lua, 'utf8');
+        const now = new Date();
+        const stamp = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0')
+          + '-' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0');
+        /*
+         * ⚠️ 探针源码**绝不能写进活文件目录**（`external_lua_file`）。
+         *    踩过：以前写在那里（`_探针_xxx.lua`），而「当前活文件」是按 mtime 最新的那个 → 探针文件成了「当前文件」，
+         *    之后任何不带 file 的操作（体检/备份/部署/还原）都会打到探针上。
+         *    现在写到**备份目录**里：紧挨着被替换的文件（作者要求「写到被替换的文件旁边」），
+         *    又不会被当成活文件。`pickLuaFile` / `chooseLua` 另有名字护栏。
+         */
+        const probeDir = defaultBackupDir(dest, args.backupDir);
+        const probeSrc = args.saveTo || (probeDir + '\\_探针_' + r.template + '_' + r.tag + '_' + stamp + '.lua');
+        if (!args.saveTo) {
+          fs.mkdirSync(probeDir, { recursive: true });
+          fs.writeFileSync(probeSrc, r.lua, 'utf8');
+        }
         const dep = deployFile(probeSrc, dest, { backupDir: args.backupDir, lintMode: args.lintMode });
         return {
           ok: dep.ok, op, template: r.template, tag: r.tag,
           label: (PROBE_INFO[r.template] || {}).label || null,
           probeSource: probeSrc, ...dep,
           collectWith: `miliastra_probe op=collect tag=${r.tag}`,
-          restoreWith: dep.backup ? `miliastra_code op=restore backup=${dep.backup}` : null,
+          restoreWith: dep.fixedBackup
+            ? `miliastra_code op=restore backup=${dep.fixedBackup}`
+            : (dep.backup ? `miliastra_code op=restore backup=${dep.backup}` : null),
           nextStep: dep.ok
             ? '⚠️ 现在活文件是探针，**你的玩法这一局不会跑**。去编辑器里「停止试玩 → 重新试玩一局」（不会热加载），'
-              + '起来约 5 秒后 op=collect 收结论；**收完记得还原你的脚本**' + (dep.backup ? '（上面的 restoreWith 就是还原命令）' : '')
+              + '起来约 5 秒后 op=collect 收结论；**收完记得还原你的脚本**'
+              + (dep.fixedBackup ? '：op=restore 不传 backup 就是用固定名那份（' + dep.fixedBackup + '）' : '')
             : '部署失败，活文件未被改动。',
         };
       }
