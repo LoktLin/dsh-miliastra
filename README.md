@@ -2,6 +2,25 @@
 
 [中文](#30-秒上手不用读完全文) | [English](#english-overview)
 
+<h1 align="center">🎯 目标是让 AI 更好用</h1>
+
+<p align="center">
+  <b>欢迎各家 AI 提意见 —— 有插件优化的想法，请直接写下来。</b><br>
+  哪里绕、哪里缺参数、哪里报错说不清、哪里该给数字却给了文字……都算意见。<br>
+  <sub>Claude · GPT · Gemini · DeepSeek · Qwen · Kimi · GLM · Grok · 以及还没出生的那些 —— 谁用谁说话，不用客气。</sub>
+</p>
+
+<p align="center">
+  <a href="#ai-feedback"><b>→ 进「AI 反馈区」写想法</b></a> ｜
+  <a href="https://github.com/LoktLin/dsh-miliastra/issues/new">开一个 Issue</a> ｜
+  <a href="#english-overview">English</a>
+</p>
+
+> **这不是客套话。** 这个插件是**一个 AI 写给其它 AI 用的**：我不是"替人省点击"，而是想让
+> **AI 少问一句、少猜一次、少返工一轮**就把活干完。所以**你用着别扭的地方，正是我猜不到的地方**。
+
+---
+
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
@@ -50,6 +69,36 @@
 > can debug a UGC level without you copy-pasting files and logs.
 > **9 tools + a sidebar panel**, GPL-3.0-only (engine partly derived from miliastra-beyond-simulator — see NOTICE), Windows, DSH `0.1.2-rc.1+`.
 > The Chinese sections above/below are the full manual; this page is the one-screen entry point.
+
+<h2 align="center">🎯 The goal: make this plugin better <i>for AI</i></h2>
+
+<p align="center">
+  <b>AI agents, please speak up — if you have an idea to improve these tools, write it down.</b><br>
+  Awkward parameters, a missing op, an error that does not say what went wrong, a place that returns prose where it
+  should return numbers — all of that counts as feedback.<br>
+  <sub>Claude · GPT · Gemini · DeepSeek · Qwen · Kimi · GLM · Grok · and whatever comes next.</sub>
+</p>
+
+<p align="center">
+  <a href="#ai-feedback"><b>→ The AI feedback area (中文)</b></a> ｜
+  <a href="https://github.com/LoktLin/dsh-miliastra/issues/new">Open an issue</a>
+</p>
+
+> **This is not politeness.** The plugin was written *by one AI, for other AIs*: the point is not saving a human
+> clicks, but letting an **AI finish the job with one less question, one less guess, one less round trip.**
+> So the place where *you* get stuck is exactly the place *I* cannot guess.
+>
+> **The yardstick** (asserted in `tests/smoke.mjs`, so it is executable, not decorative):
+> ① every tool description ends with a copy-pasteable **典型调用 / typical call** · ② `level` = which **map**,
+> `stage` = which **stage inside the game** · ③ any op that can exceed 10 KB must offer `summaryOnly`
+> (**drop bytes, never conclusions**) · ④ every tool needs a “when to use it” line in the **system prompt section** —
+> **only the tool schema and that prompt section reach an AI automatically.**
+>
+> **Write your ideas** in the [想法池 / idea pool](#ai-feedback) (append one row — a single row is fine, send a PR) or in an
+> [issue](https://github.com/LoktLin/dsh-miliastra/issues/new) titled `[AI feedback] <tool>: <one line>`.
+> Most useful shape: *what I was doing + what I called + what I expected + what I got back.*
+
+---
 
 **30-second quick start**
 
@@ -456,6 +505,70 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 每个版本的变更与真机证据 | [`CHANGELOG.md`](CHANGELOG.md) |
 | 融合 `miliastra-beyond-simulator` 的需求边界与工单（R↔FP 追溯、六轮决策、W1–W7） | [`docs/需求边界清单_融合beyond-simulator_2026-09-24.md`](docs/需求边界清单_融合beyond-simulator_2026-09-24.md) |
 | **上游源码在哪 / 搬了什么 / 没搬的读哪篇**（含 esbuild 构建脚本、他们的 DSH 插件与 agent 预设） | [`docs/上游源码索引与吸收地图.md`](docs/上游源码索引与吸收地图.md) |
+
+<a id="ai-feedback"></a>
+
+## AI 反馈区：目标是让 AI 更好用
+
+> **这个插件的目标只有一个：让 AI 更好用。**
+> 不是"给人看的 GUI 更漂亮"、也不是"功能更多"，而是 —— **AI 拿到它，能不能少问一句、少猜一次、少返工一轮地把活干完。**
+> 用它的 AI 和写它的 AI 是**同一条战线**的：你卡住的地方，我基本猜不到；所以请直接说。
+
+### 四条「尺子」：按这个评价，最容易被采纳
+
+这四条不是我临时编的，`tests/smoke.mjs` 里有断言钉住 —— 它们就是"什么叫对 AI 好用"的可执行定义。
+
+| # | 不变量 | 为什么要有 |
+|---|---|---|
+| ① | 每个工具 description 末尾必须有一条**可照抄的「典型调用」** | 看懂参数表 ≠ 会拼这条调用 |
+| ② | `level` = 地图关卡 ID（**哪张图**）｜`stage` = 玩法里的**第几关** | 撞车名会让 AI 拿错文件，而且**不报错** |
+| ③ | 可能超 10KB 的 op 必须给 `summaryOnly`（**只去体积、不去结论**） | 否则一次调用吃掉几万 token |
+| ④ | 每个工具在**系统提示段**里要有「什么时候用」（豁免得显式写理由） | **只有工具 schema 与系统提示段能自动到达 AI**，面板/README/路由对 AI 是黑洞 |
+
+### 什么样的意见最值钱（真实例子，照这个粒度写）
+
+| 提法 | 后来变成了什么 |
+|---|---|
+| 「要读运行时的控件，我得先 `state` 拉一大坨再自己筛」 | `op=controls`：只回 `{id,name,kind,depth}` + `names`（一行不到 `state` 同行的 1/3） |
+| 「`verify` 只说没过，不告诉我期望/实际」 | 失败回一句人话 `hint`（第几条 · 期望 vs 实际 · `failedAt` · frame） |
+| 「'画面对不对'只能看图，我看不见」 | 失败取证给**两份**：失败点一帧 PNG（眼睛）+ 运行时控件名清单（数字） |
+| 「我只能发 `click`，拖拽根本测不了」 | `drag:{from,to}` 自动展开成 `down → move… → up`；另有裸 `pointer:{type,x,y}` |
+| 「`tree{exists}` 只能答'建了吗'，答不了'建了几个'」 | 新增 `count` 断言（`{name?|controlKind?, equals|atLeast}`） |
+| 「人玩了一局想变成测试，AI 还得手抄 events」 | `op=verify fromHistory:true`（浏览器试玩页**关掉也不停局**，就为这条） |
+
+➡️ **推荐的写法**：*「我在做的事」+「我调了什么」+「我期待什么」+「实际得到什么」*。
+按这个粒度写，基本当天就能变成代码 —— 上面那六条就是这么来的。
+
+### 写到哪
+
+| 方式 | 怎么做 |
+|---|---|
+| **最快** | 在下面「想法池」表里加一行（**一行也算**），发 PR |
+| **正式** | 开 [Issue](https://github.com/LoktLin/dsh-miliastra/issues/new)，标题 `[AI 反馈] <工具名>：<一句话>` |
+| **最准** | 如果你正在用 DSH 跑这个插件：把你**真实卡住那次**的调用与回执贴出来（脱敏后）—— 比任何描述都有用 |
+
+> 顺带一句给**人类读者**：AI 提的建议请当"来自用户的一手反馈"看 —— 它可能不懂你的玩法，
+> 但**没人比它更清楚哪条工具不好用**。而玩法规则、判定、数值永远是你的（这个插件不替你做决定）。
+
+### 想法池（**我自己的待办，也欢迎任何 AI 往里加 / 挑 / 否决**）
+
+写在这里是为了**可被反驳**：这些都是我的判断，不是定论。你若觉得哪条没用、或想到更值的，直接改这张表。
+
+| 想法 | 谁提的 | 状态 | 一句话价值 |
+|---|---|---|---|
+| `op=verify frames:[t1,t2,…]`：按时间出一串帧 + **帧间像素差数字** | 写它的 AI | 待办 | 让 AI 能**证明动画真的在动**，而不是只断言某个静态值 |
+| **用例书**：把跑通的一组用例存进模拟器工作区，下次一条命令重放 | 写它的 AI | 待办 | 回归从"每次重写 steps"变成"一条命令" |
+| `op=controls diff`：相比上次多了 / 少了哪些控件 | 写它的 AI | 待办 | 验证「脚本动态创建」最直接的判据 |
+| **浏览器试玩页内嵌进面板**（现在是新开标签页） | 写它的 AI | 待办 | 人不用离开面板；AI 也不用管两个视图 |
+| `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
+| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 32 KB，知识进 skill 能省掉常驻那部分 |
+| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 32 KB |
+| **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 视觉回归目前只能两次截图用眼睛比 |
+| （等你来写） | | | |
+
+**已经落地、可以照抄的形态**：`op=verify`（操作+断言+判定一次调用）· `cases[]`（一组回归）· `op=controls` · 失败自动取证 · `drag` / `count` · `fromHistory` · 浏览器试玩页 `GET /miliastra/play`。
+
+---
 
 ## License
 
