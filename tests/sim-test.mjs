@@ -109,8 +109,10 @@ ok('★ 连帧不会每帧新建文件（目录里始终只有 1 张 live 帧）
 // 按键：op=keys 从脚本源码里扫出它真正在听的键名
 const keySrc = [
   'function OnStart()',
-  '  script.Parent.OnKeyDown:Connect(function(key)',
-  '    if key == Enum.KeyEventType.KeyboardCraftspersonKey3Down then print("k3") end',
+  // 正确写法取自引擎自己的测试（lua-runtime/test/runtime.test.mjs:548）：
+  // 服务端控件模板里 `script.Parent` 是 nil，要用 `script.object:AddKeyEventListener(...)`
+  '  script.object:AddKeyEventListener(Enum.KeyEventType.KeyboardCraftspersonKey3Down, function()',
+  '    print("GOT_KEY_3")',
   '  end)',
   'end',
   '',
@@ -130,6 +132,35 @@ ok('★ 切设备后仍能切到 P2（人数没悄悄掉回 1 —— Host 自动
 
 const stopped = await simOp({ op: 'play', action: 'stop' });
 ok('op=play stop：运行态归零', stopped.running === false || stopped.running === undefined, JSON.stringify(stopped).slice(0, 120));
+
+/* ------------------------------------------------- AI 自测逻辑（op=verify） */
+
+// ① 通过：脚本 OnStart 里 print，断言「日志里出现它」
+const vPass = await simOp({ op: 'verify', name: 'self-test-pass', expect: [{ kind: 'log', contains: 'SIM_SELFTEST_OK' }] });
+ok('★ op=verify 通过：一次调用跑完「开跑→断言→判定」，passed=true 且 results 有明细',
+  vPass.passed === true && Array.isArray(vPass.results) && vPass.results.length === 1 && vPass.results[0].ok === true,
+  JSON.stringify({ passed: vPass.passed, results: vPass.results }));
+
+// ② 带事件：注入按键后再断言（at 省略 = 最后一个事件之后 0.1s，AI 不用自己算时序）
+const vKey = await simOp({ op: 'verify', name: 'self-test-key', steps: [{ key: 'KeyboardCraftspersonKey3Down' }], expect: [{ kind: 'log', contains: 'GOT_KEY_3' }] });
+ok('★ op=verify 带动事件：steps 注入按键 → 断言命中（且 at 不用自己算）',
+  vKey.passed === true, JSON.stringify({ passed: vKey.passed, events: vKey.case.events, asserts: vKey.case.asserts, results: vKey.results }));
+
+// ③ 服务端变量：setVar 之后断言变量值
+const vVar = await simOp({ op: 'verify', name: 'self-test-var', steps: [{ setVar: { entityType: 'PlayerSelf', name: 'Gold', value: 7 } }], expect: [{ kind: 'var', entityType: 'PlayerSelf', name: 'Gold', equals: 7 }] });
+ok('op=verify 断言服务端变量（setVar → var == 7）', vVar.passed === true, JSON.stringify(vVar.results));
+
+// ④ 失败要给得出诊断（AI 靠它自己定位，而不是回头问人）
+const vFail = await simOp({ op: 'verify', name: 'self-test-fail', steps: [{ setVar: { entityType: 'PlayerSelf', name: 'Gold', value: 7 } }], expect: [{ kind: 'var', entityType: 'PlayerSelf', name: 'Gold', equals: 999 }] });
+ok('★ op=verify 失败：passed=false + failedAt + 实际/期望 + 一句人话 hint',
+  vFail.passed === false && vFail.failedAt !== null && vFail.results[0].actual === 7 && vFail.results[0].expected === 999 && /断言/.test(vFail.hint || ''),
+  JSON.stringify({ passed: vFail.passed, failedAt: vFail.failedAt, r0: vFail.results[0], hint: String(vFail.hint || '').slice(0, 70) }));
+
+// ⑤ 用法错误要明确（不能静默"通过"）
+const vNoExpect = await err(() => simOp({ op: 'verify' }));
+ok('op=verify 缺 expect：明确报错（不会静默当通过）', !!vNoExpect && /expect/.test(vNoExpect), vNoExpect);
+const vBadStep = await err(() => simOp({ op: 'verify', steps: [{ fly: 1 }], expect: [{ kind: 'log', contains: 'x' }] }));
+ok('op=verify 步骤写错：报错里列出可用种类', !!vBadStep && /clickName/.test(vBadStep), vBadStep);
 
 /* ------------------------------------------------- 失控脚本的护栏（关键） */
 
