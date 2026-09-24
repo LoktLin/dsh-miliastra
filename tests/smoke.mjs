@@ -336,6 +336,25 @@ for (const [toolName, args] of CASES) {
     pass += 1;
   }
 
+  // ①b **模拟器的定位必须写在 description 里**（作者 2026-09-24 要求补：它是「真机试玩之前的预测试」）。
+  //     为什么是绊线：AI **只看得到 schema 与提示段**；这段没了，AI 会拿模拟器结果当"验过了"跟用户汇报。
+  {
+    const sim = TOOLS.find((t) => t.name === 'miliastra_sim');
+    const text = String(sim && sim.description || '');
+    const missing = [];
+    if (!/预测试/.test(text)) missing.push('「预测试」定位');
+    if (!/真机/.test(text) || !/≠/.test(text)) missing.push('「模拟器通过 ≠ 真机通过」');
+    if (!/①/.test(text) || !/③/.test(text)) missing.push('三档（①看 ②玩 ③判）');
+    if (missing.length) {
+      fail += 1;
+      failures.push('[positioning] miliastra_sim 的 description 缺了：' + missing.join(' / ')
+        + '（AI 看不到 docs，只能靠 schema 知道模拟器是"真机之前的预测试"）');
+    } else {
+      console.log('✓ miliastra_sim 的定位写在 schema 里（预测试 / ≠ 真机通过 / 三档）');
+      pass += 1;
+    }
+  }
+
   // ② 不许再有 `which` 这种和 `level` 撞车的参数名：
   //    `level` = **地图关卡 ID**（哪张图）｜`stage` = **玩法里的第几关**。两个「关卡」在中文里同名，必须靠参数名分开。
   const withWhich = TOOLS.filter((t) => JSON.stringify(t.parameters).includes('"which"'));

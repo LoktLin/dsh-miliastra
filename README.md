@@ -442,6 +442,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 #### `miliastra_sim`
 
 内置**千星模拟器**（引擎吸收自 miliastra-beyond-simulator，GPL-3.0-only）：在游戏之外搭界面、跑 levelScript、出画面 PNG。
+**定位：真机试玩之前的「预测试」** —— 在游戏外先用**同一套 Lua 与控件语义**把「可自动判定」的问题拦掉（脚本跑没跑 / 控件建没建·建了几个 / 变量与信号对不对 / 布局歪不歪 / 动画动不动）；拦不下官方素材、真机渲染、联机、性能与手感 —— 所以**模拟器通过 ≠ 真机通过**，真机那一步仍要人点试玩。
+三档共用**同一份工程与同一个会话**：①静态预览（`state`/`controls`/`shot`）②交互试玩（`play`、面板、浏览器页 `/miliastra/play`，时间**真在走**）③确定性判定（`verify`/`cases`/`fromHistory`/`frames`，**冻结时钟**、按时间点重放、可复现）。
 ★ **AI 自测逻辑主用 `op=verify`**：一次调用 = 跑一段操作 + 到点断言 + 给判定（引擎开一个全新会话**确定性重放**，可重复）。
   · `steps[]` 每步可带 `at`（模拟秒；省略 = 上一步 + `after`，默认 0.1s）：`key:"KeyboardCraftspersonKey3Down"` / `click:{x,y}`（**左下原点**）/ `clickName:"按钮名"` / **`drag:{from:[x,y],to:[x,y],steps?,gap?}`**（自动展开成 down→move…→up —— **测拖拽/滑动就用它**）/ `pointer:{type,x,y}`（手排裸指针事件）/ `setVar:{entityType,name,value}` / `sendSignal:{name,params,target}` / `view:2` / `pause` / `resume`；
   · `expect[]` 断言数组（`at` 省略 = 最后一个事件之后 0.1s ⇒ 查最终状态），kind 七种：`log{contains,level?,source?}` / `control{id?|name?,field,equals}` / `var{entityType,name,equals}` / `signal{name,direction?,values?}` / `tree{name,exists}` / **`count{name?,controlKind?,equals|atLeast}`（**建了几个** —— 列表项/连击星这类动态 UI 只能用它数）** / `lua{source}`（Lua 查询脚本，可用 query.var / query.control / query.logContains / query.logs / query.serverLogContains / query.signals）；
@@ -499,7 +501,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 你手上在做的事 | 读这个 |
 |---|---|
 | 试玩：开跑那一刻 / 连拍 / 截图选窗 / 缩略图 | [`docs/功能详解.md`](docs/功能详解.md) |
-| **模拟器**：三个 tab 怎么挂的 / 画面怎么来的 / 失控脚本护栏 / 哪些还没验证 | [`docs/模拟器与视图.md`](docs/模拟器与视图.md) |
+| **模拟器**：**它在流程里的位置（= 真机试玩之前的"预测试"，三档：看/玩/判）** ｜ 三个 tab 怎么挂的 ｜ 画面怎么来的 ｜ AI 怎么自测逻辑（`op=verify` / `frames`） ｜ 失控脚本护栏 ｜ 哪些还没验证 | [`docs/模拟器与视图.md`](docs/模拟器与视图.md) |
 | 部署安全：备份与还原 / 部署指纹 / `fixbom` / `lintMode` | [`docs/功能详解.md`](docs/功能详解.md) |
 | 读日志：按「局」切分 / 指标汇总 / 关卡表几何事实 | [`docs/功能详解.md`](docs/功能详解.md) |
 | 面板怎么用（三栏 / 自动跟随 / 多活文件 / 一键还原） | [`docs/面板与活文件安全.md`](docs/面板与活文件安全.md) |
