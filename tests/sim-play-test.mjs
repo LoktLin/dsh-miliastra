@@ -87,6 +87,19 @@ ok('页面把 AI 的交接方式写在明面上（fromHistory 的调用样例 + 
 ok('打开先 attach 已有会话，接不上才新开一局（不把人/AI 正在跑的局顶掉）',
   /play\.attach\(\)/.test(html) && /\.catch\(\(\) => play\.start\(/.test(html));
 
+/*
+ * ★ 报错必须**看得见**（2026-09-24 被嵌进面板 iframe 时暴露）：
+ * `#fatal` 原来放在 `#side` 里，而 `#side` 默认 `display:none`（要点「侧栏」才出现）——
+ * 于是「WebGL 起不来 / 会话没跑起来」一个字都看不到，用户看到的就是"一片黑"。
+ * 这条把三件事钉住：报错条在 header 下面（不在侧栏里）、WebGL 初始化失败会当场说清、舞台尺寸没定下来时不会硬套小方块。
+ */
+ok('★ 报错条在**常驻可见**的位置（不在默认隐藏的侧栏里）—— 否则出错时只剩一片黑',
+  /<\/header>\s*<div id="fatal"><\/div>/.test(html) && !/<aside id="side">[\s\S]*id="fatal"/.test(html));
+ok('★ WebGL 初始化**包了 try/catch**：拿不到 WebGL 就明说（并建议用「新窗口」打开），而不是黑屏',
+  /try\s*\{[\s\S]{0,120}new PixiPlayRenderer\(/.test(html) && /拿不到 WebGL/.test(html));
+ok('★ 舞台尺寸**还没定下来**时不硬套（0×0 时下一帧重试；另挂 ResizeObserver 跟着面板缩放）',
+  /box\.width < 40 \|\| box\.height < 40/.test(html) && /new ResizeObserver\(/.test(html));
+
 {
   /*
    * ★ 内联 `<script type="module">` 的**语法校验**。

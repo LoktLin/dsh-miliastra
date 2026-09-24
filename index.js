@@ -165,6 +165,19 @@ function reconcileWithGil(lv, livePath) {
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
 export { TOOLS };
 
+/**
+ * `/miliastra/engine` 的请求体 → `simOp` 的参数。
+ *
+ * **就是原样返回** —— 看着像废话，但这里出过一次静默事故（2026-09-24）：
+ * 早先写成「有 `body.args` 就用 `body.args`」，而 `op=play` 的参数**本来就装在 `args` 里**，
+ * 于是 `op/action` 被吃掉 → 每次调用都退化成默认的 `op=state`、且不报错 ⇒
+ * 面板的试玩按钮与浏览器试玩页双双失效（iframe 一片黑、Frame 永远 0）。
+ * 单独抽成函数是为了让回归能钉住它（`tests/smoke.mjs`）。
+ */
+export function engineArgsFromBody(body) {
+  return body && typeof body === 'object' ? body : {};
+}
+
 /* ---------------------------------------------------------------- 公共解析 */
 
 /** 定位关卡：显式 level 参数 > 当前（最近改动、有活文件）。 */
@@ -1916,13 +1929,18 @@ function makeHandler() {
         sendFile(res, bundle, 'text/javascript; charset=utf-8');
         return;
       }
-      // 模拟器路由：面板的「模拟器」tab 走这条（与工具共用同一个 simOp，状态不分裂）
+      // 模拟器路由：面板的「模拟器」tab / 浏览器试玩页走这条（与工具共用同一个 simOp，状态不分裂）
       if (route === PREFIX + '/engine' && req.method === 'POST') {
         const body = await readBody(req);
-        const args = body && typeof body === 'object'
-          ? (body.args && typeof body.args === 'object' ? body.args : body)
-          : {};
-        sendJson(res, 200, { ok: true, data: lossless(await simOp(args, {})) });
+        /*
+         * ⚠️ **别把 `body.args` 拆出来当整体参数**（2026-09-24 实测踩到，症状是"看起来在跑、其实什么都没发生"）：
+         * `op=play` 的参数**就装在 `args` 里** —— `{op:'play', action:'click', args:{x,y}}`。
+         * 早先那版写的是 `body.args && typeof body.args === 'object' ? body.args : body`，
+         * 于是 `op/action` 一起被吃掉 ⇒ `simOp({x,y})` 退化成 **`op=state`**（默认值），
+         * 而且**不报错**：面板的试玩按钮、浏览器试玩页的轮询双双静默失效（iframe 里一片黑、Frame 永远 0）。
+         * 现在原样交给 simOp（`engineArgsFromBody` 一行，有回归钉住）。
+         */
+        sendJson(res, 200, { ok: true, data: lossless(await simOp(engineArgsFromBody(body), {})) });
         return;
       }
       if (route === PREFIX + '/tool' && req.method === 'POST') {

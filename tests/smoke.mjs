@@ -13,7 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection, hostStaleness } from '../index.js';
+import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection, hostStaleness, engineArgsFromBody } from '../index.js';
 import { slimStats } from '../lib/metrics.mjs';
 
 let pass = 0;
@@ -450,6 +450,59 @@ for (const [toolName, args] of CASES) {
   } else {
     fail += 1;
     failures.push('[ergonomics] op=clientui summaryOnly 不对：' + JSON.stringify({ jCuFull, jCuSlim, keep: cuKeep, hasRendered: 'rendered' in cuSlim }));
+  }
+}
+
+/* ------------------------------------------------ 路由参数：别再把 op 吃掉（2026-09-24 真事故） */
+
+/*
+ * 事故原样：`/miliastra/engine` 早先写成「有 `body.args` 就用 `body.args`」，
+ * 而 `op=play` 的参数**本来就装在 `args` 里**（`{op:'play', action:'click', args:{x,y}}`）——
+ * 于是 `op/action` 一起被吃掉，`simOp` 退化成默认的 `op=state`，**不报错**：
+ * 面板的试玩按钮、浏览器试玩页的轮询双双静默失效（iframe 一片黑、Frame 永远 0）。
+ * 这里钉两件事：① 转换函数原样返回；② 源码里不许再出现那种"拆 args"的写法。
+ */
+{
+  const routed = engineArgsFromBody({ op: 'play', action: 'click', args: { x: 1, y: 2 } });
+  const keep = routed.op === 'play' && routed.action === 'click' && routed.args && routed.args.x === 1;
+  const nullish = JSON.stringify(engineArgsFromBody(null)) === '{}' && JSON.stringify(engineArgsFromBody(undefined)) === '{}';
+  const src = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'index.js'), 'utf8');
+  // 只看**代码行**（注释里为了解释这起事故，原样引用了那行错误写法 —— 不能被自己的注释绊倒）
+  const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  // 只看 `/engine` 那一段（`/tool` 路由里的 `body.args` 是合法的：那是 `{name, args}` 信封）
+  const iEng = code.indexOf("'/engine'");
+  const iTool = code.indexOf("'/tool'");
+  const routeSlice = iEng >= 0 && iTool > iEng ? code.slice(iEng, iTool) : '';
+  const usesHelper = /engineArgsFromBody\(body\)/.test(routeSlice);
+  const antiPattern = /body\.args/.test(routeSlice);
+  if (keep && nullish && usesHelper && !antiPattern) {
+    console.log('✓ ★ `/miliastra/engine` 的请求体原样交给 simOp（op/action 不被吃掉）—— 面板试玩按钮与试玩页靠这条');
+    pass += 1;
+  } else {
+    fail += 1;
+    failures.push('[route] engine 路由参数被改了：keep=' + keep + ' nullish=' + nullish + ' usesHelper=' + usesHelper + ' antiPattern=' + antiPattern);
+  }
+  // 反向证明：真的喂给 simOp 时，这一形状走的是 play 分支（不是退化成 state）
+  try {
+    const { simOp } = await import('../lib/sim.mjs');
+    const r = await simOp(engineArgsFromBody({ op: 'play', action: 'history' }), {});
+    if (r && r.action === 'history') {
+      console.log('✓ ★ 同一形状喂给 simOp：走的是 `play` 分支（不是退化成 state 快照）');
+      pass += 1;
+    } else {
+      fail += 1;
+      failures.push('[route] play 形状没进 play 分支：' + JSON.stringify(r).slice(0, 160));
+    }
+  } catch (e) {
+    // 没有活会话时 `op=play` 会明确报错（"play session has not started"）—— 那也是**进了 play 分支**的证据
+    const msg = (e && e.message) || String(e);
+    if (/play session has not started|play worker/.test(msg)) {
+      console.log('✓ ★ 同一形状喂给 simOp：进了 `play` 分支（没会话时如实报错：' + msg.slice(0, 60) + '）');
+      pass += 1;
+    } else {
+      fail += 1;
+      failures.push('[route] play 形状报错但不是 play 分支的错：' + msg);
+    }
   }
 }
 

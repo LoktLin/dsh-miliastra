@@ -7,8 +7,9 @@
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;margin:0;overflow:hidden}
+  /* header / 报错条 / 舞台 / footer —— 报错条是 `auto`：不报错时高度 0，报错时把舞台挤下去（永远看得见） */
   body{background:#0c1422;color:#edf3ff;font:13px/1.5 "Microsoft YaHei UI","Microsoft YaHei",Inter,sans-serif;
-       display:grid;grid-template-rows:48px minmax(0,1fr) 30px}
+       display:grid;grid-template-rows:48px auto minmax(0,1fr) 30px}
   button{font:inherit;color:inherit;cursor:pointer;background:#16233a;border:1px solid #263750;border-radius:6px;padding:5px 11px}
   button:hover:not(:disabled){border-color:#3d5b86}
   button:disabled{opacity:.4;cursor:default}
@@ -35,7 +36,15 @@
   .hint{color:#8f9caf;font-size:11px;line-height:1.5;background:#0d1726;border:1px solid #1d2b44;border-radius:6px;padding:7px 9px;margin-top:10px}
   code{background:#0d1726;border:1px solid #1d2b44;border-radius:4px;padding:0 4px;font-size:11px}
   footer{display:flex;align-items:center;gap:14px;padding:0 14px;border-top:1px solid #263750;background:#101a2a;color:#9fb0c8;font-size:12px}
-  #fatal{white-space:pre-wrap;color:#ff8a9b;background:#3a1418;border:1px solid #8b2635;border-radius:6px;padding:8px 10px;margin-top:10px;display:none}
+  /*
+   * ⚠️ 报错条必须在**看得见的地方**：`#fatal` 以前放在 `#side` 里，而 `#side` 默认 `display:none`
+   * （要点「侧栏」才出现）—— 于是「WebGL 起不来 / 会话没跑起来」这类错误**一个字都看不到**，
+   * 用户看到的就是"一片黑"（2026-09-24 被 iframe 嵌进面板时暴露）。
+   * 现在它是一条常驻在 header 下面的红条，出错就显形。
+   */
+  #fatal{display:none;white-space:pre-wrap;color:#ffd0d8;background:#3a1418;border-bottom:1px solid #8b2635;
+         padding:8px 14px;font:12px/1.5 Consolas,monospace}
+  #fatal.show{display:block}
 </style>
 </head>
 <body>
@@ -53,6 +62,7 @@
     <label>视角 <select id="viewSel"></select></label>
     <button id="panelBtn">侧栏</button>
   </header>
+  <div id="fatal"></div>
 
   <main id="main">
     <div id="stageWrap"><div id="stage" tabindex="0"><canvas id="cv" width="1600" height="900"></canvas></div></div>
@@ -66,7 +76,6 @@
       <h4>这一局的操作时间线</h4>
       <div id="hist" class="log"></div>
       <div class="hint" id="histHint"></div>
-      <div id="fatal"></div>
     </aside>
   </main>
 
@@ -86,7 +95,7 @@
 
   function showError(error) {
     const box = $('fatal')
-    box.style.display = 'block'
+    box.classList.add('show')
     box.textContent = '⚠ ' + (error?.message || String(error))
     $('state').className = 'tag err'
     $('state').textContent = '● 出错'
@@ -108,13 +117,31 @@
     return env.data
   }
 
-  const renderer = new PixiPlayRenderer(el.cv)
+  /*
+   * WebGL 起不来（iframe 里被策略挡、显卡驱动、无头环境）必须**当场说清楚** ——
+   * 否则用户看到的就是一块黑，完全不知道是"引擎没跑"还是"浏览器不给 WebGL"。
+   */
+  let renderer
+  try {
+    renderer = new PixiPlayRenderer(el.cv)
+  } catch (error) {
+    showError(new Error('这个页面拿不到 WebGL，画不出来：' + (error?.message || error)
+      + ' —— 请用面板里的「新窗口 ↗」单独打开本页试试（有些宿主页面会限制 iframe 的图形能力）'))
+    throw error
+  }
 
+  /**
+   * 把画布缩放到舞台里。
+   * ⚠️ 必须容忍**尺寸还没定下来**的时刻（iframe 刚插进 DOM、面板还在布局）：`0 × 0` 时
+   * 别硬套 `Math.max(120,…)`（那会得到一个 120×80 的小方块，看起来就是"什么都没画"），
+   * 而是**下一帧再试**。另外挂一个 ResizeObserver：面板缩放/侧栏开合都能自动跟上。
+   */
   function fit() {
     const snap = play.snapshot
     if (!snap?.canvasWidth) return
     const pad = 24
     const box = el.stageWrap.getBoundingClientRect()
+    if (box.width < 40 || box.height < 40) { requestAnimationFrame(fit); return }
     const scale = Math.min((box.width - pad) / snap.canvasWidth, (box.height - pad) / snap.canvasHeight)
     const w = Math.max(120, Math.floor(snap.canvasWidth * scale))
     const h = Math.max(80, Math.floor(snap.canvasHeight * scale))
@@ -123,6 +150,8 @@
     el.cv.style.width = w + 'px'
     el.cv.style.height = h + 'px'
   }
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => fit()).observe(el.stageWrap)
+  addEventListener('load', () => requestAnimationFrame(fit))
 
   function renderChrome(snap) {
     $('frame').textContent = 'Frame ' + (snap.frame ?? 0)

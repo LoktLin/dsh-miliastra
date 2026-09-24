@@ -986,19 +986,29 @@ check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是�
   assert(/dsh-miliastra-playframe/.test(html), 'iframe 没有样式类（会渲染成一条细缝）');
   assert(/src="\/miliastra\/play"/.test(html), 'iframe 的 src 不是 /miliastra/play');
   assert(/title="千星模拟器试玩页/.test(html), 'iframe 没有 title（无障碍与排障都要）');
-  // ③ 顺序：左（工程/画面/操作/验收单）在 iframe 之前 ⇒ iframe 落在右边那 2 份里
+  // ③ 顺序：左（画面/操作/验收单/工程）在 iframe 之前 ⇒ iframe 落在右边那 2 份里
   assert(html.indexOf('dsh-miliastra-playside') >= 0
     && html.indexOf('dsh-miliastra-playside') < html.indexOf('dsh-miliastra-playframe'),
   'iframe 没排在左列之后（会跑到 1 的那一半去）');
-  // ④ 左列几块都在
-  for (const label of ['① 工程与控件树', '② 画面与日志', '③ 试玩操作', '④ 试玩页', '工程适配', '验收单', '操作时间线']) {
+  // ④ 左列几块都在；**顺序 = "最常看的在最上面"**（作者实测「画面在左下角」就是被工程卡挤下去的）
+  for (const label of ['① 画面与日志', '② 试玩操作', '验收单', '④ 工程与控件树 / 工程适配', '工程适配', '操作时间线']) {
     assert(text.includes(label), '左列缺：' + label);
   }
+  const idx = ['① 画面与日志', '② 试玩操作', '验收单', '④ 工程与控件树'].map((s) => text.indexOf(s));
+  assert(idx.every((n) => n >= 0) && idx.slice().sort((a, b) => a - b).join(',') === idx.join(','),
+    '左列顺序不对（画面必须排第一）：' + idx.join(' / '));
   // ⑤ 传输控制与验收单按钮都在（它们驱动的是**同一个**会话）
   for (const label of ['开始试玩', '单步', '停止', '读清单', '跑这一组', '扫描活文件', '搭进模拟器']) {
     assert(html.includes(label), '缺控件/按钮：' + label);
   }
-  return '1:2 + iframe(/miliastra/play) + 左列 ①~④ + 窄屏兜底';
+  // ⑥ 滚动模型：**左列自己滚、右边不下沉**（否则左列一长，滚下去 iframe 出视野 —— 作者实测「右侧啥都没」）
+  assert(/dsh-miliastra-simbody\{[^}]*overflow:hidden/.test(css),
+    'simbody 不该是整页滚动容器（会把试玩页推出视野）');
+  assert(/dsh-miliastra-playside\{[^}]*overflow-y:auto/.test(css), '左列没有自己的滚动条（画面/操作会被 iframe 顶下去）');
+  assert(/dsh-miliastra-playframe\{[^}]*flex:11auto[^}]*min-height:240px/.test(css), 'iframe 没跟着右列高度自适应');
+  // ⑦ 工程那块默认折叠（不然一长就把上面两块挤走）
+  assert(/<details[^>]*dsh-miliastra-sec/.test(html), '「工程与控件树」没做成可折叠的 <details>');
+  return '1:2 + iframe(/miliastra/play) + 左列顺序(画面最先) + 左列内滚 + 工程折叠 + 窄屏兜底';
 });
 
 check('操作时间线的一行：说清"什么时候、做了什么"（AI 照着就能写成 steps[]）', () => {
