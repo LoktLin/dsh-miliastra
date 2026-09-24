@@ -355,6 +355,34 @@ for (const [toolName, args] of CASES) {
     }
   }
 
+  /*
+   * ①c **AI 自己"玩"的量级与读屏口径也必须写在 description 里**（2026-09-24 实测后补）。
+   *
+   * 为什么值得绊线：这几条 AI **猜不出来**，而缺了就会做出错误决定 ——
+   *   · 以为能"逐帧看画面再反应"（做不到：读一次场景 ≈200ms，眼睛是 ≈5Hz 离散采样）；
+   *   · 不知道画面上的文字可以直接从 `textbox.text` 读（于是去截屏、或干脆瞎点）；
+   *   · 只发 `keyDown` 不配对 `keyUp` —— 等于**一直按住**（实测把小人一路推到掉出边界重生）；
+   *   · `op=keys` 只扫 `KeyEventType.X`、漏掉真脚本的**裸字符串**写法（实测漏检，AI 只能去猜键名）。
+   */
+  {
+    const sim = TOOLS.find((t) => t.name === 'miliastra_sim');
+    const text = String(sim && sim.description || '');
+    const missing = [];
+    if (!/textbox/.test(text) || !/`text`/.test(text)) missing.push('`textbox` 节点带 `text`（不用截屏就能读 HUD/分数）');
+    if (!/frame/.test(text) || !/秒表/.test(text)) missing.push('`frame` 不是秒表（注入会顺带推帧）');
+    if (!/5ms/.test(text) || !/200ms/.test(text)) missing.push('闭环量级（发输入 ≈5ms / 读场景 ≈200ms ⇒ ≈5Hz）');
+    if (!/Up/.test(text) || !/一直按住/.test(text)) missing.push('按 `…Down` 要配对发 `…Up`');
+    if (!/keys/.test(text) || !/string-literal/.test(text)) missing.push('`op=keys` 两路扫（含裸字符串键名 + `via` 来源）');
+    if (missing.length) {
+      fail += 1;
+      failures.push('[ergonomics] miliastra_sim 的 description 缺了：' + missing.join(' / ')
+        + '（这几条 AI 猜不出来，只能靠 schema：缺一条它就会做错决定）');
+    } else {
+      console.log('✓ miliastra_sim 的「AI 自己玩」口径写在 schema 里（读 HUD / frame 口径 / 量级 / 松键 / keys 两路）');
+      pass += 1;
+    }
+  }
+
   // ② 不许再有 `which` 这种和 `level` 撞车的参数名：
   //    `level` = **地图关卡 ID**（哪张图）｜`stage` = **玩法里的第几关**。两个「关卡」在中文里同名，必须靠参数名分开。
   const withWhich = TOOLS.filter((t) => JSON.stringify(t.parameters).includes('"which"'));

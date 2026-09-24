@@ -30,7 +30,7 @@ process.env.MILIASTRA_DATA_DIR = tmpData;
 // 让失控脚本那条别真等 8 秒
 process.env.QXQY_PLAY_TIMEOUT_MS = '1500';
 
-const { simOp, disposeSimAll, simRuntimeInfo } = await import('../lib/sim.mjs');
+const { simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments } = await import('../lib/sim.mjs');
 
 const err = async (fn) => { try { await fn(); return null; } catch (e) { return (e && e.message) || String(e); } };
 
@@ -163,6 +163,72 @@ await simOp({ op: 'shot', target: 'play', reuse: true });
 const liveFiles = fs.readdirSync(path.join(tmpData, 'shots')).filter((n) => n.indexOf('sim-play-live') === 0);
 ok('★ 连帧不会每帧新建文件（目录里始终只有 1 张 live 帧）', liveFiles.length === 1, JSON.stringify(liveFiles));
 
+/*
+ * ★★ `op=keys` 的两路扫描（2026-09-24 真机关卡《冰镜·火烛》实测暴露的漏检）
+ *
+ * 现场证据：游戏日志白纸黑字 `[yuan-code] 收到首个按键事件: KeyboardMoveRightKeyDown（来源=KeyEventType）`，
+ * 而 `op=keys` 回的是「脚本源码里没出现 `KeyEventType`」—— **把原因说反了**。真实脚本长这样：
+ *
+ *     local candidates = { "KeyEventType", "KeyboardKeyCode", "ControllerKeyCode" }   ← 名字只出现一次，且不是 `X.Y`
+ *     try(bindHold("KeyboardMoveRightKeyDown", "KeyboardMoveRightKeyUp", function(v) … end))  ← ★ 键名是裸字符串
+ *
+ * 后果：AI 拿不到键名就只能**猜**，而猜错是**静默失败**。所以这里把两路都钉住。
+ */
+{
+  const twoWays = [
+    'script.object:AddKeyEventListener(Enum.KeyEventType.KeyboardCraftspersonKey3Down, function() end)',
+    'script.object:AddKeyEventListener(Enum.KeyEventType["KeyboardJumpKeyDown"], function() end)',
+    'try(bindHold("KeyboardMoveRightKeyDown", "KeyboardMoveRightKeyUp", function(v) end))',
+    'try(bindHold("ControllerCraftspersonKey1Down", "ControllerCraftspersonKey1Up", function(v) end))',
+  ].join('\n');
+  const k = scanScriptKeys(twoWays);
+  const by = (n) => (k.find((x) => x.name === n) || {}).via;
+  ok('★ op=keys 两路并扫：`KeyEventType.X`（enum-member）能扫到',
+    by('KeyboardCraftspersonKey3Down') === 'enum-member', JSON.stringify(k));
+  ok('★ op=keys 两路并扫：`KeyEventType["X"]`（enum-index）能扫到',
+    by('KeyboardJumpKeyDown') === 'enum-index');
+  ok('★★ op=keys 两路并扫：**裸字符串键名**能扫到（`bindHold("KeyboardMoveRightKeyDown", …)` —— 旧实现漏检的就是它）',
+    by('KeyboardMoveRightKeyDown') === 'string-literal' && by('KeyboardMoveRightKeyUp') === 'string-literal',
+    JSON.stringify(k.filter((x) => x.via === 'string-literal')));
+  ok('★ `Controller*` 手柄键名同样扫得到（脚本里语意键与手柄键是成对写的）',
+    by('ControllerCraftspersonKey1Down') === 'string-literal' && k.some((x) => x.name === 'ControllerCraftspersonKey1Up'));
+
+  // 假阳性防线：注释掉的绑定不许当成"它在听这个键"
+  const commented = [
+    'local candidates = { "KeyEventType", "KeyboardKeyCode" }',
+    '-- bindHold("KeyboardSprintKeyDown", "KeyboardSprintKeyUp", function(v) end)',
+    '--[[ 旧版写法：',
+    '  bindHold("KeyboardInteractKeyDown", "KeyboardInteractKeyUp", function(v) end)',
+    ']]',
+    'try(bindHold("KeyboardMoveLeftKeyDown", "KeyboardMoveLeftKeyUp", function(v) end))',
+  ].join('\n');
+  const c = scanScriptKeys(commented).map((x) => x.name);
+  ok('★ 注释掉的绑定**不算**（行注释）—— 否则会让 AI 去按一个没人听的键',
+    c.indexOf('KeyboardSprintKeyDown') < 0, JSON.stringify(c));
+  ok('★ 注释掉的绑定**不算**（长注释 `--[[ … ]]`）', c.indexOf('KeyboardInteractKeyDown') < 0, JSON.stringify(c));
+  ok('★ 真机那种「候选表 + 裸字符串」写法：键名照样扫得到（回归：旧版这里返回 0 个）',
+    c.indexOf('KeyboardMoveLeftKeyDown') >= 0, JSON.stringify(c));
+  ok('★ 只有名字没有 Down/Up 后缀的字符串不算键名（`"KeyboardSomething"` 是别的用途）',
+    scanScriptKeys('local label = "KeyboardSomething"').length === 0);
+  ok('★ 字符串里的 `--` **不会**被当成行注释截断（`local u = "a--b"` 后面那行照样扫）',
+    scanScriptKeys('local u = "a--b"\ntry(bindHold("KeyboardMoveRightKeyDown", "KeyboardMoveRightKeyUp", f))')
+      .some((x) => x.name === 'KeyboardMoveRightKeyDown'));
+  ok('★ 同一个键名两路都命中时，保留**更明确**的来源（enum-member 胜过 string-literal）',
+    scanScriptKeys('Enum.KeyEventType.KeyboardJumpKeyDown\nbindHold("KeyboardJumpKeyDown", f)')
+      .find((x) => x.name === 'KeyboardJumpKeyDown').via === 'enum-member');
+  ok('★ 结果按名字排序（回执照抄进断言时顺序稳定）',
+    JSON.stringify(k.map((x) => x.name)) === JSON.stringify(k.map((x) => x.name).slice().sort()));
+
+  // stripLuaComments：字符串必须原样留着（键名就住在字符串里）
+  ok('stripLuaComments：剥掉行注释、保留字符串内容',
+    stripLuaComments('local a = 1 -- KeyboardJumpKeyDown\nlocal s = "KeyboardMoveRightKeyDown"')
+      .indexOf('KeyboardJumpKeyDown') < 0
+    && stripLuaComments('local s = "KeyboardMoveRightKeyDown"').indexOf('KeyboardMoveRightKeyDown') >= 0);
+  ok('stripLuaComments：剥掉长注释、保留长字符串',
+    stripLuaComments('--[[ x ]] local s = [[ y ]]').trim() === 'local s = [[ y ]]',
+    JSON.stringify(stripLuaComments('--[[ x ]] local s = [[ y ]]')));
+}
+
 // 按键：op=keys 从脚本源码里扫出它真正在听的键名
 const keySrc = [
   'function OnStart()',
@@ -179,6 +245,14 @@ const keysInfo = await simOp({ op: 'keys' });
 ok('op=keys：从脚本源码扫出真正在听的键名（含 KeyboardCraftspersonKey3Down）',
   Array.isArray(keysInfo.keys) && keysInfo.keys.indexOf('KeyboardCraftspersonKey3Down') >= 0 && (keysInfo.presets || []).length > 0,
   JSON.stringify({ keys: keysInfo.keys, presets: (keysInfo.presets || []).length }));
+ok('★ op=keys 回执带 `found[].via`（名字从哪来）+ `byVia` 计数 —— AI 据此判断可不可信',
+  Array.isArray(keysInfo.found) && keysInfo.found.length === keysInfo.keys.length
+  && keysInfo.found.every((f) => f.name && ['enum-member', 'enum-index', 'string-literal'].indexOf(f.via) >= 0)
+  && !!keysInfo.byVia && typeof keysInfo.byVia.enum === 'number' && typeof keysInfo.byVia.stringLiteral === 'number',
+  JSON.stringify({ found: keysInfo.found, byVia: keysInfo.byVia }));
+ok('★ op=keys 提醒「按 Down 要配对 Up」（实测：只发 Down 会把角色一路推到掉出边界）',
+  /Down/.test(String(keysInfo.releaseNote)) && /Up/.test(String(keysInfo.releaseNote)),
+  String(keysInfo.releaseNote || '').slice(0, 60));
 
 // 切设备会重建运行时：人数必须被 Host 自动沿用，否则 视角2 会报 playerIndex 1-1（真机踩过）
 const p2 = await simOp({ op: 'play', action: 'start', args: { playerCount: 2 } });

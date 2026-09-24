@@ -286,7 +286,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
-  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 创作者交接的控件模板索引；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错，**不许编造模板索引**）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
+  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 创作者交接的控件模板索引；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错，**不许编造模板索引**）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）；**你自己想"玩"先记住量级**：发输入 ≈5ms 级、读场景 ≈200ms 级（≈5Hz）⇒ 能做**回合制闭环**、**不能逐帧看画面**（实时档要么一次调用里跑循环、要么让人玩）；HUD 上的字直接从 `get{view:true}` 的 **`textbox.text`** 读（当闭环条件用）；按 `…Down` 要**配对** `…Up` 否则等于一直按住' },
 ];
 
 export const PROMPT_RULES = [
@@ -1433,7 +1433,9 @@ const TOOLS = [
       + '`state` 看工程/控件树/属性（要几何与父级才用它）；'
       + '`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；'
       + '`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；'
-      + '`keys` 从**你的脚本源码**里扫出它真正在听的按键名；'
+      + '`keys` 从**你的脚本源码**里扫出它真正在听的按键名（**两路都扫**：`KeyEventType.X` 与**裸字符串**写法 '
+      + '`bindHold("KeyboardMoveRightKeyDown", …)`，后者是实测真脚本的写法、旧实现漏检过；回执 `found[].via` 标明来源，'
+      + '`string-literal` 是启发式、算候选；扫不出会告诉你**试发**哪个候选键，而不是让你猜）；'
       + '`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；'
       + '`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；'
       + '`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。'
@@ -1442,6 +1444,16 @@ const TOOLS = [
       + '内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。'
       + '\n  · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；'
       + '玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。'
+      + '\n★ **AI 自己"玩"的量级（2026-09-24 实测）**：发一次输入 ≈ **5ms**（`key`/`pointer`/`click` 都是纯注入、不回快照），'
+      + '读一次 `get{view:true}` ≈ **200ms**，出一张 PNG 是秒级 ⇒ **发得快、看得慢**。所以：'
+      + '① 回合制闭环（`pause` + 逐步 `step` + 读场景再决定）完全可控；'
+      + '② 想在"实时档"打一段就在**一次调用里跑循环**（本地往返 5ms 级、跑满 30fps），但**循环里你看不见**，'
+      + '要把判断写成循环内的条件分支，事后用 `history` 快照/PNG 取证；'
+      + '③ "**逐帧看画面再反应"做不到**（不是没实现，是带宽上限：我的眼睛是 ≈5Hz 的离散采样）。'
+      + '\n★ **画面上的字不用截屏就能读**：`get{view:true}` 的场景里 **`textbox` 节点带 `text`** —— HUD / 分数 / 关卡直接读得到，'
+      + '拿它当闭环条件（例：读到「分数 3」才停手）。⚠️ **按了 `…Down` 就要配对发 `…Up`**，'
+      + '否则等于一直按住这个键（实测：只发 Down 会把角色一路推到掉出边界重生）。'
+      + '\n⚠️ `frame` **不是秒表**：连续注入按键会顺带推帧（实测静置 30fps、注入期间 41.7/s），要计时用 `time`。'
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
       + '\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
