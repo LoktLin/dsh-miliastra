@@ -45,11 +45,28 @@
   #fatal{display:none;white-space:pre-wrap;color:#ffd0d8;background:#3a1418;border-bottom:1px solid #8b2635;
          padding:8px 14px;font:12px/1.5 Consolas,monospace}
   #fatal.show{display:block}
+  /*
+   * 窄容器（面板里那 2/3 列 ≈ 570px、甚至更窄）：这一页在面板里是**嵌在 iframe 里**的，
+   * 按全屏那套排版会把工具栏折成两三行、把舞台挤没 —— 所以窄了就整体收一档：
+   * 长标题换成短标题、按钮与间距收紧，工具栏努力保持一行。
+   */
+  .title-mini{display:none}
+  @media (max-width:820px){
+    body{grid-template-rows:40px auto minmax(0,1fr) 26px;font-size:12px}
+    .bar{gap:6px;padding:0 8px}
+    .bar strong{display:none}
+    .bar .title-mini{display:inline}
+    button{padding:4px 7px;font-size:12px}
+    select{padding:3px 4px;font-size:12px}
+    footer{gap:8px;padding:0 8px;font-size:11px}
+    #side{padding:8px}
+  }
 </style>
 </head>
 <body>
   <header class="bar">
     <strong>千星模拟器 · 浏览器试玩</strong>
+    <strong class="title-mini">试玩</strong>
     <span class="tag" id="state">● 未开始</span>
     <button id="start" class="primary">开始试玩</button>
     <button id="pause" disabled>暂停</button>

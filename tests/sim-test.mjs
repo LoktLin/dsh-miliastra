@@ -43,6 +43,14 @@ ok('op=state 带回画布预设（默认 PC 1600×900）', !!st.canvas && st.can
   JSON.stringify(st.canvas));
 ok('op=state 的工程有根：客户端控件容器 + 容器节点',
   Array.isArray(st.tree) && st.tree.some((n) => n.kind === 'server-container') && st.tree.some((n) => n.kind === 'container'));
+/*
+ * `factoryDefault`：**Host 重启后内存里的工程就是出厂默认**（用户 2026-09-24 实测：重启后试玩页里
+ * 只剩默认的「文本 / 预设按钮 / 五角星」，看着像"什么都没画"）。这个位必须如实上报，面板才能明说 + 给一键重搭。
+ */
+ok('★ op=state：新会话的工程如实标 `factoryDefault:true`（重启后就是这个状态）', st.factoryDefault === true,
+  'factoryDefault=' + st.factoryDefault);
+ok('op=state：`lastBind` 位在（还没绑过就是 null，不报假警）', st.lastBind === null || typeof st.lastBind === 'object',
+  JSON.stringify(st.lastBind));
 
 const full = await simOp({ op: 'state', summaryOnly: false });
 ok('summaryOnly:false 才回 boxes 与 tree 全量', Array.isArray(full.boxes) && full.boxes.length > 0,
@@ -551,6 +559,33 @@ const bindNoFile = await err(() => simOp({ op: 'bind', source: path.join(tmpData
 ok('op=bind 读不到 Lua：报错说清路径与原因（不是静默空跑）', !!bindNoFile && /读不到/.test(bindNoFile), bindNoFile);
 const bindWrongCanvas = await err(() => simOp({ op: 'bind', source: bindLua, canvasId: 'nope', templates: [{ guid: 1073741868, kind: 'image' }] }));
 ok('op=bind 画布 id 不认识：报错并列出可用画布', !!bindWrongCanvas && /pc-16-9/.test(bindWrongCanvas), bindWrongCanvas);
+
+/*
+ * ★ 配方（last-bind.json）：**Host 重启后内存里的工程回到出厂默认** —— 用户实测那次"试玩页里
+ * 只剩默认控件"就是这么来的。所以成功 bind 要记一份配方，重启后 `last:true` 一键重搭。
+ */
+const recipeFile = path.join(tmpData, 'simulator', 'last-bind.json');
+ok('★ op=bind 记下配方（last-bind.json）：源文件 + 交接值 —— 重启后一键重搭的依据',
+  fs.existsSync(recipeFile) && JSON.parse(fs.readFileSync(recipeFile, 'utf8')).source === bindLua,
+  recipeFile);
+ok('op=bind 回执带 `recipe` 路径（面板/人能照着找）', !!bindKeep.recipe && /last-bind\.json$/.test(bindKeep.recipe), bindKeep.recipe);
+const rebound = await simOp({ op: 'bind', last: true, run: false });
+ok('★ op=bind last:true：用配方一键重搭（交接值照原样、`fromLast:true`）',
+  rebound.fromLast === true && rebound.templateCount === 1 && rebound.handover.missing.length === 0,
+  JSON.stringify({ fromLast: rebound.fromLast, templates: rebound.templates, missing: rebound.handover.missing }));
+ok('op=bind 之后 `factoryDefault:false`（工程里有你的东西了）', (await simOp({ op: 'state' })).factoryDefault === false);
+const reboundState = await simOp({ op: 'state' });
+ok('op=state 的 `lastBind` 能报出配方是谁（面板写「一键重搭上次：双相自检.lua」用）',
+  !!reboundState.lastBind && reboundState.lastBind.scriptName === '双相自检.lua',
+  JSON.stringify(reboundState.lastBind));
+{
+  // 配方丢了 → 明确报错（不是静默搭个空的）
+  const keep = fs.readFileSync(recipeFile, 'utf8');
+  fs.rmSync(recipeFile);
+  const noRecipe = await err(() => simOp({ op: 'bind', last: true }));
+  ok('op=bind last:true 但没有配方：明确报错并说怎么产生配方', !!noRecipe && /还没有可重搭的配方/.test(noRecipe), noRecipe);
+  fs.writeFileSync(recipeFile, keep, 'utf8');
+}
 
 /* ------------------------------- op=handover：交接值从哪来（别靠人抄） */
 

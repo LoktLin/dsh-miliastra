@@ -60,6 +60,17 @@
 
 ### 修复
 
+- **★★ 重启 `dsh web` 后模拟器工程回到「出厂默认」（作者实测：「咋画面在左下角 右侧啥都没」的第二个成因）**。
+  Host 是启动快照 ⇒ 内存里的工程被重置，试玩页里只剩默认的「文本 / 预设按钮 / 五角星」，**看起来就像什么都没画**。
+  现在：① 引擎 `get()` 上报 `factoryDefault`，`op=state` 直说；② **成功 `op=bind` 会记一份配方**
+  （`simulator/last-bind.json`：源文件 + 交接值 + 容器索引 + 画布），重启后 `{"op":"bind","last":true}` 一键重搭；
+  ③ 面板顶部出现粉色提示条 + **「一键重搭上次：《双相》」**按钮（**不自动重搭** —— 不擅自在人没要求时改工程）。
+- **★ 面板左列「按钮/文字叠在一起」（作者截图）**：左列是**固定高度的 flex 列**，子项默认 `flex-shrink:1` + `min-height:0` ——
+  内容一超就被**压扁并互相重叠**。现在子项一律 `flex:0 0 auto` + `min-height:auto`，滚动交给容器；
+  同时左列加 **300px 宽度下限**（880px 浮层的 1/3 只有 285px，塞不下那些按钮），面板自己的按钮精简到 4 个核心动作，
+  其余（连帧 / 刷新画面 / 按键 / 设备·人数·视角 / 导出 GIA / 重置工程）收进**默认折叠的「② 试玩操作（高级）」**。
+- **★ 试玩页在面板里（~570px 宽）工具栏折成两三行、把舞台挤没**：加 `@media (max-width:820px)` ——
+  长标题换短标题、按钮与间距收一档，工具栏努力保持一行。
 - **★★ `/miliastra/engine` 把请求体里的 `op/action` 吃掉了（真事故：面板试玩按钮与浏览器试玩页双双静默失效）**。
   路由早先写成「有 `body.args` 就用 `body.args`」，而 **`op=play` 的参数本来就装在 `args` 里**
   （`{op:'play', action:'click', args:{x,y}}`）⇒ `op/action` 一起被丢，`simOp` 退化成默认的 **`op=state`**，
@@ -122,8 +133,8 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0** = **579 项**：`smoke` 50 → **52**（engine 路由不吞 `op` 的两条 ★）、`sim` 88 → **124**（`op=bind` 15 + `op=cases` 14 + `op=handover` 7）、
-  `sim-play` 29 → **32**（报错条可见 / WebGL 兜底 / 舞台尺寸重试）、`client-render` **45**（1:2 + iframe + 左列顺序与滚动模型）；其余 `readme` 14 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · 引擎 130。
+- `npm test` 退出码 **0** = **588 项**：`smoke` 50 → **52**（engine 路由不吞 `op` 的两条 ★）、`sim` 88 → **132**（`op=bind` 21 + `op=cases` 14 + `op=handover` 7）、
+  `sim-play` 29 → **33**（报错条可见 / WebGL 兜底 / 舞台尺寸重试）、`client-render` **45**（1:2 + iframe + 左列顺序与滚动模型）；其余 `readme` 14 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · 引擎 130。
 - **`op=bind` 在真机上跑通了**（双相《冰镜·火烛》，370ms 建好）：`run.logs` 出现它自己 print 的
   `就绪（3 关，控件 31，画布 1600x900）`（与真机 `.gia` 同一句），`run.controlCount=32`（容器 1 + 双相 31），
   渲染图 `~/.dsh/miliastra/shots/sim-play-双相-bind-第1关-20260924-110733.png` 里第 1 关的平台/熔岩/冰墙/小人/状态栏都在。

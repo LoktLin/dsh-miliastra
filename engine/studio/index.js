@@ -408,6 +408,9 @@ export function createStudio(seed, options = {}) {
     const snap = snapshotProject(project)
     snap.workspace = describeWorkspace(workspacePath)
     snap.save = saveDescriptor()
+    // 是否仍是**出厂默认工程**：宿主（DSH 适配层）重启后内存里的工程就是它 ——
+    // 调用方据此如实提示"你现在看到的不是你那份工程"，而不是让人对着一屏默认控件猜。
+    snap.factoryDefault = isFactoryDefaultProject(project)
     snap.scripts = describeScripts()
     snap.mountTargets = mountTargetRows()
     snap.serverLogic = serverLogic

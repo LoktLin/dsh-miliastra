@@ -99,6 +99,13 @@ ok('★ WebGL 初始化**包了 try/catch**：拿不到 WebGL 就明说（并建
   /try\s*\{[\s\S]{0,120}new PixiPlayRenderer\(/.test(html) && /拿不到 WebGL/.test(html));
 ok('★ 舞台尺寸**还没定下来**时不硬套（0×0 时下一帧重试；另挂 ResizeObserver 跟着面板缩放）',
   /box\.width < 40 \|\| box\.height < 40/.test(html) && /new ResizeObserver\(/.test(html));
+/*
+ * ★ 窄容器兜底：这一页在面板里是**嵌在 iframe 里**的（2/3 列 ≈ 570px）——
+ * 按全屏那套排版会把工具栏折成两三行、把舞台挤没（作者截图里就是这样）。
+ */
+ok('★ 窄容器收一档（面板里那 2/3 列只有 ~570px）：媒体查询 + 短标题',
+  /@media \(max-width:820px\)/.test(html) && /title-mini/.test(html)
+  && /\.bar strong\{display:none\}/.test(html) && /\.bar \.title-mini\{display:inline\}/.test(html));
 
 {
   /*
