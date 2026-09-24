@@ -17,6 +17,11 @@
 12. 控件 userdata 按类型封死：当前类型没有的字段读为 nil，写为 `cannot set <field>, no such field`。光标监听只挂在预设按钮 / 光标检测区。
 13. 显式层级数值大的在上；编辑器同级列表先出现的在上。Lua sibling 大索引置顶，First 置底、Last 置顶（官方原始快照 rev223；2026-09-06 用户真机反馈）。scene.js 将 API 数值反向映射到内部前到后 children 列表；绘制和命中共享该树。图片不把指针传给子级光标区。证据范围见根 knowledge/fact.md，不把模拟器回归当成真机通过。
 14. `ClientUIImageControl.imageType`：创作者确认只有部分图片支持设置。已观察：对一组刚 Instantiate 出的图片赋值报 `cannot set imageType, no such field`。在能力判定条件通过 probe/GIA 明确前，模拟器保守跟该拒绝路径，不全局开放。
+    **2026-09-24 改判（本仓，放开）**：真机关卡 `1073741833`《冰镜·火烛》的脚本对 5 个**即时实例化**的图片控件写 `imageType = Enum.ImageType.Stretch`，
+    **真机跑通**（`.gia`：`RUNNING -> 《冰镜·火烛》就绪（3 关，控件 31，画布 1600x1000）`，全日志**无** `no such field`）。
+    ⇒ 上面那条观察属实但**不适用于所有模板**；继续保守拒绝会变成**假阴性**（脚本在模拟器里跑不起来、真机却没问题 —— 预测试最怕这种误报）。
+    现在 `imageType` 是 image 的可写字段（`scene.js` 的 `KIND_RW.image`）。**渲染口径**：引擎绘制不区分 imageType（按尺寸拉伸），与脚本实际用的 `Stretch` 一致；
+    Slice/Tile 等九宫格/平铺语义**未实现**，别当成已支持。
 15. Lua 表面只开放官方 API 文档列出的字段/方法。文档未写的（`script.tickEnabled`、`EnumItem.__kind`、`enableFill`、按钮四态等）读为 nil，写报 `cannot set`。
 16. 控件标识字段：`Id`（客户端控件运行时ID，首字母大写）/ `prefabIndex`；Script 字段 `scriptMappingId`（GetScript 参数同名）；grid 的 `itemPrefabIndex`；reference 的 `referencedPrefabIndex`。InstantiateClientUIControl / GetClientUIControl 仅形参名变化。旧 probe 中的 `control.id` / `prefabId` 是旧版本接口，不作为兼容口径。
 17. math 沙箱：不可用清单实际只剩 modf、ult（atan2/cosh/ldexp/pow 在 Lua 5.3 本就不存在）；额外提供 isnan、isinf。文档异常行提到的 `math.isnaf` 语义无处记载——按反编造政策不提供（读为 nil）。

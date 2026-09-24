@@ -800,6 +800,7 @@ function OnStart()
     img.imageType = Enum.ImageType.Stretch
   end)
   print("img_type_set", okType, errType)
+  print("img_type_after", img.imageType)
   hit.raycastTarget = true
   print("hit_set", hit.raycastTarget)
   print("smap_type", math.type(script.scriptMappingId))
@@ -828,7 +829,12 @@ end
   assert.match(t, /img_listen\tnil/)
   assert.match(t, /hit_listen\ttrue/)
   assert.match(t, /img_set\tfalse\t.*cannot set raycastTarget, no such field/)
-  assert.match(t, /img_type_set\tfalse\t.*cannot set imageType, no such field/)
+  // 2026-09-24 翻转：这两条**曾经**断的是「`imageType` 不可写」（上游保守策略）。
+  // 真机关卡 1073741833《冰镜·火烛》的脚本对即时实例化的图片写 imageType=Stretch 并且**真机跑通**
+  // （.gia：`RUNNING -> 《冰镜·火烛》就绪（3 关，控件 31…）`，无 no such field），
+  // 所以保守拒绝会变成假阴性 —— 现在断言**写入成功且回读得到**。
+  assert.match(t, /img_type_set\ttrue/)
+  assert.match(t, /img_type_after\tStretch/)
   assert.match(t, /hit_set\ttrue/)
   assert.match(t, /smap_type\tinteger/)
   assert.match(t, /smap\t1073742999/)

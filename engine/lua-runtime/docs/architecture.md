@@ -34,7 +34,7 @@ LuaRuntime          时钟、日志、模板、脚本映射、信号/变量
 | `SimulateCursorClick` | 触发 Click；`GetUIPos` 可为 (0,0) |
 | `FindChild` | `/` 路径；无斜杠也可找直接子节点 |
 | 控件字段 | 按类型封死；缺字段读 nil、写 `cannot set <field>, no such field` |
-| `imageType` | 文档标读写。已观察 Instantiate 后赋值被拒；脚本默认不写；模拟器读 nil、写报同一错误 |
+| `imageType` | 文档标读写。上游曾观察 Instantiate 后赋值被拒（读 nil、写报同错）；**2026-09-24 本仓放开**：真机《冰镜·火烛》对即时实例化的图片写 `Stretch` 并跑通（`.gia` 无 `no such field`）⇒ 改为可写（渲染按拉伸，Slice/Tile 未实现）。证据见 `observed-contract.md` §14 |
 | 同级绘制 / 命中 | 内部树列表先出现的在上；Lua sibling 数值越大越靠上，在 API 边界反向映射，First 置底、Last 置顶；图片不把指针传给子级光标区 |
 | `GetChild` | 仅直接子节点 |
 | Invoke | 同步调用并返回值 |

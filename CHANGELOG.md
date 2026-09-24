@@ -28,6 +28,11 @@
 
 ### 修复
 
+- **`imageType` 放开为可写（引擎，带真机证据）**：上游保守拒绝（`observed-contract.md` §14「只有部分图片支持设置」+ 一条测试钉住），
+  但真机关卡 `1073741833`《冰镜·火烛》的脚本对**即时实例化**的图片写 `imageType = Enum.ImageType.Stretch` 并**真机跑通**
+  （`.gia`：`就绪（3 关，控件 31…）`，无 `no such field`）⇒ 继续拒绝会变成**假阴性**（模拟器跑不起来、真机没问题）。
+  改动：`scene.js` 的 `KIND_RW.image` 加 `imageType`，`runtime.test.mjs` 断言**翻转**（`img_type_set true` + 回读 `Stretch`），两处引擎文档同步。
+  渲染口径：**按尺寸拉伸**（与脚本用的 `Stretch` 一致），Slice/Tile 未实现。
 - **`slimPlay` 无条件丢掉 `scene`/`paint`** —— 与「`summaryOnly` 只去体积、`false` 时给全量」的约定矛盾，直接后果是浏览器页永远拿不到画面（黑屏）。
   现在 `summaryOnly:false` 原样给 `scene`，默认仍是只回计数。
 - **`sanitizeLabel` 先剥尾点、后截断** → 截断处又留下一个尾点（实测文件名成了 `…-frames-t0.`）。

@@ -37,9 +37,21 @@ const KIND_RW = {
   container: ['isolateNavigation', 'disableKeyEventPassthrough', 'disableCursorEventPassthrough', 'showCursor'],
   textbox: ['text', 'fontSize', 'fontColor', 'bgColor', 'enableOutline', 'outlineColor', 'horizontalAlignment', 'verticalAlignment', 'adaptiveFontSize', 'minimumFontSize'],
   textwindow: ['interactable', 'showScrollBar', 'text', 'fontSize', 'fontColor', 'bgColor', 'enableOutline', 'outlineColor', 'horizontalAlignment', 'verticalAlignment', 'adaptiveFontSize', 'minimumFontSize'],
-  // Documented RW. Observed: assigning after Instantiate reports
-  // "cannot set imageType, no such field". Keep it off the Lua surface.
-  image: ['imageColor', 'enableMask', 'enableSoftEdge', 'softEdgeMode', 'softEdgeWidthX', 'softEdgeWidthY', 'horizontalSoftRange', 'verticalSoftRange', 'reverseMaskArea', 'fillType', 'fillHorizontalType', 'fillVerticalType', 'fillRadial90Type', 'fillRadialType', 'fillAmount'],
+  /*
+   * `imageType`：官方文档标读写；上游 2026 的观察是「对一组刚 Instantiate 出的图片赋值报
+   * `cannot set imageType, no such field`」，所以**保守地没开放**（`observed-contract.md` §14
+   * 说"只有部分图片支持设置"）。
+   *
+   * 2026-09-24 **开放**（放开的是本仓，不是上游），依据是**真机日志**：
+   *   真实关卡 1073741833《冰镜·火烛》的脚本对 5 个即时实例化的图片控件写 `imageType = Enum.ImageType.Stretch`，
+   *   真机跑通（日志：`RUNNING -> 《冰镜·火烛》就绪（3 关，控件 31，画布 1600x1000）`，且**无** `no such field`），
+   *   说明「部分图片确实支持设置」——上游那条观察属实但**不适用于所有模板**。
+   *   ⇒ 保守拒绝会变成**假阴性**：脚本在模拟器里跑不起来，真机却没问题（预测试最怕这种误报）。
+   *
+   * 渲染口径：引擎绘制**不区分** imageType（按尺寸拉伸），与脚本实际用的 `Stretch` 一致；
+   * Slice/Tile 之类的九宫格/平铺语义**未实现**（会按拉伸画）—— 这一点写进 docs，不当成已支持。
+   */
+  image: ['imageColor', 'imageType', 'enableMask', 'enableSoftEdge', 'softEdgeMode', 'softEdgeWidthX', 'softEdgeWidthY', 'horizontalSoftRange', 'verticalSoftRange', 'reverseMaskArea', 'fillType', 'fillHorizontalType', 'fillVerticalType', 'fillRadial90Type', 'fillRadialType', 'fillAmount'],
   button: ['interactable', 'clickAudioId', 'raycastTarget'],
   cursor: ['raycastTarget'],
   grid: ['itemPrefabIndex', 'raycastTarget', 'showScrollBar', 'interactable', 'scrollProgress'],
