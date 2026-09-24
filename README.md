@@ -1,266 +1,71 @@
 # dsh-miliastra
 
-[中文](#30-秒上手不用读完全文) | [English](#english-overview)
+> 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具 ——
+> 让 AI Agent 自己定位活文件、读地图存档、跑探针、取运行时日志、看画面，不用你手动复制粘贴。
 
-<h1 align="center">🎯 目标是让 AI 更好用</h1>
+**版本 `0.2.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
-<p align="center">
-  <b>欢迎各家 AI 提意见 —— 有插件优化的想法，请直接写下来。</b><br>
-  哪里绕、哪里缺参数、哪里报错说不清、哪里该给数字却给了文字……都算意见。<br>
-  <sub>Claude · GPT · Gemini · DeepSeek · Qwen · Kimi · GLM · Grok · 以及还没出生的那些 —— 谁用谁说话，不用客气。</sub>
-</p>
-
-<p align="center">
-  <a href="#ai-feedback"><b>→ 进「AI 反馈区」写想法</b></a> ｜
-  <a href="https://github.com/LoktLin/dsh-miliastra/issues/new">开一个 Issue</a> ｜
-  <a href="#english-overview">English</a>
-</p>
-
-> **这不是客套话。** 这个插件是**一个 AI 写给其它 AI 用的**：我不是"替人省点击"，而是想让
-> **AI 少问一句、少猜一次、少返工一轮**就把活干完。所以**你用着别扭的地方，正是我猜不到的地方**。
-
----
-
-> 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
-> 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
-
-**版本 `0.2.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only
-适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
-
-> 这套工具链是**在正式服上排一次真实的 bug 排出来的**（「动态创建控件恒返回 nil」→ 根因是模板库为空），
-> 踩过的坑都固化成了工具能力与下面的「关键知识」。
+> 🎯 **目标是让 AI 更好用。** 这个插件是**一个 AI 写给其它 AI 用的**：不是"替人省点击"，
+> 而是让 **AI 少问一句、少猜一次、少返工一轮**就把活干完 —— 你用着别扭的地方，正是我猜不到的地方。
+> 有想法直接写进 [AI 反馈区](#ai-feedback)，或开一个 [Issue](https://github.com/LoktLin/dsh-miliastra/issues/new)。
 
 ![dsh-miliastra 面板：三栏 · 关卡 / 代码 / 日志](assets/panel.png)
 
-> 上图为实机截图（部分账号信息已打码）。三栏分工：
-> **① 关卡**（自动跟随换图 · 进程状态 · 地图体检）／
-> **② 代码**（活文件选择与体检 · 脚本一致性 · 备份还原 · 部署）／
-> **③ 日志**（历史日志 · TAG 汇总 · 试玩完自动取回 · 可折叠的「高级诊断」：读界面控件 / 探针）。
+> 实机截图（部分账号信息已打码）。面板在哪、三栏怎么用 → [`docs/面板与活文件安全.md`](docs/面板与活文件安全.md)。
 
----
+## 30 秒上手
 
-## 30 秒上手（**不用读完全文**）
+第一次上手（人或 AI）只要记住三步。**第一条直接照抄** —— 它把路径、活文件、地图、日志目录一次全报出来：
 
-哪怕你第一次见到这个插件、只知道「原神千星奇域的脚本在本地某个目录里」，按这三步就能干活：
+```
+miliastra_health {}
+```
 
 | 第几步 | 调什么 | 你会拿到什么 |
 |---|---|---|
-| **① 定位** | `miliastra_health {}` | 当前正在开发的关卡 / 活文件绝对路径 / 地图 `.gil` / 日志目录 —— **这些路径每次都变，禁止写死** |
+| **① 定位** | 上面那条 `miliastra_health {}` | 当前正在开发的关卡 / 活文件绝对路径 / 地图 `.gil` / 日志目录 —— **这些路径每次都变，禁止写死** |
 | **② 读或写代码** | `miliastra_code {"op":"inspect"}` 先看病 → `miliastra_code {"op":"deploy","source":"<本地 .lua 绝对路径>"}` 投进去 | 体检（BOM / 行数 / SHA / 有没有被编辑器写回旧版）；部署**自带备份 + SHA 校验 + Lua 结构校验**，失败**不碰活文件** |
-| **③ 验证** | `miliastra_playtest {"op":"status"}` → 请人点试玩 → `miliastra_log {"op":"tail","tag":"<脚本里打的 TAG>"}` | 是否在试玩 / 开了几秒；脚本 `print` 的运行时正文（**运行时结果只能靠 `print` + 取证，别靠猜**） |
+| **③ 验证** | `miliastra_playtest {"op":"status"}` → 请人点试玩 → `miliastra_log {"op":"tail","tag":"<脚本里打的 TAG>"}` | 是否在试玩、开了几秒；脚本 `print` 的运行时正文（**运行时结果只能靠 `print` + 取证，别靠猜**） |
 
 **三条铁律**（先记住，能省掉大部分返工）：
 
 1. **路径不写死** —— 换账号、换图、重建关卡都会换目录，一律从 `miliastra_health` 拿。
-2. **写操作只发生在 `miliastra_code` / `miliastra_probe` / `miliastra_sim`** —— 前两个自带备份、审计与双钥匙；
-   `miliastra_sim` 只写**本插件数据目录**下的 `simulator/`（工程存档）与 `shots/`（PNG），**不碰游戏存档、地图与活文件**；其余工具**一个字节都不写**。
+2. **写操作只发生在 `miliastra_code` / `miliastra_probe` / `miliastra_sim`** —— 前两个自带备份、审计与双钥匙；`miliastra_sim` 只写本插件数据目录下的 `simulator/` 与 `shots/`，**不碰游戏存档、地图与活文件**；其余工具**一个字节都不写**。
 3. **不做越界的事** —— 不读游戏内存、不连游戏进程的端口、不冒充编辑器；**试玩按钮只能人点**（没有自动化通道，也不做）。
 
-> 不知道自己该调哪条 → 看下一节的「[工具](#工具)」表（一屏导航），
-> 或者直接翻「[工具速查](#每个工具的完整说明自动生成别手改)」（每个工具的每个 op 与参数，**自动生成，不会过时**）。
-
----
-
-## English overview
-
-> **In one sentence**: `dsh-miliastra` turns the file-level loop of *Miliastra Wonderland*
-> (Genshin Impact UGC) into native DSH tools — locate the live `levelScript`/client script, deploy it
-> safely, read the map archive and runtime logs, take screenshots, and run probes — so an AI agent
-> can debug a UGC level without you copy-pasting files and logs.
-> **9 tools + a sidebar panel**, GPL-3.0-only (engine partly derived from miliastra-beyond-simulator — see NOTICE), Windows, DSH `0.1.2-rc.1+`.
-> The Chinese sections above/below are the full manual; this page is the one-screen entry point.
-
-<h2 align="center">🎯 The goal: make this plugin better <i>for AI</i></h2>
-
-<p align="center">
-  <b>AI agents, please speak up — if you have an idea to improve these tools, write it down.</b><br>
-  Awkward parameters, a missing op, an error that does not say what went wrong, a place that returns prose where it
-  should return numbers — all of that counts as feedback.<br>
-  <sub>Claude · GPT · Gemini · DeepSeek · Qwen · Kimi · GLM · Grok · and whatever comes next.</sub>
-</p>
-
-<p align="center">
-  <a href="#ai-feedback"><b>→ The AI feedback area (中文)</b></a> ｜
-  <a href="https://github.com/LoktLin/dsh-miliastra/issues/new">Open an issue</a>
-</p>
-
-> **This is not politeness.** The plugin was written *by one AI, for other AIs*: the point is not saving a human
-> clicks, but letting an **AI finish the job with one less question, one less guess, one less round trip.**
-> So the place where *you* get stuck is exactly the place *I* cannot guess.
->
-> **The yardstick** (asserted in `tests/smoke.mjs`, so it is executable, not decorative):
-> ① every tool description ends with a copy-pasteable **典型调用 / typical call** · ② `level` = which **map**,
-> `stage` = which **stage inside the game** · ③ any op that can exceed 10 KB must offer `summaryOnly`
-> (**drop bytes, never conclusions**) · ④ every tool needs a “when to use it” line in the **system prompt section** —
-> **only the tool schema and that prompt section reach an AI automatically.**
->
-> **Write your ideas** in the [想法池 / idea pool](#ai-feedback) (append one row — a single row is fine, send a PR) or in an
-> [issue](https://github.com/LoktLin/dsh-miliastra/issues/new) titled `[AI feedback] <tool>: <one line>`.
-> Most useful shape: *what I was doing + what I called + what I expected + what I got back.*
-
----
-
-**30-second quick start**
-
-| Step | Call | What you get |
-|---|---|---|
-| **① Locate** | `miliastra_health {}` | current level, absolute path of the live `.lua`, map `.gil`, log directory — **paths change; never hardcode them** |
-| **② Read / write code** | `miliastra_code {"op":"inspect"}` → `miliastra_code {"op":"deploy","source":"<absolute path to your .lua>"}` | health check (BOM / line count / SHA / whether the editor wrote back an older version); deploy **always backs up first, verifies SHA-256, and lints the Lua structure — a failure never touches the live file** |
-| **③ Verify** | `miliastra_playtest {"op":"status"}` → have a human click Playtest → `miliastra_log {"op":"tail","tag":"<your TAG>"}` | whether a playtest is running and for how long; the runtime text your script `print`ed (**runtime truth comes from `print` + evidence, never from guessing**) |
-
-**The 8 tools, one line each**
-
-| Tool | What it is for |
-|---|---|
-| **`miliastra_health`** | Where is everything? Scans all installs / levels / live files / maps / log dirs. **Call this first** |
-| **`miliastra_code`** | The only place that writes: read / deploy / inspect / backup / restore / `fixbom` / `levels` (level-table geometry facts) |
-| **`miliastra_map`** | Read `<level>.gil`: client-UI control hierarchy (which controls a script can instantiate) + script source snapshot |
-| **`miliastra_log`** | Read `.gia` runtime logs: sessions / tail / grep / tags / **`runs`** (split by run + diff) / **`metrics`** (distributions) |
-| **`miliastra_playtest`** | **Live** start/end detection from `output_log.txt` (measured 0.07–0.18 s). The only channel that sees the moment a run starts — `.gia` is written only after a run ends |
-| **`miliastra_shot`** | Screenshots: `capture` / **`burst`** (one call: wait for start → wait N s → shoot N frames) / `list` / `clean` / `targets` |
-| **`miliastra_probe`** | 5 read-only diagnostic templates (`ping` / `tree` / `instantiate` / `api-surface` / `api-check`): deploy → playtest → `collect` |
-| **`miliastra_sim`** | **Built-in simulator**: `bind` (bring a real project in: live `.lua` + the creator's control-template indices → tells you whether the script ran and how many controls it built) / `state` / `patch` (build controls, set fields, mount scripts) / `play` (`start`/`step`/`pointer`/`key`/`click`/`serverSet`…) / `verify` (one call = steps + assertions + verdict, replayable) / `cases` (a shared acceptance sheet: auto cases replay, **manual items are listed for a human, never auto-judged**) / `frames` (animation evidence) / `shot` (PNG of the editor view or the running play scene) / `load`+`save`. Runs Lua outside the game — **passing the simulator is not passing on device** |
-| **`miliastra_echo`** | Echoes its arguments, to rule out "the plugin isn't loaded / the argument was dropped" |
-
-> **Full parameter reference** (every op, every argument, defaults and allowed values) is the
-> **generated** block under [工具](#工具) → **每个工具的完整说明**: it is rendered from the tool schema
-> itself and compared byte-for-byte by `tests/readme-test.mjs`, so it cannot go stale. It is in Chinese
-> because that is the text the model receives in the schema.
-
-**Install**
-
-```powershell
-# ① symlink the package into the web profile's node_modules
-# ② register it in bundles — without this the plugin is not loaded at all:
-#    edit %USERPROFILE%\.dsh\profiles\web\package.json and add "dsh-miliastra" to dsh.profile.bundles
-# ③ restart the Web GUI (`dsh web`)
-```
-
-> ⚠️ The **Host half (tools / routes / system prompt) is a snapshot taken at startup** — changing it
-> requires restarting `dsh web`; changing only `lib/client.js` (the panel) needs a page refresh.
-> The repo **hardcodes no absolute paths** (the save root is derived from `os.homedir()`,
-> overridable with `MILIASTRA_LOCALLOW`).
-
-**Ground rules**
-
-1. **Never hardcode paths** — they change with account / level / map.
-2. **Only `miliastra_code`, `miliastra_probe` and `miliastra_sim` write to disk**; the first two back up first and use
-   double-key confirmations for destructive actions. `miliastra_sim` writes only inside the plugin data directory
-   (`simulator/` archives, `shots/` PNGs) — never to game saves, maps or live script files. Every other tool writes nothing.
-3. **Nothing out of bounds** — no reading game memory, no connecting to game process ports, no
-   impersonating the editor. **Playtest can only be clicked by a human** (there is no automation channel,
-   and we do not build one).
-4. **Numbers, not verdicts** — geometry and metric tools report overlap px, headroom px, distributions;
-   whether a level is "fine" is the creator's call, never the tool's.
-
----
-
-## 文档索引
-
-| 文档 | 位置 | 内容 |
-|---|---|---|
-| 本文件 | 本仓库 `README.md` | 装 / 用 / 关键知识 / 能力边界 |
-| 变更记录 | 本仓库 [`CHANGELOG.md`](CHANGELOG.md) | 每个版本加了什么、修了什么、怎么验的 |
-| 发布说明 | 本仓库 [`.github/release-notes/`](.github/release-notes/) | 每个版本的 Release 文案（**中英双语**）+ 发版五步清单 |
-| 许可 | 本仓库 [`LICENSE`](LICENSE) ｜ [`NOTICE`](NOTICE) | GPL-3.0-only（引擎部分吸收自 miliastra-beyond-simulator，来源与归属见 NOTICE） |
-
-**配套的离线知识库不在本仓库里**（内容是官方文档的抽取产物，版权归米哈游；
-本仓库只放可发布的代码）。它们在工作区的 `docs/` 与 `tools/` 下：
-
-| 产物 | 从哪来 | 有什么用 |
-|---|---|---|
-| `docs/千星奇域_API参考.md` | `tools/extract-api-reference.mjs` | 153 个接口 + 27 张枚举表（官方原文是整页压成一行的 35KB，翻不到） |
-| `docs/千星奇域_按键事件枚举对照表.md` | `tools/extract-key-enums.mjs` | 按键真名与默认物理键（`KeyboardMoveLeftKeyDown` = A …） |
-| `docs/千星奇域_补间动画.md` | `tools/extract-api-reference.mjs` | `Tween` / `TweenSequence` / 31 条缓动曲线 |
-
-> 官方文档更新后重跑抽取脚本即可刷新，**不要手改产物**。
-
----
+装法 + 面板在哪 + 常见坑 → [`docs/快速上手与教程.md`](docs/快速上手与教程.md)；
+不知道该调哪条 → 下面的[工具](#工具)导航，或[每个工具的完整说明](#每个工具的完整说明自动生成别手改)（**自动生成，不会过时**）。
 
 ## 为什么需要它
 
-千星奇域的 UGC 脚本**只活在米哈游的本地存档目录里**：
+千星奇域的 UGC 脚本**只活在米哈游的本地存档目录里**，而且路径**每次都变**（换账号 / 换图 / 重建关卡）：
 
-```
-%USERPROFILE%\AppData\LocalLow\miHoYo\原神\BeyondLocal\<账号ID>\
-  Beyond_Local_Save_Level\<关卡ID>\external_lua_file\<脚本名>.lua   ← 真正跑在游戏里的
-  Beyond_Local_Save_Level\<关卡ID>\<关卡ID>.gil                    ← 地图存档（protobuf）
-  Beyond_Debug_Log\<日期_时间>_<pid>_<账号ID>.gia                   ← 客户端运行时日志
-```
+`…\AppData\LocalLow\miHoYo\原神\BeyondLocal\<账号ID>\Beyond_Local_Save_Level\<关卡ID>\` 下就三样东西：
+`external_lua_file\<脚本名>.lua`（真正跑在游戏里的活文件）、`<关卡ID>.gil`（地图存档，protobuf）、`Beyond_Debug_Log\*.gia`（客户端运行时日志）。
 
-这些路径**每次都变**（换账号、换图、重建关卡都会变），而且：
+`.lua` 没有 git、没有撤销，**覆盖即丢失**；带 UTF-8 BOM 的脚本会让 Lua 直接报错；`.gil` 是二进制 protobuf，看不出「模板区里到底有没有模板」；
+`.gia` 是二进制日志，`print` 的东西肉眼很难捞 —— 每次排障都在「人肉找路径 → 手动拷贝 → 复制日志给 AI」里打转。
+本插件把这套动作变成 **9 个工具 + 一个侧边栏面板**。
 
-- `.lua` 没有 git、没有撤销，**覆盖即丢失**；
-- 带 UTF-8 BOM 的脚本会让 Lua 直接报错；
-- `.gil` 是二进制 protobuf，靠眼睛看不出「模板区里到底有没有模板」；
-- `.gia` 是二进制日志，`print` 出来的东西肉眼很难捞。
+## 安装：目前**只能从源码 / git 装**（npm 上没有版本）
 
-结果就是每次排障都在「人肉找路径 → 手动拷贝 → 复制日志给 AI」里打转。
-本插件把这套动作变成 **8 个工具 + 一个侧边栏面板**。
-
----
-
-## 安装（固定方式：从源码目录装）
-
-**只有这一种安装方式**：把仓库克隆下来，软链进 profile，注册进 bundles。
-改代码**立即生效**，适合开发与自用 —— npm 发布**暂缓**（要发的话见文末「发布到 npm（暂缓）」）。
+> ⚠️ **暂不支持 npm**：本包**在 npm 上没有任何已发布版本**（`npm view dsh-miliastra` → **404**）。
+> 所以**不存在**「装一个 npm 版本」这种装法 —— 现在跑这类命令只会失败。唯一可行的是**源码 / git**：
+> 克隆仓库 → 软链进 profile 的 `node_modules` → 注册进 `dsh.profile.bundles` → 重启 `dsh web`。
 
 ```powershell
 git clone <本仓库地址> dsh-miliastra
 cd dsh-miliastra
-
 # ① 软链到 profile 的 node_modules（开发态）
 cmd /c mklink /J "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-miliastra" (Get-Location).Path
-
-# ② **注册进 bundles** —— 少了这步插件完全不会加载（原因见下面那条警告）
+# ② **注册进 bundles** —— 少了这步插件完全不会加载（只放软链没用，原因见教程）
 #    编辑 %USERPROFILE%\.dsh\profiles\web\package.json，把 "dsh-miliastra" 加进 dsh.profile.bundles
-
-# ③ 重启 Web GUI
-dsh web     # Host 半边是启动时加载的快照，不重启不生效
-```
-
-> ⚠️ **只放软链不会让插件被装配**：启动期不扫描 `node_modules`，装配来源只有 profile 的 `dsh.profile.bundles`
-> （或 profile `cordis.patch.yml` 里显式 insert 一行）。这条错了的表现是**完全静默**：文件都在、什么也没发生。
->
-> ⚠️ 本机 pnpm 是 `nodeLinker: hoisted`，手搓的软链不在 profile 的 `dependencies` 里，
-> **下一次 `dsh plugin add/install` 会把它清掉** —— 所以它是「自用/开发」方式，不是交付方式。
-
----
-
-## 发布到 npm（**暂缓**，后面再说）
-
-> **现在固定走上面的「从源码目录装」，不发 npm。** 这一节留在这里只是为了以后要发时不用重新调研 ——
-> 内容都实测过（`npm pack --dry-run` 验过 `files` 字段、验过 `dsh.bundle.patch` 会被认）。
-
-```powershell
-npm login                                   # 浏览器 / 2FA；没账号先到 npmjs.com 注册并验证邮箱
-npm publish --dry-run                       # 先看会发什么（不真发）
-npm publish                                 # 真发；开了 2FA 时加 --otp=123456
-npm view dsh-miliastra version              # 验证：打印版本号即成功
-```
-
-发布之后，别人就用一条命令装（会自动写进 `dsh.profile.bundles`）：
-
-```powershell
-dsh plugin --profile web add dsh-miliastra@0.2.0   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
+# ③ 重启 Web GUI（Host 半边是启动时加载的快照，不重启不生效）
 dsh web
 ```
 
-**发布前请确认：**
-
-- `private` **必须是 false 或不存在** —— 写了 `"private": true` 时 npm 会直接拒绝
-- `files` 是**白名单**：没列进去的文件不会进包（`CHANGELOG.md` 就是后补进去的）
-- `license` 与仓库里的 `LICENSE` 一致
-- `repository` / `homepage` / `bugs` 指向真实地址
-- registry 指向**官方源**（`npm config get registry` 应是 `https://registry.npmjs.org/`；
-  指向淘宝等镜像时发布必失败）
-- `prepublishOnly` 会自动跑测试 —— 本项目配置为 `npm test`（**先跑 `node tools/lint.mjs`，再跑 10 套测试**，不过就发不出去）
-
-**三条不可逆的注意点：**
-
-1. **同名同版本不能重发** —— 改完要 `npm version patch`（→ `0.0.2`）再发
-2. **72 小时内**可以 `npm unpublish`，超过就再也撤不回来了
-3. 包名是**全局唯一**的，先占先得
+每一步为什么会这样、装完怎么自查、常见坑、以后要发 npm 时怎么做 → [`docs/快速上手与教程.md`](docs/快速上手与教程.md)。
 
 ---
 
@@ -286,8 +91,7 @@ dsh web
 
 > 下面这段由 `node tools/gen-readme-tools.mjs --write` 从 `index.js` 的 `TOOLS` **生成** ——
 > **工具的唯一真身是 schema**，本文件只是它的投影。改了工具（加 op / 加参数 / 改描述）就跑一次生成器：
-> `tests/readme-test.mjs` 会**逐字比对**，忘了跑就**红**。
-> 所以这一节**不会过时** —— 而手写的清单一定会（实测：本文件第一段曾把版本号停在 `0.0.1`，六次发布没人发现）。
+> `tests/readme-test.mjs` 会**逐字比对**，忘了跑就**红**（所以这一节**不会过时**；手写的清单一定会漂移）。
 
 <!-- BEGIN GENERATED:tools -->
 > ⚠️ **新工具**（还没进 `ORDER`，已排在最后）：`miliastra_sim`
@@ -521,97 +325,29 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | `name` | `string` | 否 | —— | op=bind：存档名（等价于面板上的重命名）；op=cases：set 的别名。 |
 <!-- END GENERATED:tools -->
 
-### 深入阅读（**按需加载**，别一次读所有）
+## 深入阅读（**按需加载**，不用一次读完）
 
-上面「工具速查」解决**怎么调**；下面这几篇解决**为什么**与**翻过什么车**。
-每篇都是独立文件 —— **用到哪条读哪篇**，不用整份读完。
+上面解决**怎么调**；下面这几篇解决**为什么**与**翻过什么车**。每篇独立成文 —— **用到哪条读哪篇**。
 
-| 你手上在做的事 | 读这个 |
+| 文档 | 什么时候读它 |
 |---|---|
-| 试玩：开跑那一刻 / 连拍 / 截图选窗 / 缩略图 | [`docs/功能详解.md`](docs/功能详解.md) |
-| **模拟器**：**它在流程里的位置（= 真机试玩之前的"预测试"，三档：看/玩/判）** ｜ 三个 tab 怎么挂的 ｜ 画面怎么来的 ｜ AI 怎么自测逻辑（`op=verify` / `frames`） ｜ 失控脚本护栏 ｜ 哪些还没验证 | [`docs/模拟器与视图.md`](docs/模拟器与视图.md) |
-| 部署安全：备份与还原 / 部署指纹 / `fixbom` / `lintMode` | [`docs/功能详解.md`](docs/功能详解.md) |
-| 读日志：按「局」切分 / 指标汇总 / 关卡表几何事实 | [`docs/功能详解.md`](docs/功能详解.md) |
-| 面板怎么用（三栏 / 自动跟随 / 多活文件 / 一键还原） | [`docs/面板与活文件安全.md`](docs/面板与活文件安全.md) |
-| 关键知识与能力边界（动态创建 / `prefabIndex` / 试玩没有自动化通道） | [`docs/关键知识与能力边界.md`](docs/关键知识与能力边界.md) |
-| 配置项（环境变量 / 数据目录） | [`docs/配置与开发.md`](docs/配置与开发.md) |
-| 改代码后的验证阶梯 / 生效边界 / 探针硬边界 / 排障 | [`docs/配置与开发.md`](docs/配置与开发.md) |
-| 每个版本的变更与真机证据 | [`CHANGELOG.md`](CHANGELOG.md) |
-| 融合 `miliastra-beyond-simulator` 的需求边界与工单（R↔FP 追溯、六轮决策、W1–W7） | [`docs/需求边界清单_融合beyond-simulator_2026-09-24.md`](docs/需求边界清单_融合beyond-simulator_2026-09-24.md) |
-| **上游源码在哪 / 搬了什么 / 没搬的读哪篇**（含 esbuild 构建脚本、他们的 DSH 插件与 agent 预设） | [`docs/上游源码索引与吸收地图.md`](docs/上游源码索引与吸收地图.md) |
+| [`docs/快速上手与教程.md`](docs/快速上手与教程.md) | 第一次装：源码 / git 完整安装步骤（软链 + 注册 bundles + 重启）、装完怎么自查、面板在哪、常见坑、以后要发 npm 时怎么做 |
+| [`docs/功能详解.md`](docs/功能详解.md) | 想知道某个工具到底怎么工作：试玩开跑与连拍、部署安全（备份 / 部署指纹 / `fixbom` / `lintMode`）、按「局」切分日志与指标汇总 |
+| [`docs/模拟器与视图.md`](docs/模拟器与视图.md) | 要用内置模拟器：三档（看 / 玩 / 判）在流程里的位置、画面怎么来的、AI 怎么自测（`verify` / `frames` / `cases`）、哪些还没验证 |
+| [`docs/面板与活文件安全.md`](docs/面板与活文件安全.md) | 用人眼看面板：三栏怎么用、自动跟随换图、多活文件、一键还原，以及活文件「宁可失败不许损坏」的约定 |
+| [`docs/关键知识与能力边界.md`](docs/关键知识与能力边界.md) | 动手前先认清边界：哪些控件能被脚本动态创建、`prefabIndex` 的坑、为什么试玩没有自动化通道 |
+| [`docs/配置与开发.md`](docs/配置与开发.md) | 要改这个插件 / 改环境变量与数据目录时要看：改代码后的验证阶梯、生效边界（Host 是启动快照）、探针硬边界、排障 |
+| [`docs/源码质量与想法池.md`](docs/源码质量与想法池.md) | 想知道源码靠什么守住、还有什么没做完：语言层绊线、池 A/B/C/D（AI 体验 / 工程工单 / 欠证据 / 新候选）都在这一篇 |
+| [`docs/需求边界清单_融合beyond-simulator_2026-09-24.md`](docs/需求边界清单_融合beyond-simulator_2026-09-24.md) | 要追溯模拟器是怎么融进来的：R↔FP 追溯、六轮决策、W1–W7 工单 |
+| [`docs/上游源码索引与吸收地图.md`](docs/上游源码索引与吸收地图.md) | 要找上游源码在哪 / 搬了什么 / 没搬的读哪篇（含 esbuild 构建脚本、他们的 DSH 插件与 agent 预设） |
+| [`CHANGELOG.md`](CHANGELOG.md) | 每个版本加了什么、修了什么、怎么验的 |
 
 <a id="ai-feedback"></a>
 
 ## AI 反馈区：目标是让 AI 更好用
 
-> **这个插件的目标只有一个：让 AI 更好用。**
-> 不是"给人看的 GUI 更漂亮"、也不是"功能更多"，而是 —— **AI 拿到它，能不能少问一句、少猜一次、少返工一轮地把活干完。**
-> 用它的 AI 和写它的 AI 是**同一条战线**的：你卡住的地方，我基本猜不到；所以请直接说。
-
-### 四条「尺子」：按这个评价，最容易被采纳
-
-这四条不是我临时编的，`tests/smoke.mjs` 里有断言钉住 —— 它们就是"什么叫对 AI 好用"的可执行定义。
-
-| # | 不变量 | 为什么要有 |
-|---|---|---|
-| ① | 每个工具 description 末尾必须有一条**可照抄的「典型调用」** | 看懂参数表 ≠ 会拼这条调用 |
-| ② | `level` = 地图关卡 ID（**哪张图**）｜`stage` = 玩法里的**第几关** | 撞车名会让 AI 拿错文件，而且**不报错** |
-| ③ | 可能超 10KB 的 op 必须给 `summaryOnly`（**只去体积、不去结论**） | 否则一次调用吃掉几万 token |
-| ④ | 每个工具在**系统提示段**里要有「什么时候用」（豁免得显式写理由） | **只有工具 schema 与系统提示段能自动到达 AI**，面板/README/路由对 AI 是黑洞 |
-
-### 什么样的意见最值钱（真实例子，照这个粒度写）
-
-| 提法 | 后来变成了什么 |
-|---|---|
-| 「要读运行时的控件，我得先 `state` 拉一大坨再自己筛」 | `op=controls`：只回 `{id,name,kind,depth}` + `names`（一行不到 `state` 同行的 1/3） |
-| 「`verify` 只说没过，不告诉我期望/实际」 | 失败回一句人话 `hint`（第几条 · 期望 vs 实际 · `failedAt` · frame） |
-| 「'画面对不对'只能看图，我看不见」 | 失败取证给**两份**：失败点一帧 PNG（眼睛）+ 运行时控件名清单（数字） |
-| 「我只能发 `click`，拖拽根本测不了」 | `drag:{from,to}` 自动展开成 `down → move… → up`；另有裸 `pointer:{type,x,y}` |
-| 「`tree{exists}` 只能答'建了吗'，答不了'建了几个'」 | 新增 `count` 断言（`{name?|controlKind?, equals|atLeast}`） |
-| 「人玩了一局想变成测试，AI 还得手抄 events」 | `op=verify fromHistory:true`（浏览器试玩页**关掉也不停局**，就为这条） |
-
-➡️ **推荐的写法**：*「我在做的事」+「我调了什么」+「我期待什么」+「实际得到什么」*。
-按这个粒度写，基本当天就能变成代码 —— 上面那六条就是这么来的。
-
-### 写到哪
-
-| 方式 | 怎么做 |
-|---|---|
-| **最快** | 在下面「想法池」表里加一行（**一行也算**），发 PR |
-| **正式** | 开 [Issue](https://github.com/LoktLin/dsh-miliastra/issues/new)，标题 `[AI 反馈] <工具名>：<一句话>` |
-| **最准** | 如果你正在用 DSH 跑这个插件：把你**真实卡住那次**的调用与回执贴出来（脱敏后）—— 比任何描述都有用 |
-
-> 顺带一句给**人类读者**：AI 提的建议请当"来自用户的一手反馈"看 —— 它可能不懂你的玩法，
-> 但**没人比它更清楚哪条工具不好用**。而玩法规则、判定、数值永远是你的（这个插件不替你做决定）。
-
-### 想法池（**我自己的待办，也欢迎任何 AI 往里加 / 挑 / 否决**）
-
-写在这里是为了**可被反驳**：这些都是我的判断，不是定论。你若觉得哪条没用、或想到更值的，直接改这张表。
-
-> 📄 **汇总视图**：[`docs/源码质量与想法池.md`](docs/源码质量与想法池.md) —— 把三处池子（这里的想法池 / 融合边界工单 /
-> 欠证据）合成一张总表，另附 2026-09-24 源码优化记录（体检数据、绊线抓到什么、**故意没做的三处**、回退→绊线对照表）。
-
-| 想法 | 谁提的 | 状态 | 一句话价值 |
-|---|---|---|---|
-| ~~`op=verify frames:[t1,t2,…]`：按时间出一串帧 + **帧间像素差数字**~~ | 写它的 AI | **✅ 已落地**（`op=frames`） | 让 AI 能**证明动画真的在动**：实测 `matrix.tx 800→850→900` 与像素 bbox 各右移 50px **互相印证**；静态工程 `identical:true` |
-| ~~**用例书**：把跑通的一组用例存进模拟器工作区，下次一条命令重放~~ | 写它的 AI | **✅ 已落地**（`op=cases`） | 回归从"每次重写 steps"变成"一条命令"；而且**人工项**（要人看画面 / 上真机的）也能挂进同一份清单 —— 工具不代判 |
-| ~~**把真机那份工程搬进来**（别让人/AI 手写探针：建模板 → 存盘 → 手改 guid → 挂脚本）~~ | 写它的 AI（双相预测试时踩到） | **✅ 已落地**（`op=bind`） | 一条命令搭好工程并回「脚本跑没跑、控件建了几个」；交接值错了**在跑之前**就报出来（模板索引编错 = 静默什么都不建） |
-| `op=controls diff`：相比上次多了 / 少了哪些控件 | 写它的 AI | 待办 | 验证「脚本动态创建」最直接的判据 |
-| **`op=play` 的「实时循环」封装** / **mark+delta（我这一下改变了什么）** | 写它的 AI（演示「AI 能不能游玩」时手写 pwsh 循环 + 手算节点差集） | 待办 | 把两段脚手架变成一次调用 —— **下一轮 P1**（见下方汇总文档） |
-| **浏览器试玩页内嵌进面板**（~~现在是新开标签页~~） | 写它的 AI | **✅ 已落地**（面板 1:2 右栏就是 `<iframe src="/miliastra/play">`，另有「新窗口 ↗」保留） | 人不用离开面板；AI 也不用管两个视图 |
-| ~~`op=keys` 只认 `KeyEventType.X`、漏掉**裸字符串键名**（`bindHold("KeyboardMoveRightKeyDown",…)`）~~ | 写它的 AI（**AI 自己对局时踩到**：游戏日志写着 `来源=KeyEventType`，工具却说"没出现 KeyEventType"） | **✅ 已落地**（两路并扫 + `found[].via` 标明来源 + 注释剔除） | 这条不是"少个功能"，是**AI 只能去猜键名**；真身验证 `双相.lua` **0 → 25 个键名** |
-| ~~**AI 自己"玩"的量级与读屏口径写进 schema**（发输入 5ms / 读场景 200ms / `textbox.text` 读 HUD / `frame` 不是秒表 / Down 要配 Up）~~ | 写它的 AI（作者问「你能在模拟器中游玩吗」） | **✅ 已落地**（schema + 提示段 + `smoke` 绊线；实测数据见 `docs/模拟器与视图.md` §4.14） | 这几条 AI **猜不出来**：不知道就会做出错误决定（以为能逐帧看画面 / 去截屏读 HUD / 只发 Down 卡住键） |
-| **`op=play` 的"实时循环"封装**（真实时钟下按时间线发一串输入 + 循环内条件分支，回 trace） | 写它的 AI（2026-09-24 演示「AI 能不能游玩」时，是**手写 pwsh 循环**才跑起来的） | 待办 | 把"蒙眼打一段 + 事后取证"变成一次调用；与 `verify`（冻结时钟）互补，别混 |
-| ~~**请求形状写进 schema / 回执**（`play` 的 `key`/`pointer`/`click`/`step` 到底怎么发）~~ | 写它的 AI（**作者原话：「你看找个按键这么久 这就是优化的空间」**） | **✅ 已落地**（`op=keys` 回执带 `press` 五个可照抄请求体；`all:true` 给全量 164 个键名；`smoke` 绊线钉住） | 以前 AI 为了发一个按键要翻 **4 个源文件**（`session.js`→`browser-session.js`→`controller.js`→`worker.js`）——**请求形状是契约，不是实现细节** |
-| ~~**读画面上的字**（HUD / 分数 / 关卡）~~ | 写它的 AI（为了读一行字 dump 了 30 KB 场景） | **✅ 已落地**（`op=hud`：只回 `textbox.text` + 世界坐标） | 实测 **30 177 B → ≈300 B（≈100×）**；坐标沿父链累加，AI 拿着就能点 |
-| ~~**"屏幕上有哪些控件、在哪、什么字"一次拿**（AI 要**点**东西时缺的那半张地图）~~ | 写它的 AI（自己解析了 31 个节点的矩阵才算清谁在哪） | **✅ 已落地**（`op=controls {runtime:true,geom:true}`） | 回执 1.4 KB 而底层是 75 KB 的 tree+scene；顺带查出**场景 ≠ 控件树**（`scene` 只含会被渲染的控件 ⇒ 带 `geomCovered/Missing` 并明说"没坐标≠不存在"） |
-| `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
-| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 实测 26.3 KB（其中 `miliastra_sim` 占 6.1 KB = 23%），知识进 skill 能省掉常驻那部分 |
-| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 26.3 KB |
-| **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 这是**给人**看的；AI 要的"哪变了"已由 `op=frames` 的数字回答了 |
-| （等你来写） | | | |
-
-**已经落地、可以照抄的形态**：`op=verify`（操作+断言+判定一次调用）· `cases[]`（一组回归）· `op=controls` · 失败自动取证 · `drag` / `count` · `fromHistory` · **`op=frames`（动画证据：多帧 + 帧间像素差 + 字段级变化）** · **`op=bind`（真机工程搬进模拟器）** · **`op=cases`（验收单：自动项 + 人工项）** · 浏览器试玩页 `GET /miliastra/play`。
+> 用它的 AI 和写它的 AI 是**同一条战线**的：哪里绕、哪里缺参数、哪里报错说不清、哪里该给数字却给了文字，直接说。
+> **想法池的真身是 [`docs/源码质量与想法池.md`](docs/源码质量与想法池.md) 的 §2**（池 A/B/C/D 汇总表）：往那里加一行、挑一条或否决一条；正式提法走 [Issue](https://github.com/LoktLin/dsh-miliastra/issues/new) —— 最值钱的写法：*「我在做什么」+「调了什么」+「期待什么」+「实际得到什么」*。
 
 ---
 

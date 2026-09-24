@@ -148,7 +148,7 @@ t('README 有「30 秒上手」且第一步是 `miliastra_health`', () => {
   return '三步路径完整';
 });
 
-/* ---- 5b. 英文入口（照 DSH Release 的双语写法）---- */
+/* ---- 5b. 中文单语绊线（作者要求：删掉所有英文镜像文案，README 只留中文）---- */
 
 /** 取某个 `## ` 小节（到下一个小节为止）。找不到返回 null。 */
 const sectionOf = (text, heading) => {
@@ -158,28 +158,20 @@ const sectionOf = (text, heading) => {
   return text.slice(at, next < 0 ? undefined : next);
 };
 
-t('README 顶部有中英语言锚点', () => {
-  const m = /\[中文\]\(#[^)]+\)\s*\|\s*\[English\]\(#english-overview\)/.exec(readme);
-  assert(m, '第一行下面应有 `[中文](#…) | [English](#english-overview)`（照 DSH Release 的写法）');
-  assert(/^# .+\n\n\[中文\]/.test(readme), '语言锚点要贴在标题下面第一行');
-  return m[0];
+// ★ 这两条是**反向**断言（原文要求「中英双语」，现在要求「中文单语」）：
+//   ① 标题下第一行**不再**要求语言锚点；② README 里**不许再有** `## English…` 镜像段。
+t('README 是中文单语：首行不再要求语言锚点', () => {
+  assert(!/^# .+\n\n\[中文\]/.test(readme), '标题下第一行不该再有 `[中文](#…) | [English](#…)` 语言锚点');
+  assert(!/\[English\]\(#/.test(readme), 'README 里不该再有指向英文段的 `[English](#…)` 锚点');
+  return '中文单语：不再要求语言锚点';
 });
 
-t('有 `English overview` 段（可照抄 + 安装要点）', () => {
-  const sec = sectionOf(readme, '## English overview');
-  assert(sec, '找不到 `## English overview` —— 英文读者没有一眼能懂的入口');
-  assert(/30-second quick start/i.test(sec), '英文速览里没有 30-second quick start');
-  assert(/miliastra_health \{\}/.test(sec), '英文速览里没有可照抄的第一步 `miliastra_health {}`');
-  assert(/dsh\.profile\.bundles/.test(sec), '英文速览没写「必须进 bundles，否则插件完全不加载」');
-  return `${sec.length} 字符`;
-});
-
-t('`English overview` 覆盖全部工具', () => {
-  const sec = sectionOf(readme, '## English overview');
-  assert(sec, '找不到 `## English overview`');
-  const missing = toolNames.filter((name) => !sec.includes(name));
-  assert(!missing.length, `英文速览里没有：${missing.join(' / ')}（加新工具要补一行英文说明）`);
-  return `${toolNames.length}/${toolNames.length}`;
+t('README 里不再有 `## English` 级英文镜像段', () => {
+  const sec = sectionOf(readme, '## English');
+  assert(!sec, `README 里还有英文镜像段（${sec ? sec.length : 0} 字符）—— 作者要求中文单语，英文文案应已删除`);
+  const headings = readme.match(/^##+ .*English.*$/gim) || [];
+  assert(!headings.length, `还有英文小节：${headings.join(' / ')}`);
+  return '中文单语：无英文镜像段';
 });
 
 /* ---- 5c. 渐进式披露：README 只是入口，细节在 docs/ —— 两个方向都要连得上 ---- */
