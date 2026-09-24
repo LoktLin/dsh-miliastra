@@ -5,7 +5,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具，
 > 让 AI Agent 能自己定位活文件、读地图配置、跑探针、取运行时日志 —— 不用你手动复制粘贴。
 
-**版本 `0.0.11`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only
+**版本 `0.1.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 这套工具链是**在正式服上排一次真实的 bug 排出来的**（「动态创建控件恒返回 nil」→ 根因是模板库为空），
@@ -193,7 +193,7 @@ npm view dsh-miliastra version              # 验证：打印版本号即成功
 发布之后，别人就用一条命令装（会自动写进 `dsh.profile.bundles`）：
 
 ```powershell
-dsh plugin --profile web add dsh-miliastra@0.0.11   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
+dsh plugin --profile web add dsh-miliastra@0.1.0   # 声明了 dsh.bundle.patch，会自动进 dsh.profile.bundles
 dsh web
 ```
 
@@ -452,6 +452,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 改代码后的验证阶梯 / 生效边界 / 探针硬边界 / 排障 | [`docs/配置与开发.md`](docs/配置与开发.md) |
 | 每个版本的变更与真机证据 | [`CHANGELOG.md`](CHANGELOG.md) |
 | 融合 `miliastra-beyond-simulator` 的需求边界与工单（R↔FP 追溯、六轮决策、W1–W7） | [`docs/需求边界清单_融合beyond-simulator_2026-09-24.md`](docs/需求边界清单_融合beyond-simulator_2026-09-24.md) |
+| **上游源码在哪 / 搬了什么 / 没搬的读哪篇**（含 esbuild 构建脚本、他们的 DSH 插件与 agent 预设） | [`docs/上游源码索引与吸收地图.md`](docs/上游源码索引与吸收地图.md) |
 
 ## License
 
