@@ -67,6 +67,12 @@
 
 ### 修复
 
+- **★★ 舞台高度被画布"自己量自己"锁成一条缝（作者两次实测：「右侧这么大的画面也太小了吧」「直接打开是这样」）**：
+  footer 上一直写着 `可放 542×90` / `542×168` —— **宽度一直正常、高度一直不对**。
+  根因在 CSS：`main` 只写了 `grid-template-columns`，**行是 auto** ⇒ 行高 = 内容高 = **画布的高度**，
+  而画布高度又是 `fit()` 从舞台盒子量出来算的 ⇒ 某次算小之后一路变小、最后锁死（列宽由容器分配，所以列没事）。
+  修法一行：`main{grid-template-rows:minmax(0,1fr)}` + `#stageWrap{height:100%;overflow:hidden}` ——
+  **舞台高度由容器决定，永远不看画布**。`sim-play-test` 里钉住这两条（别让它再变成"自己量自己"）。
 - **★★ 重启 `dsh web` 后模拟器工程回到「出厂默认」（作者实测：「咋画面在左下角 右侧啥都没」的第二个成因）**。
   Host 是启动快照 ⇒ 内存里的工程被重置，试玩页里只剩默认的「文本 / 预设按钮 / 五角星」，**看起来就像什么都没画**。
   现在：① 引擎 `get()` 上报 `factoryDefault`，`op=state` 直说；② **成功 `op=bind` 会记一份配方**
@@ -151,8 +157,8 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0** = **591 项**：`smoke` 50 → **52**（engine 路由不吞 `op` 的两条 ★）、`sim` 88 → **132**（`op=bind` 21 + `op=cases` 14 + `op=handover` 7）、
-  `sim-play` 29 → **36**（报错条可见 / WebGL 兜底 / 舞台尺寸重试）、`client-render` **45**（1:2 + iframe + 左列顺序与滚动模型）；其余 `readme` 14 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · 引擎 130。
+- `npm test` 退出码 **0** = **592 项**：`smoke` 50 → **52**（engine 路由不吞 `op` 的两条 ★）、`sim` 88 → **132**（`op=bind` 21 + `op=cases` 14 + `op=handover` 7）、
+  `sim-play` 29 → **37**（报错条可见 / WebGL 兜底 / 舞台尺寸重试）、`client-render` **45**（1:2 + iframe + 左列顺序与滚动模型）；其余 `readme` 14 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · 引擎 130。
 - **`op=bind` 在真机上跑通了**（双相《冰镜·火烛》，370ms 建好）：`run.logs` 出现它自己 print 的
   `就绪（3 关，控件 31，画布 1600x900）`（与真机 `.gia` 同一句），`run.controlCount=32`（容器 1 + 双相 31），
   渲染图 `~/.dsh/miliastra/shots/sim-play-双相-bind-第1关-20260924-110733.png` 里第 1 关的平台/熔岩/冰墙/小人/状态栏都在。

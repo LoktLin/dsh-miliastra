@@ -21,9 +21,19 @@
   .tag{padding:2px 8px;border-radius:999px;background:#152238;border:1px solid #263750;color:#9fb0c8}
   .tag.on{background:#0f2f1c;border-color:#1f7a45;color:#5ee08a}
   .tag.err{background:#3a1418;border-color:#8b2635;color:#ff8a9b}
-  main{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 0;min-height:0}
+  /*
+   * ★ `main` 必须**显式把行拉满**：`grid-template-rows:minmax(0,1fr)`。
+   *
+   * ⚠️ 这里踩过一个特别隐蔽的坑（作者两次实测：「右侧这么大的画面也太小了吧」「直接打开是这样」）：
+   * `main` 只写了 `grid-template-columns`，**行是 auto** ⇒ 行高 = 内容高 = **画布的高度**，
+   * 而画布高度又是 `fit()` 从舞台盒子里量出来算的 ⇒ **自己量自己**的死循环：
+   * 某次把画布算小之后（比如刚插进 iframe 那一刻），行高跟着变小、下一轮量到的更小 ——
+   * 最后锁死在 `可放 542×90` 这种一条缝上（footer 那行数字就是证据）。
+   * 列不受影响（列宽由容器分配），所以症状是"**宽度一直正常、高度一直不对**"。
+   */
+  main{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 0;grid-template-rows:minmax(0,1fr);min-height:0}
   main.paneled{grid-template-columns:minmax(0,1fr) 340px}
-  #stageWrap{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;background:#0a111d}
+  #stageWrap{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;background:#0a111d;height:100%;overflow:hidden;}
   /*
    * ★ 画布尺寸**由 CSS 固定成 16:9**：`#stage` 用 `aspect-ratio`，画布铺满它。
    * 这样"16:9"是**声明**出来的，不靠 JS 算高度 —— JS 只负责挑宽度，任何布局抖动都不会算出怪比例。
