@@ -273,7 +273,7 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
   let html;
   try {
     html = renderToStaticMarkup(React.createElement(PanelComp, {
-      open: true, setOpen: () => {}, rootRef: { current: null },
+      open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'all',
     }));
   } catch (e) {
     throw new Error('整面板渲染抛错：' + e.message);
@@ -292,7 +292,7 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
 
 // Host 是**启动时的快照** —— 面板要把「源码比它新」说出来（P0-C：今晚为此花了 5 个调用定位）。
 check('版本行：Host / 源码对照，陈旧时才警告并给下一步', () => {
-  const props = (status) => ({ open: true, setOpen: () => {}, rootRef: { current: null }, __status: status });
+  const props = (status) => ({ open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'all', __status: status });
   const fresh = renderToStaticMarkup(React.createElement(clientExports.__testPanel, props({
     version: '0.0.10', startedAt: '2026-09-23T14:18:00.000Z',
     source: { sourceVersion: '0.0.10', stale: false, hint: null },
@@ -314,7 +314,7 @@ check('版本行：Host / 源码对照，陈旧时才警告并给下一步', () 
 
 // 探针现在收在「高级诊断」折叠区里（默认收起），所以下面这些断言都要显式展开它。
 const openAdv = (extra) => Object.assign({
-  open: true, setOpen: () => {}, rootRef: { current: null }, __advOpen: true,
+  open: true, setOpen: () => {}, rootRef: { current: null }, __advOpen: true, __panelTab: 'all',
 }, extra || {});
 
 check('★ 日志格式化：拆出 时间 / [TAG] / 正文，且只对疑似异常着色', () => {
@@ -435,7 +435,7 @@ check('★ 局面名与状态图标（面板上只显示 HH:MM:SS，不铺一长
 });
 
 check('★ 高级诊断默认**收起**（只读的 UI 读取 + 会覆盖脚本的探针都关在里面）', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
   }));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
@@ -618,7 +618,7 @@ check('★ 界面文案里没有 Markdown 记号（面板不渲染 Markdown，`*
 });
 
 check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者要求的三件事都要看得见）', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __backups: {
       ok: true, count: 2, backupDir: 'C:\\x\\external_lua_file\\_backup',
@@ -642,7 +642,7 @@ check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者
   // 固定名那条要标星，方便在列表里认出来
   assert(/★ 双相\.bak/.test(flat), '列表里固定名那份没有标记');
   // 确认步骤要讲清后果（覆盖谁、会先备份、会校验回滚）—— 这是覆盖前最后一句话
-  const confirmHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const confirmHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __pendingRestore: '__fixed__',
     __backups: {
@@ -657,7 +657,7 @@ check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者
   assert(/会自动回滚/.test(confirmFlat), '确认步骤没提校验/回滚');
 
   // 没有固定名时不该出现一键按钮，而要给一句解释（Host 旧版的情况）
-  const noFixed = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const noFixed = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __backups: { ok: true, count: 1, backupDir: 'C:\\x\\_backup', fixedBackup: 'C:\\x\\_backup\\双相.bak',
       fixedExists: false, entries: [{ name: '双相.20260923-180000_备份.lua', path: 'C:\\x\\_backup\\双相.20260923-180000_备份.lua', size: 10, fixed: false }] },
@@ -669,7 +669,7 @@ check('★ 备份卡片：说明备份在哪 / 固定名 / 一键还原（作者
 
 
 check('★ 截图卡片：存到哪 / 多少张 / 不会自动删，三件事都必须在卡片上', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __shot: {
       dir: 'C:\\Users\\x\\.dsh\\miliastra\\shots', count: 7, totalBytes: 17694858, totalText: '16.9 MB',
@@ -701,7 +701,7 @@ check('★ 截图卡片：存到哪 / 多少张 / 不会自动删，三件事都
   assert(/原神/.test(flat) && /3284/.test(flat), '没显示截到的窗口标题/pid');
   assert(/窗口自绘/.test(flat), '没说明用的是哪条抓取路线（决定这张图可不可信）');
   // ⑥ 可疑时要用醒目样式
-  const suspect = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const suspect = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __shot: {
       dir: 'C:\\x', count: 1, totalText: '2.4 MB', files: [],
@@ -728,14 +728,14 @@ check('★ 截图卡片：存到哪 / 多少张 / 不会自动删，三件事都
 
 check('★ 清理要两步：先看将删哪些，确认按钮才出现', () => {
   // 没规划时不该有「确认删除」
-  const idle = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const idle = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __shot: { dir: 'C:\\x', count: 1, totalText: '2.4 MB', files: [] },
   }));
   assert(!/确认删除/.test(idle), '还没规划就给了「确认删除」按钮 —— 会一按就删');
 
   // 规划出来后：要显示会删哪些 + 确认按钮 + 取消
-  const planned = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const planned = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __shot: { dir: 'C:\\x', count: 3, totalText: '7.2 MB', files: [] },
     __cleanPlan: {
@@ -786,7 +786,7 @@ check('★ 开跑自动截图的判据：只在「新开跑」触发、同一局
 });
 
 check('★ 试玩卡片：状态 + 来源 + 实测延迟 + 「别用 .gia 判」都要看得见', () => {
-  const live = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const live = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __pt: {
       ok: true, inPlaytest: true, startedAt: '21:46:02.420', startedAtMs: 1790171162420,
@@ -814,7 +814,7 @@ check('★ 试玩卡片：状态 + 来源 + 实测延迟 + 「别用 .gia 判」
   assert(/3 秒<\/button>/.test(live), '缺「开跑后几秒」的秒数选择');
 
   // 不在试玩时也得有话说（不能空着让人猜）
-  const idle = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  const idle = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
     __pt: { ok: true, inPlaytest: false, startedAtMs: null, logPath: 'C:\\x\\output_log.txt', lastRun: null, recentRuns: [] },
   }));
@@ -849,7 +849,7 @@ check('三个 tab 的注册计划是纯数据（id / 文案 / 顺序写坏 = tab
 });
 
 check('「初级功能」视图：SSR 真渲染，只出 ① 关卡 + ② 代码', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'basic' }));
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'basic' }));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('① 关卡'), '缺 ① 关卡');
   assert(text.includes('② 代码'), '缺 ② 代码');
@@ -859,7 +859,7 @@ check('「初级功能」视图：SSR 真渲染，只出 ① 关卡 + ② 代码
 });
 
 check('「高级功能」视图：只出 ③ 日志与画面（含高级诊断），不重复 ①②', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'advanced' }));
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'advanced' }));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('③ 日志与画面'), '缺 ③ 日志与画面');
   assert(!text.includes('① 关卡'), 'advanced 视图不该出 ① 关卡');
@@ -868,7 +868,7 @@ check('「高级功能」视图：只出 ③ 日志与画面（含高级诊断�
 });
 
 check('inline 视图里没有关闭按钮（视图不该有"关掉自己"这回事）', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'basic' }));
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'basic' }));
   assert(!/dsh-miliastra-x/.test(html), 'inline 视图里出现了关闭按钮');
   return '无 ×';
 });
@@ -885,19 +885,48 @@ check('「模拟器」视图能真渲染（不是占位）：8 个动作 + 诚�
   return '8 个动作 + 空态提示 + 全宽布局';
 });
 
-check('浮层面板自带视图切换条（初级功能 / 高级功能 / 全部）—— 会话区 tab 找不到时的第二入口', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+check('浮层面板 = 三个独立页面（初级功能 / 高级功能 / 模拟器），**没有「全部」**', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'basic',
     open: true, setOpen: () => {}, rootRef: { current: null },
   }));
   const text = html.replace(/<[^>]+>/g, ' ');
-  for (const label of ['初级功能', '高级功能', '全部']) {
+  for (const label of ['初级功能', '高级功能', '模拟器']) {
     assert(text.includes(label), '缺视图切换按钮：' + label);
   }
+  assert(!/全部<\/button>/.test(html), '还留着「全部」混合页按钮（作者要求去掉）');
   assert(/dsh-miliastra-vtab/.test(html), '切换按钮没有样式类（会渲染成裸按钮）');
   assert(/dsh-miliastra-vtab-on/.test(html), '没有标出当前选中的那一档');
-  const inline = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'basic' }));
+  assert(/dsh-miliastra-viewtabs/.test(html), '缺 tab 条容器（平铺成三等分）');
+  const inline = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'basic' }));
   assert(!/dsh-miliastra-vtab/.test(inline), 'inline 视图不该再带一条内部切换条（那边由会话区 tab 决定）');
-  return '三个按钮 + 选中态 + inline 不重复';
+  return '三个页面按钮 + 选中态 + 无「全部」+ inline 不重复';
+});
+
+check('每个页面只出自己那几栏、内容**平铺铺满**（-bodyfill），互不干扰', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
+  const basic = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'basic' })));
+  const bTxt = basic.replace(/<[^>]+>/g, ' ');
+  assert(bTxt.includes('① 关卡') && bTxt.includes('② 代码'), '初级页缺 ①②');
+  assert(!bTxt.includes('③ 日志与画面'), '初级页混进了 ③');
+  assert(/dsh-miliastra-bodyfill/.test(basic), '初级页没平铺（会留一个空洞的第三栏）');
+
+  const adv = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'advanced' })));
+  const aTxt = adv.replace(/<[^>]+>/g, ' ');
+  assert(aTxt.includes('③ 日志与画面'), '高级页缺 ③');
+  assert(!aTxt.includes('① 关卡') && !aTxt.includes('② 代码'), '高级页混进了 ①②');
+  assert(/dsh-miliastra-bodyfill/.test(adv), '高级页没平铺');
+  return '初级=①② / 高级=③，各自平铺';
+});
+
+check('模拟器是**面板内的第三个页面**（不再只是提示去会话区）', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'sim' })));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(text.includes('开始试玩') && text.includes('导出 GIA'), '模拟器页没渲染出动作按钮');
+  assert(text.includes('还没有画面'), '模拟器页缺空态提示');
+  assert(/dsh-miliastra-simbody/.test(html), '没有 simbody 容器（正文没与 conversation.view 复用同一个组件）');
+  assert(!/dsh-miliastra-bodyfill/.test(html), '模拟器页不该再套卡片网格（它自己就是两栏）');
+  return '面板内第三个页面可渲染';
 });
 
 console.log('');
