@@ -552,6 +552,54 @@ ok('op=bind 读不到 Lua：报错说清路径与原因（不是静默空跑）'
 const bindWrongCanvas = await err(() => simOp({ op: 'bind', source: bindLua, canvasId: 'nope', templates: [{ guid: 1073741868, kind: 'image' }] }));
 ok('op=bind 画布 id 不认识：报错并列出可用画布', !!bindWrongCanvas && /pc-16-9/.test(bindWrongCanvas), bindWrongCanvas);
 
+/* ------------------------------- op=handover：交接值从哪来（别靠人抄） */
+
+/*
+ * 交接值抄错一位 → 脚本 `InstantiateClientUIControl` **静默什么都不建**（不报错）。
+ * 所以先有一步「把源码里写着的真机 id 摆出来」：`local NAME = <大整数>` —— 这是**真值**，不是抄来的。
+ * 但 kind 只能提示（按变量名猜）：控件类型错同样是静默失败，必须由创作者确认。
+ */
+const hoLua = path.join(tmpData, '交接自检.lua');
+fs.writeFileSync(hoLua, [
+  '-- 创作者交接的三个值（真机界面控件组库里那几条模板的索引）',
+  'local CONTAINER_INDEX_HANDOVER = 1073741866',
+  'local TEXTBOX_TEMPLATE = 1073741867',
+  'local IMAGE_TEMPLATE = 1073741868',
+  'local LIMIT = 60',
+  'function OnStart()',
+  '  local a = game.InstantiateClientUIControl(IMAGE_TEMPLATE, script.object)',
+  '  print("[ho-selftest] " .. tostring(a ~= nil))',
+  'end',
+  '',
+].join('\n'), 'utf8');
+
+const ho = await simOp({ op: 'handover', source: hoLua });
+ok('★ op=handover：把源码里的交接值抽出来（含**变量名**，不是让人抄）',
+  ho.candidates.length === 3 && ho.candidates.map((c) => c.value).join(',') === '1073741866,1073741867,1073741868',
+  JSON.stringify(ho.candidates));
+ok('op=handover：kind 只按变量名**提示**（IMAGE→image / TEXT→textbox / CONTAINER→role=container）',
+  ho.candidates.find((c) => c.name === 'IMAGE_TEMPLATE').kindHint === 'image'
+  && ho.candidates.find((c) => c.name === 'TEXTBOX_TEMPLATE').kindHint === 'textbox'
+  && ho.candidates.find((c) => c.name === 'CONTAINER_INDEX_HANDOVER').role === 'container'
+  && ho.candidates.find((c) => c.name === 'CONTAINER_INDEX_HANDOVER').isTemplate === false,
+  JSON.stringify(ho.candidates.map((c) => [c.name, c.kindHint, c.role])));
+ok('op=handover：直接给一份可照抄的 suggestedTemplates + containerId',
+  ho.suggestedTemplates.length === 2 && ho.containerId === 1073741866
+  && ho.suggestedTemplates.every((t) => ['image', 'textbox'].indexOf(t.kind) >= 0),
+  JSON.stringify({ t: ho.suggestedTemplates, c: ho.containerId }));
+ok('op=handover：小整数（如 60）不会被当成交接值',
+  !ho.candidates.some((c) => c.value === 60), JSON.stringify(ho.candidates.map((c) => c.value)));
+ok('op=handover：活文件清单是数组（这台机器上可能为空 —— 如实回，不报假警）', Array.isArray(ho.files), JSON.stringify(ho.fileCount));
+
+// 端到端：handover 抽出来的东西直接喂给 bind（"真值 → 工程"一条链）
+const hoBound = await simOp({ op: 'bind', source: hoLua, run: false, templates: ho.suggestedTemplates, containerId: ho.containerId });
+ok('★ op=handover → op=bind 一条链：抽出来的模板直接建进模拟器（guid 原样）',
+  hoBound.templateCount === 2 && hoBound.handover.missing.length === 0,
+  JSON.stringify({ templates: hoBound.templates, missing: hoBound.handover.missing }));
+
+const hoNoFile = await err(() => simOp({ op: 'handover', source: path.join(tmpData, '没有这个文件.lua') }));
+ok('op=handover 读不到文件：明确报错（不是静默返回空候选）', !!hoNoFile && /读不到/.test(hoNoFile), hoNoFile);
+
 /* ------------------------------- op=cases：验收单（人/AI 读同一份） */
 
 const casesFile = path.join(tmpData, 'simulator', 'cases.json');

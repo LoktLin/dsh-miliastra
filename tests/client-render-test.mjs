@@ -969,31 +969,36 @@ check('模拟器是**面板内的第三个页面**（不再只是提示去会话
 });
 
 /*
- * 2026-09-24 作者批注：「画面与日志 现在的条目横排过去，然后下面的长方形区域当作 AI 试玩区域」。
- * 这类"布局要求"最容易在后续改动里被无声改回去（面板不报错、只是又变回上下叠着），所以钉成断言。
+ * 2026-09-24 作者要求：「模拟器那个 tab 就是 1:2，其中 2 的部分就是放 /miliastra/play（AI 能操作、人也能看到）」。
+ * 这类"布局要求"最容易在后续改动里被无声改回去（面板不报错、只是又变回旧样子），所以钉成断言。
  */
-check('★ 模拟器布局（作者批注）：画面与日志**横排**，下面的大区域是「AI 试玩区域」', () => {
+check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是嵌入的**试玩页** `/miliastra/play`', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
   const text = html.replace(/<[^>]+>/g, ' ');
-  // ① 横排：两卡片包在一个 simrow 里，且 CSS 是横向网格（不是默认的块级上下叠）
-  assert(/dsh-miliastra-simrow/.test(html), '没有 simrow 容器 —— 画面与日志还是上下叠着的');
-  const rowStart = html.indexOf('dsh-miliastra-simrow');
-  const rowHtml = html.slice(rowStart, html.indexOf('dsh-miliastra-simai'));
-  assert(/dsh-miliastra-sec-title[^>]*>\s*<[^>]*>\s*画面/.test(rowHtml.replace(/\s+/g, ' ')) || rowHtml.includes('画面'), 'simrow 里没找到「画面」卡片');
-  assert(rowHtml.includes('试玩日志'), 'simrow 里没找到「试玩日志」卡片 —— 两张卡没横排在一起');
-  const css = styleNodes[0].textContent;
-  assert(css.includes('dsh-miliastra-simrow{') && /dsh-miliastra-simrow\{display:grid;grid-template-columns:repeat\(auto-fit/.test(css.replace(/\s+/g, '')),
-    'simrow 的 CSS 不是横向网格（会被渲染成上下叠）');
-  // ② AI 试玩区域：标题 + 大画面 + 传输控制 + 操作时间线，且排在 ② 行**下面**
-  assert(text.includes('AI 试玩区域'), '缺「AI 试玩区域」标题');
-  assert(html.indexOf('dsh-miliastra-simrow') < html.indexOf('dsh-miliastra-simai'),
-    '「AI 试玩区域」没排在「画面与日志」下面');
-  const aiHtml = html.slice(html.indexOf('dsh-miliastra-simai'));
-  for (const label of ['开始试玩', '单步', '停止', '操作时间线', '浏览器试玩']) {
-    assert(aiHtml.includes(label), 'AI 试玩区域里缺：' + label);
+  const css = styleNodes[0].textContent.replace(/\s+/g, '');
+  // ① 1:2 网格 + 窄屏塌成一列（浮层只有 880px 宽，硬分 1/3 会挤成一条）
+  assert(/dsh-miliastra-simgrid\{display:grid;grid-template-columns:1fr2fr/.test(css),
+    '模拟器不是 1:2 网格：' + ((css.match(/dsh-miliastra-simgrid\{[^}]*\}/) || ['(缺 simgrid 规则)'])[0]));
+  assert(/@media\(max-width:1000px\)\{\.dsh-miliastra-simgrid\{grid-template-columns:1fr;\}\}/.test(css),
+    '缺窄屏塌成一列的兜底（浮层里会挤成一条）');
+  // ② 2 的那一半真的是 iframe，且就是试玩页
+  assert(/<iframe/.test(html), '没有 iframe —— 试玩页没嵌进面板');
+  assert(/dsh-miliastra-playframe/.test(html), 'iframe 没有样式类（会渲染成一条细缝）');
+  assert(/src="\/miliastra\/play"/.test(html), 'iframe 的 src 不是 /miliastra/play');
+  assert(/title="千星模拟器试玩页/.test(html), 'iframe 没有 title（无障碍与排障都要）');
+  // ③ 顺序：左（工程/画面/操作/验收单）在 iframe 之前 ⇒ iframe 落在右边那 2 份里
+  assert(html.indexOf('dsh-miliastra-playside') >= 0
+    && html.indexOf('dsh-miliastra-playside') < html.indexOf('dsh-miliastra-playframe'),
+  'iframe 没排在左列之后（会跑到 1 的那一半去）');
+  // ④ 左列几块都在
+  for (const label of ['① 工程与控件树', '② 画面与日志', '③ 试玩操作', '④ 试玩页', '工程适配', '验收单', '操作时间线']) {
+    assert(text.includes(label), '左列缺：' + label);
   }
-  assert(/dsh-miliastra-simai\{display:flex/.test(css.replace(/\s+/g, '')), 'simai 没有自己的样式类（会渲染成裸 div）');
-  return '画面/日志横排 + AI 试玩区域（含传输控制与时间线）';
+  // ⑤ 传输控制与验收单按钮都在（它们驱动的是**同一个**会话）
+  for (const label of ['开始试玩', '单步', '停止', '读清单', '跑这一组', '扫描活文件', '搭进模拟器']) {
+    assert(html.includes(label), '缺控件/按钮：' + label);
+  }
+  return '1:2 + iframe(/miliastra/play) + 左列 ①~④ + 窄屏兜底';
 });
 
 check('操作时间线的一行：说清"什么时候、做了什么"（AI 照着就能写成 steps[]）', () => {

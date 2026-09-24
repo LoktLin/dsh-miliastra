@@ -1381,6 +1381,10 @@ const TOOLS = [
       + '\n  · **`fromHistory:true`：把「刚跑过那一局」直接变成回归用例** —— 人在浏览器试玩页（`GET /miliastra/play`，WebGL 真能玩的那页）里玩的也算，AI **不用手抄 events**；'
       + '人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。'
       + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。'
+      + '\n★ **交接值从哪来？先 `op=handover`** —— 它列出这台机器上的**活文件**（并标出"当前正在开发的那张图"），'
+      + '再读那份 Lua，把源码里 `local NAME = <9 位以上整数>` 的**候选交接值**摆出来（含变量名与 `kind` 提示）+ 给一份 `suggestedTemplates`。'
+      + '为什么值得单开一步：交接值**抄错一位** → 脚本静默什么都不建（不报错）；从源码抽真值比让人抄一遍可靠。'
+      + '但 `kindHint` **只是提示**（看变量名猜的），控件类型必须创作者确认。'
       + '\n★ **把真机工程搬进模拟器用 `op=bind`**（一条命令替掉手写探针）：给 `source`（真机活文件 .lua 绝对路径）+ '
       + '`templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**，不许编造）+ `containerId`（交接的容器索引，只记录/交叉核对）→ '
       + '它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 '
@@ -1416,7 +1420,7 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['controls', 'state', 'patch', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；写断言前想省 token 看控件用 controls。' },
+        op: { type: 'string', enum: ['controls', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；交接值用 handover；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；写断言前想省 token 看控件用 controls。' },
         steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|drag?{from,to,steps,gap}|pointer?{type,x,y}|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
         expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name|controlKind,equals|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。', items: { type: 'object', additionalProperties: true } },
         cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。', items: { type: 'object', additionalProperties: true } },
