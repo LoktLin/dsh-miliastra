@@ -33,6 +33,7 @@ globalThis.window = windowShim;
 globalThis.document = documentShim;
 
 const source = fs.readFileSync(path.join(PKG_DIR, 'lib', 'client.js'), 'utf8');
+// eslint-disable-next-line no-new-func -- 把插件自己的 client.js 塞进假 window/document 里跑（无头渲染面板取文案），不是 eval 外部输入
 new Function('window', 'document', 'console', source)(windowShim, documentShim, console);
 
 const React = req('react');

@@ -11,6 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { deploy, inspect, sha256, hasBom, backupFile, listBackups, restore, defaultBackupDir, stampOfName, atomicWriteFile, rollbackTo, fixedBackupPath, isAuxiliaryLuaName, pickLuaFile, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from '../lib/codefile.mjs';
+// 原子写的**实现**住在 lib/fsx.mjs（codefile 只是转发）；这里直接测实现本身
+import { atomicWriteJson, prettyJson } from '../lib/fsx.mjs';
 
 let pass = 0;
 let fail = 0;
@@ -410,6 +412,46 @@ check('★ atomicWriteFile() 同目录原子替换（不留 tmp、可覆盖已�
   assert(leftovers.length === 0, '留下临时文件：' + leftovers.join(', '));
   return '覆盖成功、无 tmp 残留';
 });
+
+/*
+ * ★ 原子写是**共享实现**（`lib/fsx.mjs`），三件事要钉住 —— 2026-09-24 源码体检时发现
+ * 「写盘」当时有三种写法（硬化版 / 手搓 tmp+rename / 裸 writeFileSync），健壮性必须长在唯一实现上。
+ */
+check('★ 原子写也接字符串，且不写 BOM（本项目硬要求：原神遇到 BOM 会报 Lua error）', () => {
+  const f = path.join(tmp, 'atomic-str', 'a.json');
+  atomicWriteFile(f, '{"a":1}\n');
+  const buf = fs.readFileSync(f);
+  assert(buf.toString('utf8') === '{"a":1}\n', '字符串内容不对：' + buf.toString('utf8'));
+  assert(!(buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf), '写出了 UTF-8 BOM');
+  return '字符串入参 + 无 BOM';
+});
+
+check('★ atomicWriteJson/prettyJson：缩进 2 + 结尾换行（人看 diff 友好），且可往返', () => {
+  assert(prettyJson({ a: 1 }) === '{\n  "a": 1\n}\n', 'prettyJson 形状不对：' + JSON.stringify(prettyJson({ a: 1 })));
+  const f = path.join(tmp, 'atomic-json', 'b.json');
+  atomicWriteJson(f, { n: 1, s: '中文' });
+  assert(JSON.stringify(JSON.parse(fs.readFileSync(f, 'utf8'))) === JSON.stringify({ n: 1, s: '中文' }), '往返不一致');
+  const leftovers = fs.readdirSync(path.dirname(f)).filter((n) => n.includes('.tmp-'));
+  assert(leftovers.length === 0, '留了 tmp：' + leftovers.join(', '));
+  return '缩进 2 + 尾换行 + 可往返';
+});
+
+check('★ 原子写失败时：抛错 + 清掉 tmp + **旧文件完好**（这是"宁可失败不许损坏"的底线）', () => {
+  const d = path.join(tmp, 'atomic-fail');
+  const f = path.join(d, 'keep.json');
+  atomicWriteFile(f, '旧内容');
+  // 让 rename 注定失败：把目标变成一个**目录**（Windows 上 rename 到已存在目录会失败）
+  const asDir = path.join(tmp, 'atomic-fail-dir');
+  atomicWriteFile(path.join(asDir, 'x'), '先建出来');   // 建目录用
+  let threw = '';
+  try { atomicWriteFile(asDir, '新内容'); } catch (e) { threw = (e && e.message) || String(e); }
+  assert(threw, '写到一个目录上竟然没报错');
+  const leftovers = fs.readdirSync(path.dirname(asDir)).filter((n) => n.includes('.tmp-'));
+  assert(leftovers.length === 0, '失败后没清 tmp：' + leftovers.join(', '));
+  assert(fs.readFileSync(f, 'utf8') === '旧内容', '别的文件被牵连了');
+  return '抛错 + 无残留 + 旧文件完好';
+});
+
 
 check('备份目录可用环境变量覆盖（MILIASTRA_BACKUP_DIR）', () => {
   const saved = process.env.MILIASTRA_BACKUP_DIR;

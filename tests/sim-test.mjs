@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 let pass = 0;
 const failures = [];
@@ -30,7 +31,9 @@ process.env.MILIASTRA_DATA_DIR = tmpData;
 // 让失控脚本那条别真等 8 秒
 process.env.QXQY_PLAY_TIMEOUT_MS = '1500';
 
-const { simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments, hudTexts } = await import('../lib/sim.mjs');
+const { simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments, hudTexts, sceneNodes } = await import('../lib/sim.mjs');
+
+const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const err = async (fn) => { try { await fn(); return null; } catch (e) { return (e && e.message) || String(e); } };
 
@@ -255,6 +258,20 @@ ok('★ 连帧不会每帧新建文件（目录里始终只有 1 张 live 帧）
   ok('★ op=hud：没写 text 的文本框回空串（不是 `undefined`）', hud[1].text === '', JSON.stringify(hud[1]));
   ok('★ op=hud：没有会话/空场景都不炸（回空数组）',
     hudTexts({}).length === 0 && hudTexts(null).length === 0 && hudTexts({ scene: {} }).length === 0);
+
+  // `sceneNodes`：摊平成一张表（`op=controls runtime:true geom:true` 的底座）
+  const flat = sceneNodes(scene);
+  ok('★ sceneNodes：每个控件一行，带世界坐标/尺寸/kind（文字只在非空时带）',
+    flat.length === 4 && flat[0].kind === 'container' && flat[1].x === 440 && flat[1].width === 900
+    && flat[1].text.indexOf('第1关') === 0 && flat[3].text === undefined,
+    JSON.stringify(flat));
+  ok('★ sceneNodes：`text` 只在非空时带（空文本框连这个字段都没有，省 token）',
+    flat[3].kind === 'textbox' && !('text' in flat[3]), JSON.stringify(flat[3]));
+  ok('★ sceneNodes：`pressed` 只在真按下时才带（省字段）',
+    sceneNodes({ scene: { nodes: [{ id: 1, parent: null, kind: 'button', matrix: { tx: 10, ty: 20 }, pressed: false }] } })[0].pressed === undefined
+    && sceneNodes({ scene: { nodes: [{ id: 1, parent: null, kind: 'button', matrix: { tx: 10, ty: 20 }, pressed: true }] } })[0].pressed === true);
+  ok('★ sceneNodes：父链断了也不死循环（`parent` 指向不存在的 id）',
+    sceneNodes({ scene: { nodes: [{ id: 9, parent: 999, kind: 'image', matrix: { tx: 1, ty: 2 } }] } })[0].x === 1);
 }
 
 // 按键：op=keys 从脚本源码里扫出它真正在听的键名
@@ -316,6 +333,40 @@ ok('★ op=hud：只回画面上的字（默认工程里有「文本框」）+ f
 ok('★ op=hud 每条带 id 与有限的世界坐标（点击用得上）',
   hudInfo.texts.every((t) => t.id > 0 && Number.isFinite(t.x) && Number.isFinite(t.y) && typeof t.text === 'string'),
   JSON.stringify(hudInfo.texts));
+
+/*
+ * ★ `op=controls runtime:true geom:true`：一次给出"屏幕上有哪些控件、在哪、上面什么字"。
+ * 为什么值得：`op=hud` 只解决"字"；AI 要**点**某个控件时还需要坐标 —— 而运行时实例**都叫模板名**，
+ * 光看 `{id,name,kind,depth}` 根本认不出谁是谁（实测：31 个控件里 29 个都叫 IMAGE_TEMPLATE）。
+ */
+const ctlPlain = await simOp({ op: 'controls', runtime: true });
+const ctlGeom = await simOp({ op: 'controls', runtime: true, geom: true });
+ok('★ op=controls 默认**不带**几何（省 token）', ctlPlain.controls.every((c) => c.x === undefined && c.w === undefined));
+ok('★★ op=controls {runtime:true,geom:true}：**有几何的行**都合法（世界坐标 + 源尺寸），且与 op=hud 对得上',
+  ctlGeom.controls.length === ctlPlain.controls.length
+  && ctlGeom.geomCovered >= 1
+  && ctlGeom.geomCovered + ctlGeom.geomMissing === ctlGeom.controls.length
+  && ctlGeom.controls.filter((c) => c.x !== undefined)
+    .every((c) => Number.isFinite(c.x) && Number.isFinite(c.y) && c.w > 0 && c.h > 0)
+  && !!ctlGeom.geomNote,
+  JSON.stringify({ covered: ctlGeom.geomCovered, missing: ctlGeom.geomMissing, rows: ctlGeom.controls.length }));
+/*
+ * ⚠️ **场景 ≠ 控件树**（2026-09-24 实测出来的）：`scene` 只含**会被渲染**的控件 ——
+ * 工厂默认工程 `tree` 11 行、`scene` 只有 5 个节点。所以"没有 x/y"**不等于**"控件不存在"，
+ * 回执必须把 covered/missing 摆出来，否则 AI 会把"不在画面上"误判成"没建出来"。
+ */
+ok('★★ 几何只对"会被渲染"的控件给：回执如实报 \`geomCovered\`/\`geomMissing\`（missing > 0 是正常现象，不是故障）',
+  ctlGeom.geomMissing > 0 && /不是不存在/.test(String(ctlGeom.geomNote)),
+  JSON.stringify({ covered: ctlGeom.geomCovered, missing: ctlGeom.geomMissing,
+    noGeom: ctlGeom.controls.filter((c) => c.x === undefined).map((c) => c.kind) }));
+ok('★ geom 行的文字与 `op=hud` 对得上（同一个文本框，同一个坐标）—— 两条路不会互相打架',
+  (() => {
+    const t = hudInfo.texts[0];
+    const row = ctlGeom.controls.find((c) => Number(c.id) === Number(t.id));
+    return !!row && row.text === t.text && row.x === t.x && row.y === t.y;
+  })(), JSON.stringify({ hud: hudInfo.texts[0], row: ctlGeom.controls.find((c) => c.text) }));
+ok('★ geom 版没把回执撑大（仍远小于底层 75 KB 的 tree+scene）',
+  JSON.stringify(ctlGeom).length < 12000, JSON.stringify(ctlGeom).length + ' 字符');
 
 // 切设备会重建运行时：人数必须被 Host 自动沿用，否则 视角2 会报 playerIndex 1-1（真机踩过）
 const p2 = await simOp({ op: 'play', action: 'start', args: { playerCount: 2 } });
@@ -895,6 +946,25 @@ ok('op=import 喂错文件（PNG 冒充 gia）：明确报错，不是静默成�
 
 const all = await disposeSimAll();
 ok('disposeSimAll：所有会话 Worker 收干净', typeof all.disposed === 'number' && simRuntimeInfo().sessions === 0, JSON.stringify(all));
+
+/*
+ * ★★ 写盘**只有一个实现**（2026-09-24 源码体检的真实发现）。
+ *
+ * 体检当时的状况：`codefile.mjs` 走硬化路径（同目录 tmp + `fsync` + rename + 失败清理），
+ * 而 `sim.mjs` 自己**手搓** tmp+rename（没 fsync、失败会把 `.tmp<pid>` 漏在盘上），
+ * 截图与导出更是**裸 `writeFileSync`**（被杀进程可能留下半截 PNG）。
+ * 同一个动作三种实现 = 修了一处、另两处照旧漏。现在统一走 `lib/fsx.mjs`，用源码绊线钉住。
+ */
+{
+  const simSrc = fs.readFileSync(path.join(pkgRoot, 'lib', 'sim.mjs'), 'utf8');
+  const strays = [];
+  if (/fs\.writeFileSync\(/.test(simSrc)) strays.push('裸 fs.writeFileSync');
+  if (/fs\.renameSync\(/.test(simSrc)) strays.push('手搓 fs.renameSync');
+  if (/\.tmp'\s*\+\s*process\.pid/.test(simSrc)) strays.push("手搓 '.tmp' + process.pid");
+  ok('★★ sim.mjs 的写盘一律走共享原子实现（不许再出现裸写/手搓 tmp+rename —— 健壮性只能长在一个实现上）',
+    strays.length === 0 && /from '\.\/fsx\.mjs'/.test(simSrc),
+    strays.length ? '还有：' + strays.join(' / ') : '干净');
+}
 
 /* ---------------------------------------------------------------- 收尾 */
 

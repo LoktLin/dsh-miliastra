@@ -23,6 +23,7 @@ const documentShim = { head: { appendChild(n) { styleNodes.push(n); } }, body: {
 const windowShim = { __ModuleLoader__: { load(s) { windowShim.__captured = s; } }, innerHeight: 900, innerWidth: 1200, addEventListener() {}, removeEventListener() {} };
 globalThis.window = windowShim;
 globalThis.document = documentShim;
+// eslint-disable-next-line no-new-func -- 同上：把 client.js 塞进假 window/document 里跑（无头渲染面板），不是 eval 外部输入
 new Function('window', 'document', 'console', fs.readFileSync(path.join(PKG_DIR, 'lib', 'client.js'), 'utf8'))(windowShim, documentShim, console);
 const React = req('react');
 const exports_ = windowShim.__captured.factory((name) => {

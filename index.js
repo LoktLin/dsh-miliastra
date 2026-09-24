@@ -1430,6 +1430,8 @@ const TOOLS = [
       + '`op=verify caseSet=<名字>` 也能直接跑清单里那一组。'
       + '\n其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；'
       + '`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；'
+      + '**`runtime:true geom:true`** 再带上**世界坐标 / 源尺寸 / 文字** —— "屏幕上有哪些东西、能点哪儿"一次说完'
+      + '（比自己 dump 75 KB 的树+场景省一个数量级）；'
       + '`state` 看工程/控件树/属性（要几何与父级才用它）；'
       + '`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；'
       + '`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；'
@@ -1469,7 +1471,11 @@ const TOOLS = [
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；交接值用 handover；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；**读画面上的字用 hud**（比 dump 场景省得多）；写断言前想省 token 看控件用 controls。' },
-        all: { type: 'boolean', description: 'op=keys：给**全量键名**（`Enum.KeyEventType` 164 项，≈3KB，默认只回 10 条 presets）。不知道有哪些键可按时传它，别去翻枚举文档。' },
+        /*
+         * ⚠️ 这个 `all` **同时服务两个 op** —— 写成两个键会**静默覆盖**（JS 对象字面量后者胜），
+         * 于是其中一个说明永远不会到达 AI（2026-09-24 被 ESLint 的 `no-dupe-keys` 抓到，见 `tools/lint.mjs`）。
+         */
+        all: { type: 'boolean', description: 'op=keys：给**全量键名**（`Enum.KeyEventType` 164 项，≈3KB；默认只回 10 条 presets）——不知道有哪些键可按时传它，别去翻枚举文档。op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
         steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|drag?{from,to,steps,gap}|pointer?{type,x,y}|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
         expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name|controlKind,equals|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。', items: { type: 'object', additionalProperties: true } },
         cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。', items: { type: 'object', additionalProperties: true } },
@@ -1482,6 +1488,7 @@ const TOOLS = [
         keepRunning: { type: 'boolean', description: 'op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。' },
         dt: { type: 'number', description: 'op=verify：重放的每步时长（秒）。省略用引擎默认。' },
         runtime: { type: 'boolean', description: 'op=controls：看**运行中**会话的控件树（脚本动态创建的），需先 op=play start；省略=看编辑器工程树。' },
+        geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带上**世界坐标 `x/y` + 源尺寸 `w/h` + `text`**（"能点哪儿/哪行字"）—— 坐标左下原点，可直接喂 pointer/click。默认不带（省 token）。' },
         namedOnly: { type: 'boolean', description: 'op=controls：只列有名字的控件（只有它们能按 name 断言）。' },
         nameContains: { type: 'string', description: 'op=controls：按名字子串过滤（Host 侧过滤，中文可用）。' },
         kind: { type: 'string', description: 'op=controls：按类型过滤（container / server-container / textbox / button / image …）。' },
@@ -1515,7 +1522,6 @@ const TOOLS = [
         caseSet: { type: 'string', description: 'op=verify：直接跑 `op=cases` 里存着的那一组（人/AI 同一份验收单）；人工项不代跑，只列在 `manual[]` 里。' },
         set: { type: 'string', description: 'op=cases：用例集的名字（建议「玩法-关卡」，如 双相-第1关）。' },
         case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组，同样要 confirm:true）。' },
-        all: { type: 'boolean', description: 'op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
         confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true 才真删（不传只回 dryRun 计划）。' },
         manual: { type: 'boolean', description: '存用例时用来标**人工项**（配合 note）——工具不代跑也不代判，只在 run 的 `manual[]` 里等人打勾（如「真机上小人看得见」）。' },
         note: { type: 'string', description: '用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。' },

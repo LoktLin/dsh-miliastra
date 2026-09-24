@@ -16,6 +16,30 @@
 
 ### 新增
 
+- **★ `tools/lint.mjs` + `npm run lint`（语言层绊线，已接进 `npm test`）** —— 作者要求「源码优化一下 需要健壮
+  能复用就复用 找找有没有专门这插件的优化语言的思路」。**它上线第一天就抓到一条真 bug**：
+  `miliastra_sim` 的 `parameters` 里有**两个 `all`**（一个给 `op=keys`、一个给 `op=cases action=remove`）——
+  JS 对象字面量里**后者静默覆盖前者**，于是「`op=keys all:true` 拿全量键名」这条说明**从来没有到达过 AI**。
+  测试全绿、功能"能用"，只有 `no-dupe-keys` 看得见它。
+  设计取舍：**只开"能过的硬规则"**（20 条：`no-undef` / `no-dupe-keys` / `no-unreachable` / `use-isnan` /
+  `valid-typeof` / `no-new-func` …），风格类一律不开 —— 绊线的价值在于**长期是绿的**，一旦允许几十条风格警告就会被无视。
+  配置**写在代码里**（不落地 `eslint.config.mjs`）：一份真身，少一个会和代码走散的文件，顺带避开
+  "配置文件在 A 目录、被扫文件在 B 目录"时 ESLint 直接拒扫的坑（实测踩过）。`eslint` 是 **devDependency**，不进用户运行时。
+- **★ `lib/fsx.mjs`：写盘只有**一个**实现（原子写从 `codefile.mjs` 搬来这里，`codefile` 转发保持兼容）** ——
+  源码体检（同一轮）发现当时的状况是**三种写法并存**：`codefile` 走硬化路径（同目录 tmp + **`fsync`** + rename + 失败清理），
+  `sim.mjs` 自己**手搓** tmp+rename（没 fsync、失败会把 `.tmp<pid>` 漏在盘上），截图与导出更是**裸 `writeFileSync`**。
+  现在 `atomicWriteFile` / `atomicWriteJson` / `prettyJson` 一处实现、多处复用，`sim.mjs` 里
+  **裸写 0 处、手搓 rename 0 处**（源码绊线钉住）。
+
+### 新增
+
+- **★ `op=controls {runtime:true, geom:true}`：一次给出"屏幕上有哪些控件、在哪、上面什么字"** ——
+  补齐 `op=hud` 只解决"字"的那一半：AI 要**点**东西时还需要坐标。每行加 `x/y`（**世界坐标**，左下原点，可直接喂
+  `play action=pointer/click`）+ `w/h` + `text`；底层是**一次** `get{inspect:true, view:true}`（引擎里这两段是独立填充的，
+  能同时给），但**摊平后只回紧凑行**（实测回执 1.4 KB，而那次底层响应是 **75 KB**）。
+  ⚠️ 顺手挖出一个**真事实**：**场景 ≠ 控件树** —— `scene` 只含**会被渲染**的控件（工厂默认工程 `tree` 11 行 / `scene` 5 个节点；
+  真实关卡 31/31）。所以回执如实报 `geomCovered` / `geomMissing`，并在 `geomNote` 里直说
+  「没坐标**不是不存在**，只是现在不在画面上」——否则 AI 会把"不可见"误判成"没建出来"。
 - **★ `op=hud`：只回"画面上的字"**（`textbox.text` + **世界坐标**）—— "边玩边判断"的最短路径。
   实测（真机《冰镜·火烛》在跑的那一局）：`get{view:true}` 的快照 **30 177 B / 31 个节点**，
   而 `hudTexts()` 只挑出 **2 行**（`第1关 教学 (1/3) 分数 0 …` / `方向键 / A D 移动…`）⇒ 回执 ≈300 B，**省掉约 100×**。
@@ -43,6 +67,15 @@
 
 ### 修复
 
+- **★★ `miliastra_sim` 的 schema 里有**两个 `all`** —— 后一个把前一个的说明**整个吃掉**（`no-dupe-keys` 抓到的真 bug）**：
+  AI 读到的 schema 里 `all` 只被描述成「`op=cases action=remove` 删整组」，而「`op=keys all:true` 拿全量键名」
+  那条**从未到达过 AI**（同一个键在对象字面量里出现两次，后者胜）。现在合成**一个** `all`，两种用法都写在同一个说明里，
+  并在源码里留注释说明**为什么不能写成两个键**。
+- **★ `lib/client.js` 的 `var s29` 重复声明（`no-redeclare` 抓到的维护地雷）**：第 692 行它是 `uiInfo` 的 state、
+  第 707 行**又声明一次**当 `panelTab` 用 —— `var` 复用同一个绑定，当前靠"先读后写"侥幸正确，
+  但只要有人调换两段顺序，`uiInfo` 就会**静默变成** panelTab。改名成 `panelTabState` 并留注释。
+- **★ `sim.mjs` 的写盘三处各写各的**（见「新增」的 `lib/fsx.mjs`）：手搓 tmp+rename 没有 `fsync`、失败会漏 `.tmp<pid>`；
+  截图与导出是裸写（被杀进程可能留下半截 PNG）。现在统一走 `atomicWriteFile`。
 - **★★ `op=keys` 把"为什么没扫到"说反了（真机实测）**：游戏日志写着
   `[yuan-code] 收到首个按键事件: KeyboardMoveRightKeyDown（来源=KeyEventType）`，而工具回「脚本源码里没出现 `KeyEventType`」
   —— 其实**出现了**（`local candidates = { "KeyEventType", … }`），只是按键名是裸字符串、旧的单路正则匹配不到。
@@ -59,10 +92,19 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0** = **623 项**：`sim` 132 → **157**（`scanScriptKeys` / `stripLuaComments` / `hudTexts` 纯函数
-  + `op=keys all:true` / `press` / `op=hud` 集成）、`smoke` 53 → **54**（「AI 自己玩」+ 请求形状绊线）。
-- **真机验证 `op=hud` 的提取逻辑**（新 op 本身要重启 Host 才生效，所以拿**在跑那一局的真快照**喂新函数）：
-  30 177 B / 31 节点 → 2 行文字，坐标 `(800,866)` / `(800,824)` 与手工算法一致（局部 `ty=374` + 容器 `450`）。
+- `npm test` 退出码 **0** = **637 项**：**先跑 `node tools/lint.mjs`**（46 个文件 / 20 条硬规则 / 0 命中），
+  再 `readme` 14 · `smoke` 55 · `deploy` 33 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` **167** ·
+  `sim-play` 41 · `client-render` 45 · 引擎 130。
+- **语言层绊线的战果（不是"装了个工具"，是它抓到了什么）**：
+  `no-dupe-keys` → `miliastra_sim` 两个 `all` 静默覆盖（真 bug，AI 侧少一条说明）；
+  `no-redeclare` → `client.js` 的 `var s29` 重复声明（维护地雷）；
+  `no-new-func` → 把读 `client.js` 的两处无头渲染标成**有理由的例外**（`eslint-disable-next-line` + 原因）。
+- **复用验收**：`sim.mjs` 里 `fs.writeFileSync` **0 处**、`fs.renameSync` **0 处**（源码绊线断言）；
+  `atomicWriteFile` 的失败路径（写到目录上）**抛错 + 清 tmp + 旧文件完好**有断言；
+  字符串入参 + **无 BOM** 有断言（原神遇到 BOM 会报 Lua error）。
+- **真机验证两条新 op 的提取逻辑**（新 op 本身要重启 Host 才生效，所以拿**在跑那一局的真快照**喂新纯函数）：
+  · `hudTexts`：30 177 B / 31 节点 → 2 行文字，坐标 `(800,866)` / `(800,824)` 与手工算法一致（局部 `ty=374` + 容器 `450`）。
+  · `sceneNodes`：31 行全部换算成世界坐标（28 个图片来源 x `115~1440` / y `27~842.4` 正好铺满 1600×900）。
 - 真身验证（不是构造的样例）：用新扫描器读**真正的** `双相.lua`（42 947 B）⇒ 25 个键名，含 `KeyboardMoveRightKeyDown`/`…Up`、
   `KeyboardJumpKeyDown`（**只有 Down 没配 Up** —— 跳跃是一次性触发，与 HUD 上「跳跃=切相」一致）、手柄键 `Controller*`。
 

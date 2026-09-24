@@ -387,6 +387,31 @@ for (const [toolName, args] of CASES) {
     }
   }
 
+  /*
+   * ①d **语言层绊线本身也要被绊住**（2026-09-24 加）。
+   *
+   * 这一条存在的理由很直接：`tools/lint.mjs` 上线第一天就抓到 `miliastra_sim` 的 parameters 里
+   * **两个 `all`**（后者静默覆盖前者 ⇒「`op=keys all:true`」那条说明从未到达 AI）。
+   * 而"规则被删空/范围缩小"是无声的 —— 于是这里断言它**必须**含 `no-dupe-keys` 与 `no-undef`，
+   * 且必扫到 `index.js` 与 `lib`：把绊线本身也钉住。
+   */
+  {
+    const { LINT_RULES, LINT_TARGETS } = await import('../tools/lint.mjs');
+    const missing = [];
+    if (!LINT_RULES['no-dupe-keys']) missing.push('no-dupe-keys（键静默覆盖 —— 它抓到过真 bug）');
+    if (!LINT_RULES['no-undef']) missing.push('no-undef（变量名拼错）');
+    if (!LINT_RULES['no-unreachable']) missing.push('no-unreachable');
+    const joined = LINT_TARGETS.join(' ');
+    if (!/index\.js/.test(joined) || !/lib\//.test(joined)) missing.push('扫 index.js 与 lib/');
+    if (missing.length) {
+      fail += 1;
+      failures.push('[ergonomics] 语言层绊线被削了：' + missing.join(' / ') + '（`tools/lint.mjs`）');
+    } else {
+      console.log('✓ 语言层绊线还在岗（' + Object.keys(LINT_RULES).length + ' 条硬规则，覆盖 ' + LINT_TARGETS.length + ' 类目标）');
+      pass += 1;
+    }
+  }
+
   // ② 不许再有 `which` 这种和 `level` 撞车的参数名：
   //    `level` = **地图关卡 ID**（哪张图）｜`stage` = **玩法里的第几关**。两个「关卡」在中文里同名，必须靠参数名分开。
   const withWhich = TOOLS.filter((t) => JSON.stringify(t.parameters).includes('"which"'));

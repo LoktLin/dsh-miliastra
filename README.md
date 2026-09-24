@@ -254,7 +254,7 @@ dsh web
 - `repository` / `homepage` / `bugs` 指向真实地址
 - registry 指向**官方源**（`npm config get registry` 应是 `https://registry.npmjs.org/`；
   指向淘宝等镜像时发布必失败）
-- `prepublishOnly` 会自动跑测试 —— 本项目配置为 `npm test`（4 套测试，不过就发不出去）
+- `prepublishOnly` 会自动跑测试 —— 本项目配置为 `npm test`（**先跑 `node tools/lint.mjs`，再跑 10 套测试**，不过就发不出去）
 
 **三条不可逆的注意点：**
 
@@ -454,7 +454,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 ★ **交接值从哪来？先 `op=handover`** —— 它列出这台机器上的**活文件**（并标出"当前正在开发的那张图"），再读那份 Lua，把源码里 `local NAME = <9 位以上整数>` 的**候选交接值**摆出来（含变量名与 `kind` 提示）+ 给一份 `suggestedTemplates`。为什么值得单开一步：交接值**抄错一位** → 脚本静默什么都不建（不报错）；从源码抽真值比让人抄一遍可靠。但 `kindHint` **只是提示**（看变量名猜的），控件类型必须创作者确认。
 ★ **把真机工程搬进模拟器用 `op=bind`**（一条命令替掉手写探针）：给 `source`（真机活文件 .lua 绝对路径）+ `templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**，不许编造）+ `containerId`（交接的容器索引，只记录/交叉核对）→ 它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 `run.controlCount`（控件建没建·建了几个）。默认 `fresh:true` 先清空出厂橱窗控件（只留你的工程）；`run:false` 只搭不跑；`saveAs` 存成工作区存档。它还会交叉核对交接值（`handover.missing/extra`：源码里出现、你没交的 10 位以上整数 = 可能还缺模板）—— 这是启发式，不是判决。⚠️ **Host 是启动快照**：每次重启 `dsh web`，模拟器内存里的工程都回到**出厂默认**（`op=state` 的 `factoryDefault:true` 会如实说）。成功 bind 会记一份**配方**（`last-bind.json`），重启后 `{"op":"bind","last":true}` 一键重搭上次那份。
 ★ **验收单用 `op=cases`**（人/AI 读同一份，存在模拟器工作区的 `cases.json`）：`action=add set=<名字> expect=[…]` 存一条自动用例（加 `fromHistory:true` 就把**刚跑过那一局**的操作变成用例，AI 不用手抄 events）；`manual:true, note:"人要看什么"` 存**人工项**；`action=run set=<名字>` 确定性重放全部自动项并列出 `manual[]` 等人打勾（`autoPassed` **不等于**验收通过）；`action=list/show/remove` 看/删（remove 默认 dryRun，要 `confirm:true`）。`op=verify caseSet=<名字>` 也能直接跑清单里那一组。
-其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；`state` 看工程/控件树/属性（要几何与父级才用它）；`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；`keys` 从**你的脚本源码**里扫出它真正在听的按键名（**两路都扫**：`KeyEventType.X` 与**裸字符串**写法 `bindHold("KeyboardMoveRightKeyDown", …)`，后者是实测真脚本的写法、旧实现漏检过；回执 `found[].via` 标明来源，`string-literal` 是启发式、算候选；扫不出会告诉你**试发**哪个候选键，而不是让你猜）；`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。
+其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；**`runtime:true geom:true`** 再带上**世界坐标 / 源尺寸 / 文字** —— "屏幕上有哪些东西、能点哪儿"一次说完（比自己 dump 75 KB 的树+场景省一个数量级）；`state` 看工程/控件树/属性（要几何与父级才用它）；`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；`keys` 从**你的脚本源码**里扫出它真正在听的按键名（**两路都扫**：`KeyEventType.X` 与**裸字符串**写法 `bindHold("KeyboardMoveRightKeyDown", …)`，后者是实测真脚本的写法、旧实现漏检过；回执 `found[].via` 标明来源，`string-literal` 是启发式、算候选；扫不出会告诉你**试发**哪个候选键，而不是让你猜）；`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。
   · **动画 / 动效类问题用 `op=frames`**（别只断言某个静态值）：`frames:[0,0.5,1]` → 每个时间点一张 PNG + **帧间像素差数字**（`changedPixels` / `changedRatio` / 变化区域 `bbox`）+ 字段级的 `changedControls`（**哪个控件的哪个字段**变了，如 `matrix.tx: 800 → 850`）。内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。
   · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。
 ★ **AI 自己"玩"的量级（2026-09-24 实测）**：发一次输入 ≈ **5ms**（`key`/`pointer`/`click` 都是纯注入、不回快照），读一次 `get{view:true}` ≈ **200ms**，出一张 PNG 是秒级 ⇒ **发得快、看得慢**。所以：① 回合制闭环（`pause` + 逐步 `step` + 读场景再决定）完全可控；② 想在"实时档"打一段就在**一次调用里跑循环**（本地往返 5ms 级、跑满 30fps），但**循环里你看不见**，要把判断写成循环内的条件分支，事后用 `history` 快照/PNG 取证；③ "**逐帧看画面再反应"做不到**（不是没实现，是带宽上限：我的眼睛是 ≈5Hz 的离散采样）。
@@ -468,7 +468,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 参数 | 类型 | 必填 | 取值 | 说明 |
 |---|---|---|---|---|
 | `op` | `string` | 否 | `controls` / `hud` / `state` / `patch` / `handover` / `bind` / `play` / `verify` / `cases` / `frames` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；交接值用 handover；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；**读画面上的字用 hud**（比 dump 场景省得多）；写断言前想省 token 看控件用 controls。 |
-| `all` | `boolean` | 否 | `true` / `false` | op=cases action=remove：删掉整个用例集（仍要 confirm:true）。 |
+| `all` | `boolean` | 否 | `true` / `false` | op=keys：给**全量键名**（`Enum.KeyEventType` 164 项，≈3KB；默认只回 10 条 presets）——不知道有哪些键可按时传它，别去翻枚举文档。op=cases action=remove：删掉整个用例集（仍要 confirm:true）。 |
 | `steps` | `array<object>` | 否 | —— | op=verify 的操作序列；每步 {at?, after?, key?\|click?{x,y}\|clickName?\|drag?{from,to,steps,gap}\|pointer?{type,x,y}\|setVar?{entityType,name,value}\|sendSignal?{name,params,target}\|view?\|pause?\|resume?}。 |
 | `expect` | `array<object>` | 否 | —— | op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id\|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name\|controlKind,equals\|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。 |
 | `cases` | `array<object>` | 否 | —— | op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。 |
@@ -481,6 +481,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | `keepRunning` | `boolean` | 否 | `true` / `false` | op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。 |
 | `dt` | `number` | 否 | —— | op=verify：重放的每步时长（秒）。省略用引擎默认。 |
 | `runtime` | `boolean` | 否 | `true` / `false` | op=controls：看**运行中**会话的控件树（脚本动态创建的），需先 op=play start；省略=看编辑器工程树。 |
+| `geom` | `boolean` | 否 | `true` / `false` | op=controls 配 runtime:true：再带上**世界坐标 `x/y` + 源尺寸 `w/h` + `text`**（"能点哪儿/哪行字"）—— 坐标左下原点，可直接喂 pointer/click。默认不带（省 token）。 |
 | `namedOnly` | `boolean` | 否 | `true` / `false` | op=controls：只列有名字的控件（只有它们能按 name 断言）。 |
 | `nameContains` | `string` | 否 | —— | op=controls：按名字子串过滤（Host 侧过滤，中文可用）。 |
 | `kind` | `string` | 否 | —— | op=controls：按类型过滤（container / server-container / textbox / button / image …）。 |
@@ -599,9 +600,10 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | **`op=play` 的"实时循环"封装**（真实时钟下按时间线发一串输入 + 循环内条件分支，回 trace） | 写它的 AI（2026-09-24 演示「AI 能不能游玩」时，是**手写 pwsh 循环**才跑起来的） | 待办 | 把"蒙眼打一段 + 事后取证"变成一次调用；与 `verify`（冻结时钟）互补，别混 |
 | ~~**请求形状写进 schema / 回执**（`play` 的 `key`/`pointer`/`click`/`step` 到底怎么发）~~ | 写它的 AI（**作者原话：「你看找个按键这么久 这就是优化的空间」**） | **✅ 已落地**（`op=keys` 回执带 `press` 五个可照抄请求体；`all:true` 给全量 164 个键名；`smoke` 绊线钉住） | 以前 AI 为了发一个按键要翻 **4 个源文件**（`session.js`→`browser-session.js`→`controller.js`→`worker.js`）——**请求形状是契约，不是实现细节** |
 | ~~**读画面上的字**（HUD / 分数 / 关卡）~~ | 写它的 AI（为了读一行字 dump 了 30 KB 场景） | **✅ 已落地**（`op=hud`：只回 `textbox.text` + 世界坐标） | 实测 **30 177 B → ≈300 B（≈100×）**；坐标沿父链累加，AI 拿着就能点 |
+| ~~**"屏幕上有哪些控件、在哪、什么字"一次拿**（AI 要**点**东西时缺的那半张地图）~~ | 写它的 AI（自己解析了 31 个节点的矩阵才算清谁在哪） | **✅ 已落地**（`op=controls {runtime:true,geom:true}`） | 回执 1.4 KB 而底层是 75 KB 的 tree+scene；顺带查出**场景 ≠ 控件树**（`scene` 只含会被渲染的控件 ⇒ 带 `geomCovered/Missing` 并明说"没坐标≠不存在"） |
 | `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
-| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 44 KB，知识进 skill 能省掉常驻那部分 |
-| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 44 KB |
+| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 46 KB，知识进 skill 能省掉常驻那部分 |
+| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 46 KB |
 | **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 这是**给人**看的；AI 要的"哪变了"已由 `op=frames` 的数字回答了 |
 | （等你来写） | | | |
 
