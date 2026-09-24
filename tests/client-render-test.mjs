@@ -918,6 +918,19 @@ check('每个页面只出自己那几栏、内容**平铺铺满**（-bodyfill）
   return '初级=①② / 高级=③，各自平铺';
 });
 
+check('平铺规则必须**写在 -body 之后**且用复合选择器（否则被 repeat(3,…) 盖掉 —— 作者实测踩过）', () => {
+  const css = styleNodes[0].textContent;
+  const iBody = css.indexOf('dsh-miliastra-body{');
+  const iFill = css.indexOf('dsh-miliastra-body.dsh-miliastra-bodyfill{');
+  assert(iBody >= 0, '缺 -body 规则');
+  assert(iFill >= 0, '缺 -body.bodyfill 复合规则');
+  assert(iFill > iBody, '-bodyfill 写在 -body 之前 → 同优先级被 repeat(3,…) 盖掉（初级页第三列会空着）');
+  assert(/dsh-miliastra-body\.dsh-miliastra-bodyfill\{[^}]*auto-fit/.test(css), '-bodyfill 没用 auto-fit 平铺');
+  assert(/dsh-miliastra-viewtabs\{[^}]*display:grid/.test(css), '页面条不是三等分平铺');
+  assert(!/dsh-miliastra-viewtabs\{[^}]*display:flex/.test(css), '还留着旧的 flex 版页面条规则（重复定义）');
+  return 'body@' + iBody + ' < bodyfill@' + iFill + '，复合选择器优先级更高';
+});
+
 check('模拟器是**面板内的第三个页面**（不再只是提示去会话区）', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'sim' })));
