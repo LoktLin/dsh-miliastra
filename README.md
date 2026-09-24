@@ -458,7 +458,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
   · **动画 / 动效类问题用 `op=frames`**（别只断言某个静态值）：`frames:[0,0.5,1]` → 每个时间点一张 PNG + **帧间像素差数字**（`changedPixels` / `changedRatio` / 变化区域 `bbox`）+ 字段级的 `changedControls`（**哪个控件的哪个字段**变了，如 `matrix.tx: 800 → 850`）。内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。
   · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。
 ★ **AI 自己"玩"的量级（2026-09-24 实测）**：发一次输入 ≈ **5ms**（`key`/`pointer`/`click` 都是纯注入、不回快照），读一次 `get{view:true}` ≈ **200ms**，出一张 PNG 是秒级 ⇒ **发得快、看得慢**。所以：① 回合制闭环（`pause` + 逐步 `step` + 读场景再决定）完全可控；② 想在"实时档"打一段就在**一次调用里跑循环**（本地往返 5ms 级、跑满 30fps），但**循环里你看不见**，要把判断写成循环内的条件分支，事后用 `history` 快照/PNG 取证；③ "**逐帧看画面再反应"做不到**（不是没实现，是带宽上限：我的眼睛是 ≈5Hz 的离散采样）。
-★ **画面上的字不用截屏就能读**：`get{view:true}` 的场景里 **`textbox` 节点带 `text`** —— HUD / 分数 / 关卡直接读得到，拿它当闭环条件（例：读到「分数 3」才停手）。⚠️ **按了 `…Down` 就要配对发 `…Up`**，否则等于一直按住这个键（实测：只发 Down 会把角色一路推到掉出边界重生）。
+★ **画面上的字不用截屏就能读**：**`op=hud`** 只回 `textbox.text`（HUD / 分数 / 关卡 + 世界坐标），短；拿它当闭环条件（例：读到「分数 3」才停手）。底层就是 `get{view:true}` 场景里 `textbox` 节点的 `text`，但**别为了读两行字去 dump 整个场景**（那一次 ≈200ms、几十 KB —— 这是实测踩过的浪费）。
+★ **记不住 `play` 的请求形状就别翻源码**：`op=keys` 的回执带 **`press`** —— `key` / `pointer` / `click` / `step` / `hud` **可直接照抄的请求体**（指针坐标**左下原点**）；`op=keys` 传 `all:true` 给**全量 164 个键名**（默认只有 10 条 presets）。⚠️ **按了 `…Down` 就要配对发 `…Up`**，否则等于一直按住这个键（实测：只发 Down 会把角色一路推到掉出边界重生）。
 ⚠️ `frame` **不是秒表**：连续注入按键会顺带推帧（实测静置 30fps、注入期间 41.7/s），要计时用 `time`。
 ⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。
 
@@ -466,7 +467,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 
 | 参数 | 类型 | 必填 | 取值 | 说明 |
 |---|---|---|---|---|
-| `op` | `string` | 否 | `controls` / `state` / `patch` / `handover` / `bind` / `play` / `verify` / `cases` / `frames` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；交接值用 handover；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；写断言前想省 token 看控件用 controls。 |
+| `op` | `string` | 否 | `controls` / `hud` / `state` / `patch` / `handover` / `bind` / `play` / `verify` / `cases` / `frames` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；交接值用 handover；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；**读画面上的字用 hud**（比 dump 场景省得多）；写断言前想省 token 看控件用 controls。 |
+| `all` | `boolean` | 否 | `true` / `false` | op=cases action=remove：删掉整个用例集（仍要 confirm:true）。 |
 | `steps` | `array<object>` | 否 | —— | op=verify 的操作序列；每步 {at?, after?, key?\|click?{x,y}\|clickName?\|drag?{from,to,steps,gap}\|pointer?{type,x,y}\|setVar?{entityType,name,value}\|sendSignal?{name,params,target}\|view?\|pause?\|resume?}。 |
 | `expect` | `array<object>` | 否 | —— | op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id\|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name\|controlKind,equals\|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。 |
 | `cases` | `array<object>` | 否 | —— | op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。 |
@@ -512,7 +514,6 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | `caseSet` | `string` | 否 | —— | op=verify：直接跑 `op=cases` 里存着的那一组（人/AI 同一份验收单）；人工项不代跑，只列在 `manual[]` 里。 |
 | `set` | `string` | 否 | —— | op=cases：用例集的名字（建议「玩法-关卡」，如 双相-第1关）。 |
 | `case` | `string` | 否 | —— | op=cases action=remove：要删的用例名（不给 = 删整组，同样要 confirm:true）。 |
-| `all` | `boolean` | 否 | `true` / `false` | op=cases action=remove：删掉整个用例集（仍要 confirm:true）。 |
 | `confirm` | `boolean` | 否 | `true` / `false` | op=cases action=remove：删除不可恢复，必须显式 confirm:true 才真删（不传只回 dryRun 计划）。 |
 | `manual` | `boolean` | 否 | `true` / `false` | 存用例时用来标**人工项**（配合 note）——工具不代跑也不代判，只在 run 的 `manual[]` 里等人打勾（如「真机上小人看得见」）。 |
 | `note` | `string` | 否 | —— | 用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。 |
@@ -596,6 +597,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | ~~`op=keys` 只认 `KeyEventType.X`、漏掉**裸字符串键名**（`bindHold("KeyboardMoveRightKeyDown",…)`）~~ | 写它的 AI（**AI 自己对局时踩到**：游戏日志写着 `来源=KeyEventType`，工具却说"没出现 KeyEventType"） | **✅ 已落地**（两路并扫 + `found[].via` 标明来源 + 注释剔除） | 这条不是"少个功能"，是**AI 只能去猜键名**；真身验证 `双相.lua` **0 → 25 个键名** |
 | ~~**AI 自己"玩"的量级与读屏口径写进 schema**（发输入 5ms / 读场景 200ms / `textbox.text` 读 HUD / `frame` 不是秒表 / Down 要配 Up）~~ | 写它的 AI（作者问「你能在模拟器中游玩吗」） | **✅ 已落地**（schema + 提示段 + `smoke` 绊线；实测数据见 `docs/模拟器与视图.md` §4.14） | 这几条 AI **猜不出来**：不知道就会做出错误决定（以为能逐帧看画面 / 去截屏读 HUD / 只发 Down 卡住键） |
 | **`op=play` 的"实时循环"封装**（真实时钟下按时间线发一串输入 + 循环内条件分支，回 trace） | 写它的 AI（2026-09-24 演示「AI 能不能游玩」时，是**手写 pwsh 循环**才跑起来的） | 待办 | 把"蒙眼打一段 + 事后取证"变成一次调用；与 `verify`（冻结时钟）互补，别混 |
+| ~~**请求形状写进 schema / 回执**（`play` 的 `key`/`pointer`/`click`/`step` 到底怎么发）~~ | 写它的 AI（**作者原话：「你看找个按键这么久 这就是优化的空间」**） | **✅ 已落地**（`op=keys` 回执带 `press` 五个可照抄请求体；`all:true` 给全量 164 个键名；`smoke` 绊线钉住） | 以前 AI 为了发一个按键要翻 **4 个源文件**（`session.js`→`browser-session.js`→`controller.js`→`worker.js`）——**请求形状是契约，不是实现细节** |
+| ~~**读画面上的字**（HUD / 分数 / 关卡）~~ | 写它的 AI（为了读一行字 dump 了 30 KB 场景） | **✅ 已落地**（`op=hud`：只回 `textbox.text` + 世界坐标） | 实测 **30 177 B → ≈300 B（≈100×）**；坐标沿父链累加，AI 拿着就能点 |
 | `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
 | **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 44 KB，知识进 skill 能省掉常驻那部分 |
 | **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 44 KB |

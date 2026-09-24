@@ -16,6 +16,16 @@
 
 ### 新增
 
+- **★ `op=hud`：只回"画面上的字"**（`textbox.text` + **世界坐标**）—— "边玩边判断"的最短路径。
+  实测（真机《冰镜·火烛》在跑的那一局）：`get{view:true}` 的快照 **30 177 B / 31 个节点**，
+  而 `hudTexts()` 只挑出 **2 行**（`第1关 教学 (1/3) 分数 0 …` / `方向键 / A D 移动…`）⇒ 回执 ≈300 B，**省掉约 100×**。
+  坐标沿 `parent` 链累加（局部 `ty=374` + 容器 `450` = 世界 `824`），AI 拿着就能点。没有会话时**明确报错**（不静默回空）。
+- **★ `op=keys` 加 `all:true`（全量 164 个键名）与 `press`（可照抄的请求形状）** —— 针对作者的原话
+  **「你看找个按键这么久 这就是优化的空间」**：
+  ① `all:true` 直接从引擎的 `buildEnumTree()` 拿**正源**（不抄表，抄一份就会过期）；
+  ② `press` 给出 `key` / `pointer` / `click` / `step` / `hud` 的**请求体示例** ——
+  以前 AI 为了知道 `play` 的 `key` 怎么发，要翻 `session.js` → `browser-session.js` → `controller.js` → `worker.js`
+  **4 个源文件**；现在一次调用就说全（`smoke` 加绊线钉住这两件事）。
 - **★ `op=keys` 改成"两路并扫"键名**（2026-09-24 实测暴露的漏检，见「问题修复」）：
   `KeyEventType.X` / `KeyEventType["X"]` **之外**，再扫**裸字符串键名** —— 也就是真脚本的写法
   `try(bindHold("KeyboardMoveRightKeyDown", "KeyboardMoveRightKeyUp", …))`。
@@ -49,8 +59,10 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0** = **613 项**：`sim` 132 → **147**（`scanScriptKeys` / `stripLuaComments` 纯函数 15 条：两路扫、
-  注释剔除、字符串里的 `--`、同名时来源优先级、排序）、`smoke` 53 → **54**（「AI 自己玩」口径绊线）。
+- `npm test` 退出码 **0** = **623 项**：`sim` 132 → **157**（`scanScriptKeys` / `stripLuaComments` / `hudTexts` 纯函数
+  + `op=keys all:true` / `press` / `op=hud` 集成）、`smoke` 53 → **54**（「AI 自己玩」+ 请求形状绊线）。
+- **真机验证 `op=hud` 的提取逻辑**（新 op 本身要重启 Host 才生效，所以拿**在跑那一局的真快照**喂新函数）：
+  30 177 B / 31 节点 → 2 行文字，坐标 `(800,866)` / `(800,824)` 与手工算法一致（局部 `ty=374` + 容器 `450`）。
 - 真身验证（不是构造的样例）：用新扫描器读**真正的** `双相.lua`（42 947 B）⇒ 25 个键名，含 `KeyboardMoveRightKeyDown`/`…Up`、
   `KeyboardJumpKeyDown`（**只有 Down 没配 Up** —— 跳跃是一次性触发，与 HUD 上「跳跃=切相」一致）、手柄键 `Controller*`。
 

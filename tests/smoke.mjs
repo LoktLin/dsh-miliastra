@@ -373,6 +373,10 @@ for (const [toolName, args] of CASES) {
     if (!/5ms/.test(text) || !/200ms/.test(text)) missing.push('闭环量级（发输入 ≈5ms / 读场景 ≈200ms ⇒ ≈5Hz）');
     if (!/Up/.test(text) || !/一直按住/.test(text)) missing.push('按 `…Down` 要配对发 `…Up`');
     if (!/keys/.test(text) || !/string-literal/.test(text)) missing.push('`op=keys` 两路扫（含裸字符串键名 + `via` 来源）');
+    // ★ 「找个按键这么久」的教训：**请求形状属于 schema**，不该让 AI 去读实现（实测为此翻了 4 个源文件）
+    if (!/press/.test(text)) missing.push('`op=keys` 的 `press`（`key`/`pointer`/`click`/`step` 可直接照抄的请求体）');
+    if (!/op=hud/.test(text)) missing.push('`op=hud`（只回画面上的字，别为读 HUD dump 整个场景）');
+    if (!/all:true/.test(text) || !/164/.test(text)) missing.push('`op=keys {all:true}` 给全量 164 个键名');
     if (missing.length) {
       fail += 1;
       failures.push('[ergonomics] miliastra_sim 的 description 缺了：' + missing.join(' / ')

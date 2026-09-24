@@ -30,7 +30,7 @@ process.env.MILIASTRA_DATA_DIR = tmpData;
 // 让失控脚本那条别真等 8 秒
 process.env.QXQY_PLAY_TIMEOUT_MS = '1500';
 
-const { simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments } = await import('../lib/sim.mjs');
+const { simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments, hudTexts } = await import('../lib/sim.mjs');
 
 const err = async (fn) => { try { await fn(); return null; } catch (e) { return (e && e.message) || String(e); } };
 
@@ -229,6 +229,34 @@ ok('★ 连帧不会每帧新建文件（目录里始终只有 1 张 live 帧）
     JSON.stringify(stripLuaComments('--[[ x ]] local s = [[ y ]]')));
 }
 
+/*
+ * ★ `hudTexts`：只把"画面上的字"挑出来（纯函数，喂真机形状的场景）。
+ *
+ * 为什么要有它：AI 想边玩边判断就得读游戏状态，而 `get{view:true}` 一次 ≈200ms、几十 KB
+ * （31 个控件的矩阵/尺寸/颜色全在里面），真正要的常常只是 HUD 那两行字。
+ * 实测代价（2026-09-24）：我为了读到「第1关 教学（1/3） 分数 0」先 dump 了整个场景。
+ */
+{
+  const scene = {
+    scene: {
+      nodes: [
+        { id: 1, parent: null, kind: 'container', matrix: { tx: 800, ty: 450 } },
+        { id: 16, parent: 1, kind: 'textbox', matrix: { tx: -360, ty: 374 }, sourceWidth: 900, sourceHeight: 40, text: '第1关 教学（1/3）  分数 0' },
+        { id: 9, parent: 1, kind: 'image', matrix: { tx: 100, ty: -355 }, sourceWidth: 110, sourceHeight: 81, text: '这张不是文字控件，不该出现' },
+        { id: 17, parent: 1, kind: 'textbox', matrix: { tx: -300, ty: 320 }, sourceWidth: 900, sourceHeight: 40 },
+      ],
+    },
+  };
+  const hud = hudTexts(scene);
+  ok('★ op=hud 只挑 `textbox` 的文字（图片控件上的 text 字段不算）', hud.length === 2 && hud[0].text.indexOf('第1关') === 0,
+    JSON.stringify(hud));
+  ok('★★ op=hud 给的是**世界坐标**（沿 parent 链累加容器偏移，不是相对坐标）：-360 + 800 = 440',
+    hud[0].x === 440 && hud[0].y === 824, JSON.stringify({ x: hud[0].x, y: hud[0].y }));
+  ok('★ op=hud：没写 text 的文本框回空串（不是 `undefined`）', hud[1].text === '', JSON.stringify(hud[1]));
+  ok('★ op=hud：没有会话/空场景都不炸（回空数组）',
+    hudTexts({}).length === 0 && hudTexts(null).length === 0 && hudTexts({ scene: {} }).length === 0);
+}
+
 // 按键：op=keys 从脚本源码里扫出它真正在听的键名
 const keySrc = [
   'function OnStart()',
@@ -253,6 +281,41 @@ ok('★ op=keys 回执带 `found[].via`（名字从哪来）+ `byVia` 计数 —
 ok('★ op=keys 提醒「按 Down 要配对 Up」（实测：只发 Down 会把角色一路推到掉出边界）',
   /Down/.test(String(keysInfo.releaseNote)) && /Up/.test(String(keysInfo.releaseNote)),
   String(keysInfo.releaseNote || '').slice(0, 60));
+/*
+ * ★ 「找个按键这么久」的教训（作者原话）：我知道键名之后，**还得翻 4 个源文件**才知道 `play` 的 `key` 怎么发
+ * （`session.js` → `browser-session.js` → `controller.js` → `worker.js`）。请求形状属于 schema 该说的话。
+ * 现在 `op=keys` 直接把可照抄的请求体给出来 —— 这两条钉住它别退化。
+ */
+ok('★★ op=keys 回执带 `press`：key / pointer / click / step / hud 的**可照抄请求体**（别再让 AI 翻源码找形状）',
+  !!keysInfo.press && keysInfo.press.key && keysInfo.press.key.body.op === 'play'
+  && keysInfo.press.key.body.action === 'key' && typeof keysInfo.press.key.body.args.key === 'string'
+  && keysInfo.press.pointer.body.args.type === 'move'
+  && keysInfo.press.click.body.args.name !== undefined
+  && keysInfo.press.step.body.args.dt > 0
+  && keysInfo.press.hud.body.op === 'hud',
+  JSON.stringify(keysInfo.press));
+ok('★ op=keys 默认**不**回全量键名（164 个 ≈3KB），只给一句「要就传 all:true」+ allCount',
+  keysInfo.all === undefined && typeof keysInfo.allCount === 'number' && /all:true/.test(String(keysInfo.allHint)),
+  JSON.stringify({ all: keysInfo.all === undefined, allCount: keysInfo.allCount }));
+
+const keysAll = await simOp({ op: 'keys', all: true });
+ok('★★ op=keys {all:true}：给**全量 164 个键名**（正源是引擎的 `buildEnumTree()`，不是我们抄的表）',
+  Array.isArray(keysAll.all) && keysAll.all.length === 164 && keysAll.allCount === 164,
+  'all=' + (keysAll.all || []).length);
+ok('★ 全量键名里有语义键与工匠键的头尾（KeyboardCraftspersonKey1Down / Key43Up / ControllerJumpKeyDown）',
+  ['KeyboardCraftspersonKey1Down', 'KeyboardCraftspersonKey43Up', 'KeyboardJumpKeyDown', 'ControllerJumpKeyDown',
+    'KeyboardCharacterSkill4KeyUp'].every((n) => keysAll.all.indexOf(n) >= 0),
+  JSON.stringify(keysAll.all.slice(0, 3)));
+
+// op=hud：一次调用只回画面上的字（"边玩边判断"的最短路径）
+const hudInfo = await simOp({ op: 'hud' });
+ok('★ op=hud：只回画面上的字（默认工程里有「文本框」）+ frame/time，省掉 dump 整个场景',
+  Array.isArray(hudInfo.lines) && hudInfo.count === hudInfo.texts.length && hudInfo.count >= 1
+  && typeof hudInfo.frame === 'number' && typeof hudInfo.time === 'number',
+  JSON.stringify(hudInfo));
+ok('★ op=hud 每条带 id 与有限的世界坐标（点击用得上）',
+  hudInfo.texts.every((t) => t.id > 0 && Number.isFinite(t.x) && Number.isFinite(t.y) && typeof t.text === 'string'),
+  JSON.stringify(hudInfo.texts));
 
 // 切设备会重建运行时：人数必须被 Host 自动沿用，否则 视角2 会报 playerIndex 1-1（真机踩过）
 const p2 = await simOp({ op: 'play', action: 'start', args: { playerCount: 2 } });
