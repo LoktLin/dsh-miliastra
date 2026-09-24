@@ -1355,8 +1355,9 @@ const TOOLS = [
     description:
       '内置**千星模拟器**（引擎吸收自 miliastra-beyond-simulator，GPL-3.0-only）：在游戏之外搭界面、跑 levelScript、出画面 PNG。'
       + 'op=state 看工程/控件树/属性；op=patch 改工程（add/set/remove/setCanvas/addScript…，数据写要带 expectedRevision）；'
-      + 'op=play 控制试玩（start/step/pointer/key/click/pause/serverGet/serverSet/serverSend/stop）；'
-      + 'op=shot 出 PNG（target=ui 编辑器视图 / target=play 试玩画面，Host 按引擎场景树渲染，不需要窗口在前台）；'
+      + 'op=play 控制试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/stop；start 可带 canvasId 与 playerCount=1–8）；'
+      + 'op=keys 从**你的脚本源码**里扫出它真正在听的按键名（面板的按键按钮就用它）；'
+      + 'op=shot 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；'
       + 'op=export 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；op=import 把文件导回（`file`=绝对路径）；'
       + 'op=load 列/读模拟器工作区存档；op=save 存进该工作区；op=reset 清空工程。'
       + '⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
@@ -1365,7 +1366,7 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['state', 'patch', 'play', 'shot', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。' },
+        op: { type: 'string', enum: ['state', 'patch', 'play', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
         treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树，默认 200。' },
         patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。', additionalProperties: true },
@@ -1373,6 +1374,7 @@ const TOOLS = [
         args: { type: 'object', description: 'op=play 的参数，如 {"x":640,"y":360} / {"dt":0.033} / {"type":"click","x":640,"y":360}。', additionalProperties: true },
         target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 的取景：ui=编辑器视图（静态），play=试玩画面（需先 op=play action=start）。' },
         label: { type: 'string', description: 'op=shot 的文件名标签（便于事后认图）。' },
+        reuse: { type: 'boolean', description: 'op=shot 连帧用：固定名（sim-play-live.png）覆盖写，磁盘只留一张当前帧；URL 带时间戳绕开缓存。不传=每张都新建文件（适合留证据）。' },
         format: { type: 'string', description: 'op=export / op=import 的格式：gia（当前界面）/ gia-combined（服务端与客户端并排）/ json / save / scripts / lua。默认 gia。' },
         assetType: { type: 'string', description: 'op=export 的资产类型过滤（如 server-control-template / client-control-template）。' },
         file: { type: 'string', description: 'op=import 要导入的文件绝对路径。' },

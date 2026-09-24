@@ -931,6 +931,32 @@ check('平铺规则必须**写在 -body 之后**且用复合选择器（否则�
   return 'body@' + iBody + ' < bodyfill@' + iFill + '，复合选择器优先级更高';
 });
 
+check('画布点击坐标换算（纯函数）：左下原点、y 翻转、退化输入不炸', () => {
+  const f = clientExports.__testStagePoint;
+  assert(typeof f === 'function', '缺 __testStagePoint（点画布的换算没有独立函数就无法回归）');
+  // 图片区域 800×400、画布 1600×900：点图片正中 → 画布正中
+  const c = f({ left: 100, bottom: 500, width: 800, height: 400 }, 1600, 900, 500, 300);
+  assert(c.x === 800 && c.y === 450, '中心点算错：' + JSON.stringify(c));
+  // 图片**左上角**（clientY 小 = 屏幕上方）→ 画布 y 应是最大值（左下原点，y 要翻转）
+  const tl = f({ left: 100, bottom: 500, width: 800, height: 400 }, 1600, 900, 100, 100);
+  assert(tl.x === 0 && tl.y === 900, '左上角算错（y 没翻转？）：' + JSON.stringify(tl));
+  // 图片左下角 → 画布 (0,0)
+  const bl = f({ left: 100, bottom: 500, width: 800, height: 400 }, 1600, 900, 100, 500);
+  assert(bl.x === 0 && bl.y === 0, '左下角算错：' + JSON.stringify(bl));
+  assert(JSON.stringify(f(null, 0, 0, 0, 0)) === '{"x":0,"y":0}', '退化输入没兜住（会点出 NaN 坐标）');
+  return '中心 / 左上角(y 翻转) / 左下角 / 退化输入 都对';
+});
+
+check('模拟器页有「能玩」的入口：连帧 + 按键 + 设备 / 人数 / 视角', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(/连帧/.test(text), '缺连帧开关');
+  assert(text.includes('按键：') && text.includes('发送键'), '缺按键行');
+  assert(text.includes('设备：') && text.includes('人数：') && text.includes('视角：'), '缺设备/人数/视角');
+  assert(/<select/.test(html), '设备/人数/视角没有渲染成下拉');
+  return '连帧 / 按键 / 设备 / 人数 / 视角 都在';
+});
+
 check('模拟器是**面板内的第三个页面**（不再只是提示去会话区）', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'sim' })));

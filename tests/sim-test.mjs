@@ -97,6 +97,37 @@ ok('op=shot play：带回帧号与画布（可用于断言"第几帧"）', typeo
 const stepped = await simOp({ op: 'play', action: 'step', args: { dt: 0.033 } });
 ok('op=play step：时间前进（单步可调试）', typeof stepped.time === 'number' && stepped.time > 0, 'time=' + stepped.time);
 
+// 连帧（面板 5fps）用 reuse=true：固定名覆盖写，不能每帧新建文件
+const live1 = await simOp({ op: 'shot', target: 'play', reuse: true });
+ok('op=shot reuse=true：连帧用固定名 sim-play-live.png，且 URL 带时间戳绕开缓存',
+  live1.name === 'sim-play-live.png' && fs.existsSync(live1.file) && /&t=\d+/.test(live1.url || ''),
+  live1.name + '  ' + live1.url);
+await simOp({ op: 'shot', target: 'play', reuse: true });
+const liveFiles = fs.readdirSync(path.join(tmpData, 'shots')).filter((n) => n.indexOf('sim-play-live') === 0);
+ok('★ 连帧不会每帧新建文件（目录里始终只有 1 张 live 帧）', liveFiles.length === 1, JSON.stringify(liveFiles));
+
+// 按键：op=keys 从脚本源码里扫出它真正在听的键名
+const keySrc = [
+  'function OnStart()',
+  '  script.Parent.OnKeyDown:Connect(function(key)',
+  '    if key == Enum.KeyEventType.KeyboardCraftspersonKey3Down then print("k3") end',
+  '  end)',
+  'end',
+  '',
+].join('\n');
+await simOp({ op: 'patch', patch: { op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'keys-selftest', source: keySrc } });
+const keysInfo = await simOp({ op: 'keys' });
+ok('op=keys：从脚本源码扫出真正在听的键名（含 KeyboardCraftspersonKey3Down）',
+  Array.isArray(keysInfo.keys) && keysInfo.keys.indexOf('KeyboardCraftspersonKey3Down') >= 0 && (keysInfo.presets || []).length > 0,
+  JSON.stringify({ keys: keysInfo.keys, presets: (keysInfo.presets || []).length }));
+
+// 切设备会重建运行时：人数必须被 Host 自动沿用，否则 视角2 会报 playerIndex 1-1（真机踩过）
+const p2 = await simOp({ op: 'play', action: 'start', args: { playerCount: 2 } });
+ok('op=play start 带 playerCount=2：能开跑', !!p2.canvasId, JSON.stringify({ canvasId: p2.canvasId }));
+await simOp({ op: 'play', action: 'device', args: { canvasId: 'pc-21-9' } });
+const v2 = await err(() => simOp({ op: 'play', action: 'view', args: { playerIndex: 2 } }));
+ok('★ 切设备后仍能切到 P2（人数没悄悄掉回 1 —— Host 自动沿用 start 的 playerCount）', v2 === null, v2);
+
 const stopped = await simOp({ op: 'play', action: 'stop' });
 ok('op=play stop：运行态归零', stopped.running === false || stopped.running === undefined, JSON.stringify(stopped).slice(0, 120));
 
