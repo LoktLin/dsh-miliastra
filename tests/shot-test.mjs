@@ -38,6 +38,10 @@ ok('sanitizeLabel 去掉路径非法字符', sanitizeLabel('a/b\\c:d*e?f"g<h>i|j
 ok('sanitizeLabel 空白折叠成 -', sanitizeLabel('控件  对齐') === '控件-对齐', sanitizeLabel('控件  对齐'));
 ok('sanitizeLabel 去掉首尾的点与横线', sanitizeLabel('..--abc--..') === 'abc', sanitizeLabel('..--abc--..'));
 ok('sanitizeLabel 截断到上限', sanitizeLabel('x'.repeat(50), 10).length === 10);
+ok('★ sanitizeLabel 截断后不留尾点/尾横线（先剥后截会在截断处留下一个点 —— 实测文件名成了 `…-frames-t0.`）',
+  sanitizeLabel('selftest-move-frames-t0.5') === 'selftest-move-frames-t0'
+  && !/[.\-]$/.test(sanitizeLabel('aaa-bbb.ccc-ddd.eee-fff.ggg')),
+  sanitizeLabel('selftest-move-frames-t0.5'));
 ok('sanitizeLabel 空值给空串', sanitizeLabel(null) === '' && sanitizeLabel(undefined) === '');
 // 控制字符被删掉，中间的空白按规则折叠成 '-'（两个控制字符夹着的空格就是 `ab c` → `ab-c`）
 ok('sanitizeLabel 去掉控制字符', sanitizeLabel('a\u0001b\u007f c') === 'ab-c', sanitizeLabel('a\u0001b\u007f c'));

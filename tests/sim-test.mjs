@@ -370,6 +370,77 @@ ok('op=verify 缺 expect：明确报错（不会静默当通过）', !!vNoExpect
 const vBadStep = await err(() => simOp({ op: 'verify', steps: [{ fly: 1 }], expect: [{ kind: 'log', contains: 'x' }] }));
 ok('op=verify 步骤写错：报错里列出可用种类', !!vBadStep && /clickName/.test(vBadStep), vBadStep);
 
+/* ------------------------------- 帧序列 + 帧间像素差（op=frames） */
+
+// 会动的工程：容器节点 1 秒内 x 从 0 → 100（写法抄引擎自己的 studio 测试 scripts.test.mjs:138）
+await simOp({
+  op: 'patch',
+  patch: {
+    op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'tween-move',
+    source: 'function OnStart()\n  game.Tween(script.object, { anchoredPositionX = 100 }, 1):SetEase(Enum.EaseType.Linear):Play()\nend\n',
+  },
+});
+const fr = await simOp({ op: 'frames', frames: [0, 0.5, 1], label: 'selftest-move' });
+ok('★ op=frames：按时间点出帧（3 帧、各自真落盘、1600×900、文件名带 t）',
+  fr.frameCount === 3 && fr.frames.length === 3
+  && fr.frames.every((f) => fs.existsSync(f.file) && f.bytes > 1000 && f.pixelWidth === 1600 && f.pixelHeight === 900)
+  && /-t0\.5-/.test(fr.frames[1].name),
+  JSON.stringify(fr.frames.map((f) => f.name)));
+ok('op=frames：帧号随时间前进（0 → 16 → 32，即 1/30 秒固定步长）',
+  fr.frames[0].frame === 0 && fr.frames[1].frame === 16 && fr.frames[2].frame === 32,
+  JSON.stringify(fr.frames.map((f) => f.frame)));
+
+const d0 = fr.diffs[0];
+const d1 = fr.diffs[1];
+ok('★ op=frames：帧间**像素差**是数字（changedPixels / changedRatio / maxDelta / bbox），会动的工程不是 identical',
+  fr.diffs.length === 2 && d0.identical === false && d0.changedPixels > 1000
+  && d0.changedRatio > 0 && d0.changedRatio <= 1 && d0.maxDelta > 0 && !!d0.bbox,
+  JSON.stringify({ pixels: d0.changedPixels, ratio: d0.changedRatio, max: d0.maxDelta, bbox: d0.bbox }));
+ok('op=frames：bbox 在画布内且非空（能直接看出"变的是哪一块"）',
+  d0.bbox.x >= 0 && d0.bbox.y >= 0 && d0.bbox.width > 0 && d0.bbox.height > 0
+  && d0.bbox.x + d0.bbox.width <= 1600 && d0.bbox.y + d0.bbox.height <= 900,
+  JSON.stringify(d0.bbox));
+ok('★ op=frames：`changedControls` 直接点名**哪个控件的哪个字段**变了（位置在 `matrix.tx` 上，不是 anchoredPositionX）',
+  d0.changedControls.length >= 1 && d0.changedControls[0].name === '容器节点'
+  && Array.isArray(d0.changedControls[0].fields['matrix.tx']),
+  JSON.stringify(d0.changedControls));
+{
+  // ★ 两个**独立通道**互相印证：场景字段位移 vs 像素 bbox 位移
+  const txFirst = d0.changedControls[0].fields['matrix.tx'];
+  const txSecond = d1.changedControls[0].fields['matrix.tx'];
+  const sceneShift = txSecond[1] - txFirst[1];
+  const pixelShift = d1.bbox.x - d0.bbox.x;
+  ok('★ 像素位移与场景字段位移**对得上**（0→0.5→1 秒各右移 50 世界单位，bbox 也各右移 50px，±3px 容差）',
+    Math.abs(sceneShift - 50) < 1 && Math.abs(pixelShift - 50) <= 3,
+    'scene=' + sceneShift + 'px=' + pixelShift);
+}
+
+// 负对照：清成静态工程后，同一时间点两次取帧必须**逐像素相同**（证明差的不是噪声）
+await simOp({ op: 'reset' });
+const still = await simOp({ op: 'frames', frames: [0, 0.5], label: 'selftest-still' });
+ok('★ op=frames 负对照：静态工程 `identical:true` / 0 像素差 / 无控件变化（数字不是噪声）',
+  still.diffs[0].identical === true && still.diffs[0].changedPixels === 0
+  && still.diffs[0].maxDelta === 0 && still.diffs[0].changedControls.length === 0,
+  JSON.stringify(still.diffs[0]));
+
+const still2 = await simOp({ op: 'frames', frames: [0, 0.5], label: 'selftest-still' });
+ok('★ op=frames 可复现：同一调用跑两遍，像素差数字一样（内部是"暂停 + 单步"，时间不会自己漂）',
+  still2.diffs[0].changedPixels === still.diffs[0].changedPixels
+  && still2.frames[1].frame === still.frames[1].frame,
+  still.diffs[0].changedPixels + ' vs ' + still2.diffs[0].changedPixels);
+
+const frNoDiff = await simOp({ op: 'frames', frames: [0, 0.2], diff: false });
+ok('op=frames diff:false：只出帧、不比像素（省一次解码）',
+  frNoDiff.frameCount === 2 && frNoDiff.diffs.length === 0 && frNoDiff.frames.every((f) => fs.existsSync(f.file)));
+
+const frNoTimes = await err(() => simOp({ op: 'frames' }));
+ok('op=frames 缺 frames：报错并给出可照抄的例子', !!frNoTimes && /frames:\[0,0\.5,1\]/.test(frNoTimes), frNoTimes);
+const frTooMany = await err(() => simOp({ op: 'frames', frames: new Array(13).fill(0).map((_, i) => i) }));
+ok('op=frames 帧数超上限（12）：明确报错', !!frTooMany && /最多 12 帧/.test(frTooMany), frTooMany);
+const frTooLong = await err(() => simOp({ op: 'frames', frames: [60], dt: 1 / 30 }));
+ok('op=frames 要推进的步数过大：报错并给出「换更大的 dt」这条路（不是默默跑十分钟）',
+  !!frTooLong && /dt/.test(frTooLong) && /步/.test(frTooLong), frTooLong);
+
 /* ------------------------------------------------- 失控脚本的护栏（关键） */
 
 await simOp({ op: 'patch', patch: { op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'sim-runaway', source: 'function OnStart()\n  while true do end\nend\n' } });

@@ -256,7 +256,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
-  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
+  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
 ];
 
 export const PROMPT_RULES = [
@@ -1385,21 +1385,28 @@ const TOOLS = [
       + '`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；'
       + '`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；'
       + '`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。'
+      + '\n  · **动画 / 动效类问题用 `op=frames`**（别只断言某个静态值）：`frames:[0,0.5,1]` → 每个时间点一张 PNG + **帧间像素差数字**'
+      + '（`changedPixels` / `changedRatio` / 变化区域 `bbox`）+ 字段级的 `changedControls`（**哪个控件的哪个字段**变了，如 `matrix.tx: 800 → 850`）。'
+      + '内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。'
       + '\n  · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；'
       + '玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。'
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
       + '\n\n**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
       + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
+      + '证明动画在动：`{"op":"frames","frames":[0,0.5,1]}`；'
       + '看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['controls', 'state', 'patch', 'play', 'verify', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls。' },
+        op: { type: 'string', enum: ['controls', 'state', 'patch', 'play', 'verify', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls；动画用 frames。' },
         steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|drag?{from,to,steps,gap}|pointer?{type,x,y}|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
         expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name|controlKind,equals|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。', items: { type: 'object', additionalProperties: true } },
         cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。', items: { type: 'object', additionalProperties: true } },
         fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**的事件当用例（人在浏览器试玩页 /miliastra/play 里玩的也算），AI 不用手抄 events。需要会话还活着；回放会重开会话。' },
+        frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，最多 12 个），如 [0,0.5,1]：每个点出一张 PNG，并给帧间像素差与字段级变化。', items: { type: 'number' } },
+        diff: { type: 'boolean', description: 'op=frames：是否比帧间像素差（默认 true）。false = 只出帧、不解码。' },
+        threshold: { type: 'number', description: 'op=frames：像素算「变了」的每通道差值阈值，默认 8。' },
         shotOnFail: { type: 'boolean', description: 'op=verify：判定没过时自动存一帧失败点 PNG 并回 `shot`（默认 true，传 false 关掉）。' },
         stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个用例没过就停（默认 false = 跑完全部，回归语义）。' },
         keepRunning: { type: 'boolean', description: 'op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。' },

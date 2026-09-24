@@ -30,9 +30,19 @@
 
 - **`slimPlay` 无条件丢掉 `scene`/`paint`** —— 与「`summaryOnly` 只去体积、`false` 时给全量」的约定矛盾，直接后果是浏览器页永远拿不到画面（黑屏）。
   现在 `summaryOnly:false` 原样给 `scene`，默认仍是只回计数。
+- **`sanitizeLabel` 先剥尾点、后截断** → 截断处又留下一个尾点（实测文件名成了 `…-frames-t0.`）。
+  改成截断后再剥一次；`op=frames` 的帧标签同时缩短为 `t<秒>`（标签上限 24 字符，写长了会把 `t0.5` 截掉）。
 
 ### 新增
 
+- **`op=frames`：按时间出多帧 + 帧间像素差 + 字段级变化**（回答「动画到底动没动、动的是哪一块」）。
+  `{"op":"frames","frames":[0,0.5,1]}` → 每个时间点一张 PNG + `changedPixels` / `changedRatio` / `maxDelta` / 变化区域 `bbox`
+  + `changedControls`（**哪个控件的哪个字段**变了）。实测（容器节点 1 秒线性 Tween 右移 100）：
+  `matrix.tx 800 → 850 → 900` 与像素 `bbox.x 452 → 502`（+50/帧）**互相印证**；静态工程 `identical:true` / 0 像素（负对照）；
+  同一调用跑两遍数字一样（**可复现**）。
+  两条实现决定：内部用「**暂停 + 单步**」推进时间（否则 worker 自己的 30FPS 时钟会让帧对不上时间点）；
+  每帧回全量场景由 Host 自己比字段（**不依赖增量协议**）。上限显式：帧 ≤12、步数 ≤1200，超了报错并给出「换更大的 dt」。
+  ⚠️ 踩坑记录：场景里**位置在 `matrix.tx/ty` 上**（不是 `anchoredPositionX`）—— 不摊开 `matrix` 这一层，`changedControls` 会永远是空的。
 - **`op=verify` 支持拖拽（`steps[{drag:{from,to,steps?,gap?}}]`）**：自动展开成 `down → move… → up`（默认 6 段 / 每段 0.05 秒）。
   以前只能发 `click`，**拖拽/滑动这类交互根本测不了**；引擎的 `CursorBeginDrag` / `CursorDrag` / `CursorEndDrag` 都在 `move` 里发，
   所以必须展开成一串事件。另配 `pointer:{type,x,y}` 供手排裸指针事件（`down`/`move`/`up`/`click`）。
@@ -51,7 +61,7 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0**：新增 `sim-play-test.mjs` **29 项**；合计 `readme` 14 · `smoke` 49 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 103 · `sim` 75 · **`sim-play` 29** · `client-render` 43 · 引擎 130 = **521 项**。
+- `npm test` 退出码 **0**：新增 `sim-play-test.mjs` **29 项**；合计 `readme` 14 · `smoke` 49 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` 87 · **`sim-play` 29** · `client-render` 43 · 引擎 130 = **534 项**。
 - 无浏览器的**协议冒烟**：`summaryOnly:false` 带 `scene`（`tree-v1`）、带 `sceneRev` 的增量轮询能接着拿、`play action=history` 拿得到时间线、`fromHistory` 跑通且没有活会话时明确报错。
 - `node tools/build-sim-play.mjs --check` 能真跑（Windows 上"字符串拼 `file://`"的主模块判定会**静默不执行** —— 踩过，已钉住）。
 - 真机形态的拖拽用例实测：`drag:{from:[800,450],to:[830,470],steps:3}` → 命中 `DRAG_BEGIN` / `DRAG_MOVE` / `DRAG_END`，

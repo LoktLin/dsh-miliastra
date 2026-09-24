@@ -450,18 +450,22 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
   · **一组用例一次跑**：`cases:[{name,steps,expect},…]` —— 每个用例各开一个全新会话确定性重放（互不影响，可当回归套件）；默认跑完全部，`stopOnFail:true` 则第一个不过就停。
   · **`fromHistory:true`：把「刚跑过那一局」直接变成回归用例** —— 人在浏览器试玩页（`GET /miliastra/play`，WebGL 真能玩的那页）里玩的也算，AI **不用手抄 events**；人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。
 其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；`state` 看工程/控件树/属性（要几何与父级才用它）；`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；`keys` 从**你的脚本源码**里扫出它真正在听的按键名；`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。
+  · **动画 / 动效类问题用 `op=frames`**（别只断言某个静态值）：`frames:[0,0.5,1]` → 每个时间点一张 PNG + **帧间像素差数字**（`changedPixels` / `changedRatio` / 变化区域 `bbox`）+ 字段级的 `changedControls`（**哪个控件的哪个字段**变了，如 `matrix.tx: 800 → 850`）。内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。
   · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。
 ⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。
 
-**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`
+**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；证明动画在动：`{"op":"frames","frames":[0,0.5,1]}`；看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`
 
 | 参数 | 类型 | 必填 | 取值 | 说明 |
 |---|---|---|---|---|
-| `op` | `string` | 否 | `controls` / `state` / `patch` / `play` / `verify` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls。 |
+| `op` | `string` | 否 | `controls` / `state` / `patch` / `play` / `verify` / `frames` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls；动画用 frames。 |
 | `steps` | `array<object>` | 否 | —— | op=verify 的操作序列；每步 {at?, after?, key?\|click?{x,y}\|clickName?\|drag?{from,to,steps,gap}\|pointer?{type,x,y}\|setVar?{entityType,name,value}\|sendSignal?{name,params,target}\|view?\|pause?\|resume?}。 |
 | `expect` | `array<object>` | 否 | —— | op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id\|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name\|controlKind,equals\|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。 |
 | `cases` | `array<object>` | 否 | —— | op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。 |
 | `fromHistory` | `boolean` | 否 | `true` / `false` | op=verify：用**刚跑过那一局**的事件当用例（人在浏览器试玩页 /miliastra/play 里玩的也算），AI 不用手抄 events。需要会话还活着；回放会重开会话。 |
+| `frames` | `array<number>` | 否 | —— | op=frames 的时间点（模拟秒，升序，最多 12 个），如 [0,0.5,1]：每个点出一张 PNG，并给帧间像素差与字段级变化。 |
+| `diff` | `boolean` | 否 | `true` / `false` | op=frames：是否比帧间像素差（默认 true）。false = 只出帧、不解码。 |
+| `threshold` | `number` | 否 | —— | op=frames：像素算「变了」的每通道差值阈值，默认 8。 |
 | `shotOnFail` | `boolean` | 否 | `true` / `false` | op=verify：判定没过时自动存一帧失败点 PNG 并回 `shot`（默认 true，传 false 关掉）。 |
 | `stopOnFail` | `boolean` | 否 | `true` / `false` | op=verify 配 cases：第一个用例没过就停（默认 false = 跑完全部，回归语义）。 |
 | `keepRunning` | `boolean` | 否 | `true` / `false` | op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。 |
@@ -556,17 +560,17 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 
 | 想法 | 谁提的 | 状态 | 一句话价值 |
 |---|---|---|---|
-| `op=verify frames:[t1,t2,…]`：按时间出一串帧 + **帧间像素差数字** | 写它的 AI | 待办 | 让 AI 能**证明动画真的在动**，而不是只断言某个静态值 |
+| ~~`op=verify frames:[t1,t2,…]`：按时间出一串帧 + **帧间像素差数字**~~ | 写它的 AI | **✅ 已落地**（`op=frames`） | 让 AI 能**证明动画真的在动**：实测 `matrix.tx 800→850→900` 与像素 bbox 各右移 50px **互相印证**；静态工程 `identical:true` |
 | **用例书**：把跑通的一组用例存进模拟器工作区，下次一条命令重放 | 写它的 AI | 待办 | 回归从"每次重写 steps"变成"一条命令" |
 | `op=controls diff`：相比上次多了 / 少了哪些控件 | 写它的 AI | 待办 | 验证「脚本动态创建」最直接的判据 |
 | **浏览器试玩页内嵌进面板**（现在是新开标签页） | 写它的 AI | 待办 | 人不用离开面板；AI 也不用管两个视图 |
 | `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
-| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 32 KB，知识进 skill 能省掉常驻那部分 |
-| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 32 KB |
-| **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 视觉回归目前只能两次截图用眼睛比 |
+| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 38 KB，知识进 skill 能省掉常驻那部分 |
+| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 38 KB |
+| **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 这是**给人**看的；AI 要的"哪变了"已由 `op=frames` 的数字回答了 |
 | （等你来写） | | | |
 
-**已经落地、可以照抄的形态**：`op=verify`（操作+断言+判定一次调用）· `cases[]`（一组回归）· `op=controls` · 失败自动取证 · `drag` / `count` · `fromHistory` · 浏览器试玩页 `GET /miliastra/play`。
+**已经落地、可以照抄的形态**：`op=verify`（操作+断言+判定一次调用）· `cases[]`（一组回归）· `op=controls` · 失败自动取证 · `drag` / `count` · `fromHistory` · **`op=frames`（动画证据：多帧 + 帧间像素差 + 字段级变化）** · 浏览器试玩页 `GET /miliastra/play`。
 
 ---
 
