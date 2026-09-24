@@ -135,6 +135,29 @@ ok('op=reset：控制器被释放并重建', reset.reset === true && reset.dispo
 const after = await simOp({ op: 'state' });
 ok('op=reset 后工程回到初始（脚本不残留）', after.scriptCount === 0, 'scriptCount=' + after.scriptCount);
 
+/* ------------------------------------------------- 导出 / 导回（写回能力） */
+
+const fresh = await simOp({ op: 'state' });
+const gia = await simOp({ op: 'export', format: 'gia' });
+ok('op=export gia：文件真落盘，且在模拟器工作区里（不是游戏目录）',
+  gia.bytes > 100 && fs.existsSync(gia.file) && gia.file.toLowerCase().startsWith(tmpData.toLowerCase()),
+  gia.file + '  ' + gia.bytes + 'B');
+ok('op=export gia：文件名是 .gia，且回执明说「真机未验证」',
+  /\.gia$/i.test(gia.name) && /尚未在真机导入验证/.test(gia.note || ''), gia.name);
+
+// 先改一笔，再用导出的那份盖回去 —— 能盖回去才证明 import 真的生效
+await simOp({ op: 'patch', patch: { op: 'add', parentId: 'n1', kind: 'textbox', name: 'IMPORT-PROBE' } });
+const polluted = await simOp({ op: 'state' });
+ok('导出后先弄脏工程（+1 控件）', polluted.treeCount === fresh.treeCount + 1,
+  polluted.treeCount + ' vs ' + (fresh.treeCount + 1));
+
+const imported = await simOp({ op: 'import', format: 'gia', file: gia.file });
+ok('★ op=import 导回刚导出的 .gia：控件数回到导出那一刻（引擎侧往返成立）',
+  imported.treeCount === fresh.treeCount, imported.treeCount + ' vs ' + fresh.treeCount);
+
+const badImport = await err(() => simOp({ op: 'import', format: 'gia', file: uiShot.file }));
+ok('op=import 喂错文件（PNG 冒充 gia）：明确报错，不是静默成功', !!badImport, badImport);
+
 const all = await disposeSimAll();
 ok('disposeSimAll：所有会话 Worker 收干净', typeof all.disposed === 'number' && simRuntimeInfo().sessions === 0, JSON.stringify(all));
 

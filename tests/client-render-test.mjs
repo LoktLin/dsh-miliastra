@@ -873,16 +873,31 @@ check('inline 视图里没有关闭按钮（视图不该有"关掉自己"这回�
   return '无 ×';
 });
 
-check('「模拟器」视图能真渲染（不是占位）：7 个动作 + 诚实空态', () => {
+check('「模拟器」视图能真渲染（不是占位）：8 个动作 + 诚实空态', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorView, {}));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('模拟器'), '缺标题');
-  for (const label of ['刷新', '编辑器画面', '开始试玩', '单步', '刷新画面', '停止', '重置工程']) {
+  for (const label of ['刷新', '编辑器画面', '开始试玩', '单步', '刷新画面', '停止', '导出 GIA', '重置工程']) {
     assert(text.includes(label), '缺按钮：' + label);
   }
   assert(text.includes('还没有画面'), '没给「还没取到画面」的诚实提示（空着让人猜）');
   assert(html.includes('dsh-miliastra-inline'), '模拟器视图没走全宽 inline 布局');
-  return '7 个动作 + 空态提示 + 全宽布局';
+  return '8 个动作 + 空态提示 + 全宽布局';
+});
+
+check('浮层面板自带视图切换条（初级功能 / 高级功能 / 全部）—— 会话区 tab 找不到时的第二入口', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null },
+  }));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  for (const label of ['初级功能', '高级功能', '全部']) {
+    assert(text.includes(label), '缺视图切换按钮：' + label);
+  }
+  assert(/dsh-miliastra-vtab/.test(html), '切换按钮没有样式类（会渲染成裸按钮）');
+  assert(/dsh-miliastra-vtab-on/.test(html), '没有标出当前选中的那一档');
+  const inline = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { inline: true, group: 'basic' }));
+  assert(!/dsh-miliastra-vtab/.test(inline), 'inline 视图不该再带一条内部切换条（那边由会话区 tab 决定）');
+  return '三个按钮 + 选中态 + inline 不重复';
 });
 
 console.log('');
