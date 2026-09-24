@@ -109,6 +109,20 @@ ok('★ 画布尺寸印在 footer（`画布 668×376（可放 875×400）`）—
 ok('★ 窄容器收一档（面板里那 2/3 列只有 ~570px）：媒体查询 + 短标题',
   /@media \(max-width:820px\)/.test(html) && /title-mini/.test(html)
   && /\.bar strong\{display:none\}/.test(html) && /\.bar \.title-mini\{display:inline\}/.test(html));
+/*
+ * ★ **画布/人数/视角固定**（作者要求：「固定这样，把切换的功能去掉」）。
+ * 这条是**反向断言**：原来那份**手写**的设备清单里 `pc-4-3` / `phone-16-9` / `phone-4-3`
+ * 在引擎里并不存在（引擎只有 pc-16-9 / pc-21-9 / mobile-16-9 / mobile-19.5-9 / mobile-4-3），
+ * 选中就报 `unknown canvas preset` —— 作者截图里那条红条就是它。谁要加回来，先看这段。
+ * ⚠️ 能力没丢：AI 仍可用 `op=play device|view` 与 `playerCount`。
+ */
+ok('★ 试玩页**没有**会打歪画布尺寸的切换（设备/人数/视角下拉已去掉，固定 PC 16:9 单人）',
+  !/deviceSel|playerSel|viewSel/.test(html) && /FIXED_PLAY/.test(html) && /id="fixedCfg"/.test(html));
+ok('★ 页面上**没有**引擎里不存在的画布预设（踩过：手写的 `pc-4-3` → 红条 `unknown canvas preset`）',
+  // 先剥注释：上面那段解释性注释里正引用着这几个错值，不能被自己的注释绊倒
+  !/pc-4-3|phone-16-9|phone-4-3/.test(
+    html.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[^\S\n]*\/\/.*$/gm, ''),
+  ));
 
 {
   /*

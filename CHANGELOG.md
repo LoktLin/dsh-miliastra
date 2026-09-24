@@ -41,6 +41,13 @@
 
 ### 变更
 
+- **画布 / 人数 / 视角**改成**固定 PC 16:9 / 1 人 / P1**，面板与试玩页上的三个下拉**整块删掉**
+  （作者原话：「我希望固定这样 把切换的功能去掉吧」）。两条理由：① 引擎的 `device` 会**重建整个运行时** ——
+  画布一变，16:9 的舞台尺寸与 AI 记下的操作坐标都要重算；② 试玩页那份**手写**的设备清单里有引擎**不存在**的预设
+  （`pc-4-3` / `phone-16-9` / `phone-4-3`；引擎只有 `pc-16-9`/`pc-21-9`/`mobile-16-9`/`mobile-19.5-9`/`mobile-4-3`）
+  ⇒ 选中就报 `unknown canvas preset`（作者截图里那条红条）。**能力没丢**：AI 仍可用
+  `miliastra_sim {"op":"play","action":"device"|"view"}` 与 `playerCount` 改；页面上只留一行**只读**回显
+  （`PC 16:9 · 1 人 · P1`）。两条**反向断言**：下拉不许回来、页面上不许再出现引擎里不存在的画布预设。
 - **模拟器面板按作者要求改成 1:2**：右 2 份 = **试玩页 iframe**（`src=/miliastra/play`，PixiJS WebGL，人真能在里面玩），
   左 1 份 = ① 画面与日志（缩略，横排）、② 试玩操作 + 操作时间线、③ 验收单、④ 工程与控件树 / 工程适配（折叠）。
   **AI 驱动的是同一个会话**（`op=play` 的 key/pointer/step）—— 页面每 33ms 轮询 `sceneRev` 增量，所以 AI 一动画面就跟着变；
@@ -144,8 +151,8 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0** = **589 项**：`smoke` 50 → **52**（engine 路由不吞 `op` 的两条 ★）、`sim` 88 → **132**（`op=bind` 21 + `op=cases` 14 + `op=handover` 7）、
-  `sim-play` 29 → **34**（报错条可见 / WebGL 兜底 / 舞台尺寸重试）、`client-render` **45**（1:2 + iframe + 左列顺序与滚动模型）；其余 `readme` 14 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · 引擎 130。
+- `npm test` 退出码 **0** = **591 项**：`smoke` 50 → **52**（engine 路由不吞 `op` 的两条 ★）、`sim` 88 → **132**（`op=bind` 21 + `op=cases` 14 + `op=handover` 7）、
+  `sim-play` 29 → **36**（报错条可见 / WebGL 兜底 / 舞台尺寸重试）、`client-render` **45**（1:2 + iframe + 左列顺序与滚动模型）；其余 `readme` 14 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · 引擎 130。
 - **`op=bind` 在真机上跑通了**（双相《冰镜·火烛》，370ms 建好）：`run.logs` 出现它自己 print 的
   `就绪（3 关，控件 31，画布 1600x900）`（与真机 `.gia` 同一句），`run.controlCount=32`（容器 1 + 双相 31），
   渲染图 `~/.dsh/miliastra/shots/sim-play-双相-bind-第1关-20260924-110733.png` 里第 1 关的平台/熔岩/冰墙/小人/状态栏都在。

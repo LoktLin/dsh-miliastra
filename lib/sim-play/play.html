@@ -79,9 +79,7 @@
     <button id="reset" disabled>重开一局</button>
     <button id="stop" disabled>结束</button>
     <span class="sp"></span>
-    <label>设备 <select id="deviceSel"></select></label>
-    <label>人数 <select id="playerSel"></select></label>
-    <label>视角 <select id="viewSel"></select></label>
+    <span class="tag" id="fixedCfg" title="画布/人数固定：面板与页面上的切换已按作者要求去掉（AI 仍可用 miliastra_sim op=play device/view 改）">PC 16:9 · 1 人 · P1</span>
     <button id="panelBtn">侧栏</button>
   </header>
   <div id="fatal"></div>
@@ -114,6 +112,11 @@
   const API = '/miliastra/engine'
   const $ = (id) => document.getElementById(id)
   const el = { main: $('main'), stage: $('stage'), stageWrap: $('stageWrap'), cv: $('cv'), side: $('side') }
+  /** 画布 id → 人话标签（只用于只读展示；引擎的权威清单在 `state.canvas.presets`）。 */
+  const CANVAS_LABELS = {
+    'pc-16-9': 'PC 16:9', 'pc-21-9': 'PC 21:9',
+    'mobile-16-9': '手机 16:9', 'mobile-19.5-9': '手机 19.5:9', 'mobile-4-3': '手机 4:3',
+  }
   let lastTimeline = 0
 
   function showError(error) {
@@ -233,11 +236,12 @@
       const d = document.createElement('div'); d.textContent = l.text || ''; return d
     }) : [Object.assign(document.createElement('div'), { textContent: '(还没有日志)' })]))
     $('pause').disabled = !play.running
-    // 下拉框跟着真实状态走（程序改 value 不会触发 change，所以不会反过来开局）
-    const pc = String(snap.playerCount || 1)
-    if ($('playerSel').value !== pc) { $('playerSel').value = pc; renderViews(snap.playerCount || 1, snap.viewPlayerIndex || 1) }
-    if (snap.canvasId && $('deviceSel').value !== snap.canvasId) $('deviceSel').value = snap.canvasId
-    if ($('viewSel').value !== String(snap.viewPlayerIndex || 1)) $('viewSel').value = String(snap.viewPlayerIndex || 1)
+    // 固话提示条跟着真实状态走（画布/人数/视角仍然**只读**显示 —— 看得到，但没有能打歪画布尺寸的开关）
+    const cfg = $('fixedCfg')
+    if (cfg) {
+      const label = (CANVAS_LABELS[snap.canvasId] || snap.canvasId || 'PC 16:9')
+      cfg.textContent = label + ' · ' + (snap.playerCount || 1) + ' 人 · P' + (snap.viewPlayerIndex || 1)
+    }
   }
 
   async function refreshTimeline(force) {
@@ -272,45 +276,30 @@
   })
   play.bindInput(el.stage, { keysOn: window })
 
-  function keepArgs() {
-    const snap = play.snapshot || {}
-    const args = {}
-    if (snap.canvasId) args.canvasId = snap.canvasId
-    if (snap.playerCount) args.playerCount = snap.playerCount
-    return args
-  }
+  /*
+   * ★ **画布/人数/视角固定**（作者要求：「固定这样，把切换的功能去掉」）。
+   *
+   * 为什么值得固定：① 切设备会**重建整个运行时**（引擎的 `device` 就是重开一局），
+   * 而画布一变，16:9 的舞台尺寸、AI 侧记下的操作坐标全都要重算；
+   * ② 这里的设备清单原来是**手写的**，里面 `pc-4-3` / `phone-16-9` / `phone-4-3` 三个在引擎里**并不存在**
+   *    （引擎只有 pc-16-9 / pc-21-9 / mobile-16-9 / mobile-19.5-9 / mobile-4-3）——
+   *    选中就报 `unknown canvas preset: pc-4-3`（作者截图里那条红条）。
+   *
+   * 所以这里把三个下拉**整块去掉**，固定成 PC 16:9 / 1 人 / P1（也就是引擎的默认值）。
+   * ⚠️ 能力没丢：AI 仍可用 `miliastra_sim {"op":"play","action":"device","args":{"canvasId":"mobile-16-9"}}`
+   * 或 `action=view` / `playerCount` 去改 —— 只是人在这页上不再有会打歪画布尺寸的开关。
+   */
+  const FIXED_PLAY = { canvasId: 'pc-16-9', playerCount: 1, viewPlayerIndex: 1 }
 
-  // 设备/人数选项：与引擎的画布预设、1–8 人一致
-  const DEVICES = [['pc-16-9', 'PC 16:9'], ['pc-21-9', 'PC 21:9'], ['pc-4-3', 'PC 4:3'], ['phone-16-9', '手机 16:9'], ['phone-4-3', '手机 4:3']]
-  $('deviceSel').replaceChildren(...DEVICES.map(([v, label]) => new Option(label, v)))
-  $('playerSel').replaceChildren(...Array.from({ length: 8 }, (_, i) => new Option(String(i + 1) + ' 人', String(i + 1))))
-  function renderViews(count, current) {
-    $('viewSel').replaceChildren(...Array.from({ length: count }, (_, i) => new Option('P' + (i + 1), String(i + 1))))
-    $('viewSel').value = String(current || 1)
-  }
-  renderViews(1, 1)
-  $('playerSel').value = '1'
-  $('deviceSel').value = 'pc-16-9'
-
-  $('start').addEventListener('click', () => play.start({ canvasId: $('deviceSel').value, playerCount: Number($('playerSel').value) || 1 })
-    .then(() => { renderViews(Number($('playerSel').value) || 1, 1); fit(); void refreshTimeline(true) }).catch(showError))
+  $('start').addEventListener('click', () => play.start(FIXED_PLAY)
+    .then(() => { fit(); void refreshTimeline(true) }).catch(showError))
   $('pause').addEventListener('click', () => void play.act(play.snapshot?.paused ? 'resume' : 'pause').then(() => void api('get', { light: true })))
   $('step').addEventListener('click', () => void play.act('step', { dt: 1 / 30 }))
-  $('reset').addEventListener('click', () => play.start(keepArgs()).then(() => fit()).catch(showError))
+  $('reset').addEventListener('click', () => play.start(FIXED_PLAY).then(() => fit()).catch(showError))
   $('stop').addEventListener('click', () => play.stop().then(() => refreshTimeline(true)).catch(showError))
-  $('deviceSel').addEventListener('change', () => play.device(Object.assign(keepArgs(), { canvasId: $('deviceSel').value }))
-    .then(() => fit()).catch(showError))
-  $('playerSel').addEventListener('change', () => {
-    const playerCount = Number($('playerSel').value) || 1
-    play.start(Object.assign(keepArgs(), { playerCount, viewPlayerIndex: 1 }))
-      .then(() => { renderViews(playerCount, 1); fit() }).catch(showError)
-  })
-  $('viewSel').addEventListener('change', () => play.view({ playerIndex: Number($('viewSel').value) || 1 }).catch(showError))
   $('panelBtn').addEventListener('click', (e) => {
     el.main.classList.toggle('paneled')
     e.target.classList.toggle('active')
-    const c = play.snapshot?.playerCount || 1
-    renderViews(c, play.snapshot?.viewPlayerIndex || 1)
     fit()
   })
   addEventListener('resize', fit)
@@ -324,7 +313,7 @@
   // 打开先**接上已有会话**（可能 AI / 面板正跑着同一份工程），接不上才新开一局 —— 别一进来就把人家的局顶掉
   play.attach()
     .then(() => { fit(); void refreshTimeline(true) })
-    .catch(() => play.start({ canvasId: 'pc-16-9', playerCount: 1 }).then(() => { fit(); void refreshTimeline(true) }))
+    .catch(() => play.start(FIXED_PLAY).then(() => { fit(); void refreshTimeline(true) }))
     .catch(showError)
 </script>
 </body>

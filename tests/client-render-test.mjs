@@ -947,14 +947,24 @@ check('画布点击坐标换算（纯函数）：左下原点、y 翻转、退�
   return '中心 / 左上角(y 翻转) / 左下角 / 退化输入 都对';
 });
 
-check('模拟器页有「能玩」的入口：连帧 + 按键 + 设备 / 人数 / 视角', () => {
+/*
+ * 2026-09-24 作者要求：「我希望固定这样 把切换的功能去掉吧」。
+ * 设备/人数/视角三个下拉**全部去掉**，固定 PC 16:9 / 1 人 / P1 —— 理由：
+ * ① 切设备会**重建整个运行时**（画布一变，16:9 舞台与 AI 记下的操作坐标都要重算）；
+ * ② 试玩页原来那份**手写**的设备清单里有引擎不存在的预设（`pc-4-3` / `phone-16-9` / `phone-4-3`）
+ *    → 选中就报 `unknown canvas preset`（作者截图里那条红条）。
+ * ⚠️ 能力没丢：AI 仍可用 `miliastra_sim op=play device|view` 与 `playerCount`。
+ * 这条断言是**反向**的：谁要是把开关加回来，先看这段注释。
+ */
+check('模拟器面板：连帧 + 按键保留，**设备/人数/视角的切换已去掉**（固定 PC 16:9 单人）', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(/连帧/.test(text), '缺连帧开关');
-  assert(text.includes('按键：') && text.includes('发送键'), '缺按键行');
-  assert(text.includes('设备：') && text.includes('人数：') && text.includes('视角：'), '缺设备/人数/视角');
-  assert(/<select/.test(html), '设备/人数/视角没有渲染成下拉');
-  return '连帧 / 按键 / 设备 / 人数 / 视角 都在';
+  assert(text.includes('按键：') && text.includes('发送键'), '缺按键行（按键不是"切换"，要留）');
+  assert(!text.includes('设备：') && !text.includes('人数：') && !text.includes('视角：'),
+    '还留着设备/人数/视角下拉 —— 作者要求去掉（它们会重建运行时、打歪画布尺寸）');
+  assert(/画布\/人数\/视角固定/.test(text), '去掉开关后没写清"现在是固定的什么"');
+  return '连帧/按键保留；设备·人数·视角已固定';
 });
 
 check('模拟器是**面板内的第三个页面**（不再只是提示去会话区）', () => {
