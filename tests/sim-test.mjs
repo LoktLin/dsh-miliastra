@@ -441,6 +441,55 @@ const frTooLong = await err(() => simOp({ op: 'frames', frames: [60], dt: 1 / 30
 ok('op=frames 要推进的步数过大：报错并给出「换更大的 dt」这条路（不是默默跑十分钟）',
   !!frTooLong && /dt/.test(frTooLong) && /步/.test(frTooLong), frTooLong);
 
+/* ------------------------------- 动态实例化的叠层（真机口径：后建的在上） */
+
+/*
+ * 为什么专门测这个：引擎原来把 `InstantiateClientUIControl` 建出来的控件 **append 到末尾**，
+ * 而内部 children 是「前→后」（index 0 最上层）⇒ 新控件落在**最底层**。
+ * 真机口径是反的：真机关卡《冰镜·火烛》先建满屏背景、后建平台，真机上**平台可见**。
+ * 这条不通，双相那种"先铺背景再摆东西"的写法在模拟器里就只剩背景色（实测踩到）。
+ */
+await simOp({ op: 'reset' });
+await simOp({ op: 'patch', patch: { op: 'newAsset', assetType: 'client-control-template' } });
+await simOp({ op: 'patch', patch: { op: 'addTemplate', kind: 'image', name: '层测试模板' } });
+await simOp({ op: 'save', path: 'layer-selftest.save.json' });
+{
+  const f = path.join(tmpData, 'simulator', 'layer-selftest.save.json');
+  const a = JSON.parse(fs.readFileSync(f, 'utf8'));
+  for (const n of (a.assets.client.root.children || [])) if (n.kind === 'image' && n.name === '层测试模板') n.guid = 1073741868;
+  fs.writeFileSync(f, JSON.stringify(a, null, 2));
+}
+await simOp({ op: 'load', archive: 'layer-selftest.save.json' });
+await simOp({ op: 'patch', patch: { op: 'selectAsset', assetType: 'server-control-template' } });
+await simOp({
+  op: 'patch',
+  patch: {
+    op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'layer-selftest',
+    source: [
+      'function OnStart()',
+      '  local a = game.InstantiateClientUIControl(1073741868, script.object)',
+      '  local b = game.InstantiateClientUIControl(1073741868, script.object)',
+      '  a:SetSizeDelta(1600, 900); a:SetAnchoredPosition(0, 0); a.imageColor = Color.FromRGBA(255, 0, 0, 255)',
+      '  b:SetSizeDelta(1600, 900); b:SetAnchoredPosition(0, 0); b.imageColor = Color.FromRGBA(0, 255, 0, 255)',
+      'end',
+      '',
+    ].join('\n'),
+  },
+});
+await simOp({ op: 'play', action: 'start', args: { canvasId: 'pc-16-9' } });
+const layerShot = await simOp({ op: 'shot', target: 'play', label: 'layer-selftest' });
+{
+  const { createCanvas, loadImage } = await import('@napi-rs/canvas');
+  const img = await loadImage(fs.readFileSync(layerShot.file));
+  const cv = createCanvas(img.width, img.height);
+  const ctx = cv.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const d = ctx.getImageData(Math.floor(img.width / 2), Math.floor(img.height / 2), 1, 1).data;
+  ok('★ 动态实例化的叠层：**后建的在上**（中心像素是后建那个的颜色）—— 真机口径，双相靠它才看得见平台',
+    d[1] > 200 && d[0] < 60, 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + d[3] + ')');
+}
+await simOp({ op: 'play', action: 'stop' });
+
 /* ------------------------------------------------- 失控脚本的护栏（关键） */
 
 await simOp({ op: 'patch', patch: { op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'sim-runaway', source: 'function OnStart()\n  while true do end\nend\n' } });

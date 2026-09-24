@@ -567,6 +567,22 @@ export class LuaRuntime {
       prefabIndex: Number(prefabIndex),
     })
     parent.addChild(control)
+    /*
+     * ⚠️ **真机口径：Instantiate 出来的控件在最上层。**
+     *
+     * 证据：真机关卡 1073741833《冰镜·火烛》先建「满屏相位背景」、后建「平台」，
+     * 真机上**平台可见**（`.gia`：`就绪（3 关，控件 31…）`，且创作者真机通关）。
+     * 而原先这里只 `addChild`（append 到末尾）—— 引擎内部 children 是「前→后」（index 0 最上层），
+     * 于是新控件落在**最底层**：模拟器里背景把平台全盖住（实测平台中心像素 = 背景色 #081630）。
+     * 2026-09-24 修：新控件挪到**最前**（最上层）。同一模板实例化多次时，**后建的更靠上**。
+     */
+    const siblings = parent.children
+    const index = siblings.indexOf(control)
+    if (index > 0) {
+      siblings.splice(index, 1)
+      siblings.unshift(control)
+      if (typeof parent.markPlayDirty === 'function') parent.markPlayDirty(true)
+    }
     walk(control, (child) => this.controlsById.set(child.Id, child))
     this.mountSpecScripts(spec, control)
     return control

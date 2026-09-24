@@ -180,7 +180,7 @@ check('★ 备份的「时间」是**备份创建时间**，不是被备份文�
   return '备份时间 = 现在（源文件是 3 小时前，未被沿用）';
 });
 
-check('同一秒内连续备份**不会互相覆盖**（时间戳只到秒，撞名要自动顺延）', () => {
+check('连续备份**不会互相覆盖**（撞名要自动顺延）', () => {
   const bd = path.join(tmp, 'collide-backup');
   const a = backupFile(dest, { backupDir: bd });
   const b = backupFile(dest, { backupDir: bd });
@@ -188,8 +188,10 @@ check('同一秒内连续备份**不会互相覆盖**（时间戳只到秒，撞
   assert(a.ok && b.ok && c.ok, '备份失败：' + JSON.stringify([a, b, c]));
   const names = new Set([a.backup, b.backup, c.backup]);
   assert(names.size === 3, '三次备份只产生 ' + names.size + ' 个文件 —— 撞名把前面的覆盖了！');
-  assert(/-2_备份\.lua$/.test(b.backup), '第二份没顺延 -2：' + path.basename(b.backup));
-  assert(/-3_备份\.lua$/.test(c.backup), '第三份没顺延 -3：' + path.basename(c.backup));
+  // ⚠️ **别断言 `-2`/`-3` 后缀**：后缀只在「同一秒内撞名」时出现，而三次备份是否落在同一秒
+  //    取决于机器忙不忙 —— `npm test` 里跨秒过一次，这条因此**假红**（2026-09-24 记）。
+  //    真正的不变量与时间无关：**三个不同的名字 + 都在盘上**。
+  for (const r of [a, b, c]) assert(fs.existsSync(r.backup), '备份没落盘：' + r.backup);
   return path.basename(a.backup) + ' / ' + path.basename(b.backup) + ' / ' + path.basename(c.backup);
 });
 
