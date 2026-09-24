@@ -312,6 +312,10 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 2026-09-24 | 面板三页各自独立平铺（去掉「全部」）；修 `-bodyfill` 被 `repeat(3,…)` 盖掉的 CSS 顺序 bug | `client-render-test` 41/0（含「平铺规则必须在 -body 之后」断言，读注入后的真实 CSS） |
 | 2026-09-24 | **模拟器「能玩」**：连帧 5fps / 点画布任意位置 / 按键（`op=keys` 从脚本源码扫）/ 设备·人数·视角；修掉「切设备人数掉回 1」陷阱 | `sim-test` 41/0 · `client-render` 43/0 · `npm test` 退出码 0；真机实测：注入按键 → 日志出现 `GOT_KEY_3`；连帧 frame 0→7 同一文件覆盖 |
 | 2026-09-24 | ⚠️ **观察到的 flake（未复现）**：某次 `npm test` 里 `deploy-test` 报 29/1；随后同套单跑 30/0、连跑 10 遍全绿、`npm test` 重跑全绿 | 判为一次性时序 flake（当时机器刚被连帧 demo 打满）；**记在这里，不当作本次改动的问题** |
+| 2026-09-24 | **AI 自测主入口 `op=verify`**：一次调用 = 操作 + 断言 + 判定（`runCase` 确定性重放；`at` 可省 = 最后一个事件后 0.1s） | commit `da5aab9`；`sim-test` 47/0（新增 6 条）；真机实测：故意写错期望 → `failedAt=0.233s / frame=7` + 一句人话 hint |
+| 2026-09-24 | **AI 侧三件套（作者原话「我更希望模拟器能让 ai 更好用 方便 ai 自测逻辑」→「开始吧」）**：① `op=controls` 控件清单（只回 `{id,name,kind,depth}` + `names` + 类型直方图 + 已挂脚本；`runtime:true` 看运行中的树）；② `verify` 失败**自动取证**（失败点一帧 PNG + 运行时控件名）；③ `cases[]` 一次跑一组回归（用例间互不影响、`stopOnFail`、失败用例才回 logs） | `sim-test` 47 → **68/0**；`npm test` 退出码 **0**（readme 14 / smoke 49 / deploy 30 / probe-deploy 16 / lualint 32 / shot 103 / sim 68 / client-render 43 / 引擎 129） |
+| 2026-09-24 | ★ **演示暴露真 bug（已修 + 留绊线）**：**运行时树是嵌套的**（顶层只有 1 条「容器节点」，子控件在 `children`，且**没有 `depth`**），编辑器树是拍平的 —— 只按顶层数控件会把控件**少算一个数量级**（实测 **1 vs 17**）。修法：`flattenControls()` 先拍平再数 | 修前 demo 的 `runtime.controlNames` 只有 `["容器节点"]`；修后 17 个（含动态建出来的 `Lua实例化面板 / 模板标题 / 模板图标 / 确认按钮 / 按钮文字`）；`sim-test` 新增两条 ★ 绊线 |
+| 2026-09-24 | 失败帧**看图验证**（不是"接口返回 ok"就算过）：PNG 1600×900 / 124 491 B，画面上正是动态创建的模板面板（标题 + 图标 + 「确认」按钮） | `read_image` 看过；文件名 `sim-play-dyn-tree-fail-<时间戳>.png`（帧 4 vs `failedAt` 帧 3 ⇒ 与"晚 0~2 帧"的口径一致） |
 
 ```yaml
 handoff:

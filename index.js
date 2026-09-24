@@ -254,7 +254,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
-  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复）—— 不占用真机、不需要试玩按钮；但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
+  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
 ];
 
 export const PROMPT_RULES = [
@@ -1362,8 +1362,13 @@ const TOOLS = [
       + '`log{contains,level?,source?}` / `control{id?|name?,field,equals}` / `var{entityType,name,equals}` / '
       + '`signal{name,direction?,values?}` / `tree{name,exists}` / `lua{source}`（Lua 查询脚本，可用 query.var / query.control / query.logContains / query.logs / query.serverLogContains / query.signals）；'
       + '\n  · 回 `passed` / `failedAt` / `results[]`（每条 ok·actual·expected）/ `snapshot.logs`；**没过时给一句 `hint`** 指出第几条、期望 vs 实际。'
-      + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停）。'
-      + '\n其它 op：`state` 看工程/控件树/属性；`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；'
+      + '\n  · **没过会顺带取证**：`shot`（失败点附近的一帧 PNG，用 read_image 看）+ `runtime.controlNames`（**运行时**控件名清单 —— 编辑器工程树里没有的就是脚本动态创建的）；不要就传 `shotOnFail:false`。'
+      + '\n  · **一组用例一次跑**：`cases:[{name,steps,expect},…]` —— 每个用例各开一个全新会话确定性重放（互不影响，可当回归套件）；默认跑完全部，`stopOnFail:true` 则第一个不过就停。'
+      + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。'
+      + '\n其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；'
+      + '`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；'
+      + '`state` 看工程/控件树/属性（要几何与父级才用它）；'
+      + '`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；'
       + '`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；'
       + '`keys` 从**你的脚本源码**里扫出它真正在听的按键名；'
       + '`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；'
@@ -1372,15 +1377,25 @@ const TOOLS = [
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
       + '\n\n**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
+      + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
       + '看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['state', 'patch', 'play', 'verify', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**。' },
+        op: { type: 'string', enum: ['controls', 'state', 'patch', 'play', 'verify', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls。' },
         steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
-        expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/lua{source}。', items: { type: 'object', additionalProperties: true } },
-        keepRunning: { type: 'boolean', description: 'op=verify：判定后不停止会话（默认停），便于接着 op=play 交互。' },
+        expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）。', items: { type: 'object', additionalProperties: true } },
+        cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。', items: { type: 'object', additionalProperties: true } },
+        shotOnFail: { type: 'boolean', description: 'op=verify：判定没过时自动存一帧失败点 PNG 并回 `shot`（默认 true，传 false 关掉）。' },
+        stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个用例没过就停（默认 false = 跑完全部，回归语义）。' },
+        keepRunning: { type: 'boolean', description: 'op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。' },
         dt: { type: 'number', description: 'op=verify：重放的每步时长（秒）。省略用引擎默认。' },
+        runtime: { type: 'boolean', description: 'op=controls：看**运行中**会话的控件树（脚本动态创建的），需先 op=play start；省略=看编辑器工程树。' },
+        namedOnly: { type: 'boolean', description: 'op=controls：只列有名字的控件（只有它们能按 name 断言）。' },
+        nameContains: { type: 'string', description: 'op=controls：按名字子串过滤（Host 侧过滤，中文可用）。' },
+        kind: { type: 'string', description: 'op=controls：按类型过滤（container / server-container / textbox / button / image …）。' },
+        maxDepth: { type: 'number', description: 'op=controls：只列到第几层（0=根）。' },
+        limit: { type: 'number', description: 'op=controls：最多回多少条，默认 200（回执里 `omitted` 说明截掉了多少）。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
         treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树，默认 200。' },
         patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。', additionalProperties: true },

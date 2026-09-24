@@ -66,6 +66,43 @@ ok('op=patch 缺 patch：明确报错（不是静默成功）', !!noPatch && /pa
 const badOp = await err(() => simOp({ op: 'nope' }));
 ok('未知 op：报错里列出可用 op', !!badOp && /state.*patch.*play/.test(badOp), badOp);
 
+/* --------------------------------------------- 控件清单（op=controls，省 token） */
+
+const ctl = await simOp({ op: 'controls' });
+ok('★ op=controls：只回 {id,name,kind,depth} 四个字段（不是 state 的 12 字段整行）',
+  Array.isArray(ctl.controls) && ctl.controls.length > 0
+  && ctl.controls.every((c) => Object.keys(c).sort().join(',') === 'depth,id,kind,name'),
+  JSON.stringify(ctl.controls[0]));
+ok('op=controls：带回可直接抄进断言的 names + 类型直方图 + 已挂脚本',
+  Array.isArray(ctl.names) && ctl.names.indexOf('SIM-标题') >= 0
+  && typeof ctl.kinds === 'object' && ctl.kinds.container >= 1 && Array.isArray(ctl.scripts),
+  JSON.stringify({ names: ctl.names, kinds: ctl.kinds }));
+{
+  // 省 token 的本来目的：同一个控件，清单里那行要比 state 里那行小得多
+  const inState = (st.tree || []).find((n) => n.id === ctl.controls[0].id) || {};
+  ok('op=controls 的一行 ≤ state 一行的 1/3（省 token 就是它的目的）',
+    JSON.stringify(ctl.controls[0]).length * 3 <= JSON.stringify(inState).length,
+    JSON.stringify(ctl.controls[0]).length + ' vs ' + JSON.stringify(inState).length);
+}
+ok('op=controls namedOnly：只列有名字的（只有它们能按 name 断言）',
+  (await simOp({ op: 'controls', namedOnly: true })).controls.every((c) => !!c.name));
+ok('op=controls nameContains：按名字子串过滤（Host 侧过滤，中文可用）',
+  (await simOp({ op: 'controls', nameContains: 'SIM-标题' })).total === 1,
+  JSON.stringify((await simOp({ op: 'controls', nameContains: 'SIM-标题' })).controls));
+ok('op=controls kind 过滤：只回该类型',
+  (await simOp({ op: 'controls', kind: 'textbox' })).controls.every((c) => c.kind === 'textbox'));
+ok('op=controls maxDepth:0 → 只看根（层级可控）',
+  (await simOp({ op: 'controls', maxDepth: 0 })).total === 1);
+{
+  const lim = await simOp({ op: 'controls', limit: 1 });
+  ok('op=controls limit：截断但如实回 total/omitted（不是静默少给）',
+    lim.count === 1 && lim.total > 1 && lim.omitted === lim.total - 1,
+    JSON.stringify({ count: lim.count, total: lim.total, omitted: lim.omitted }));
+}
+const ctlNoRun = await err(() => simOp({ op: 'controls', runtime: true }));
+ok('op=controls runtime:true 没会话：明确报错并给出路（绝不静默退回编辑器树）',
+  !!ctlNoRun && /runtime:true/.test(ctlNoRun) && /start/.test(ctlNoRun), ctlNoRun);
+
 /* ---------------------------------------------------------------- 截图 */
 
 const uiShot = await simOp({ op: 'shot', target: 'ui', label: 'selftest' });
@@ -84,6 +121,18 @@ ok('未 start 就 get：明确报「play session has not started」', !!notStart
 await simOp({ op: 'patch', patch: { op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'sim-selftest', source: 'function OnStart()\n  print("SIM_SELFTEST_OK")\nend\n' } });
 const started = await simOp({ op: 'play', action: 'start' });
 ok('op=play start：回画布与平台（默认 PC）', !!started.canvasId && !!started.platform, JSON.stringify({ canvasId: started.canvasId, platform: started.platform }));
+
+const ctlRun = await simOp({ op: 'controls', runtime: true });
+ok('★ op=controls runtime:true：看**运行中**会话的控件树（脚本运行时建出来的那批）',
+  ctlRun.source === 'runtime' && ctlRun.kindsTotal > 0 && Array.isArray(ctlRun.controls) && ctlRun.controls.length > 0,
+  JSON.stringify({ source: ctlRun.source, count: ctlRun.count, kindsTotal: ctlRun.kindsTotal, kinds: ctlRun.kinds }));
+// ⚠️ 真 bug 留的绊线（2026-09-24 演示时才发现）：运行时树是**嵌套**的（顶层只有 1 条「容器节点」，
+//    子控件在 children 里、且**没有 depth**），而编辑器树是**拍平**的。只数顶层会把控件少算一个数量级。
+ok('★ op=controls runtime:true 会把嵌套的运行时树拍平（顶层 1 条 → 拍平后十几条，且 depth 逐层递增）',
+  ctlRun.count > 3 && ctlRun.controls.some((c) => c.depth >= 1)
+  && ctlRun.controls.every((c) => typeof c.depth === 'number')
+  && ctlRun.controls.filter((c) => c.depth === 0).length === 1,
+  JSON.stringify({ count: ctlRun.count, rootRows: ctlRun.controls.filter((c) => c.depth === 0).length, depths: [...new Set(ctlRun.controls.map((c) => c.depth))] }));
 
 const snap = await simOp({ op: 'play', action: 'get' });
 const logText = (snap.logs || []).map((l) => (l && l.text) || '').join('\n');
@@ -155,6 +204,85 @@ const vFail = await simOp({ op: 'verify', name: 'self-test-fail', steps: [{ setV
 ok('★ op=verify 失败：passed=false + failedAt + 实际/期望 + 一句人话 hint',
   vFail.passed === false && vFail.failedAt !== null && vFail.results[0].actual === 7 && vFail.results[0].expected === 999 && /断言/.test(vFail.hint || ''),
   JSON.stringify({ passed: vFail.passed, failedAt: vFail.failedAt, r0: vFail.results[0], hint: String(vFail.hint || '').slice(0, 70) }));
+
+// ④b 失败自动取证：一帧失败点 PNG + 运行时控件名（AI 除了日志还能「看」）
+ok('★ op=verify 失败自动出图：是**失败点附近**的一帧真 PNG，文件名带 -fail',
+  !!vFail.shot && vFail.shot.bytes > 1000 && fs.existsSync(vFail.shot.file)
+  && fs.readFileSync(vFail.shot.file).subarray(0, 4).toString('hex') === '89504e47'
+  && /-fail-\d{8}-\d{6}\.png$/.test(vFail.shot.name) && /\/miliastra\/shot\?name=/.test(vFail.shot.url || ''),
+  JSON.stringify(vFail.shot && { name: vFail.shot.name, bytes: vFail.shot.bytes, frame: vFail.shot.frame }));
+ok('★ op=verify 失败自动给运行时控件名（`tree{name}` 断言写错时，照着这份清单改）',
+  !!vFail.runtime && Array.isArray(vFail.runtime.controlNames) && vFail.runtime.controlNames.length >= 5
+  && typeof vFail.runtime.controlCount === 'number' && vFail.runtime.controlCount >= 5,
+  JSON.stringify(vFail.runtime && { frame: vFail.runtime.frame, controlCount: vFail.runtime.controlCount, names: vFail.runtime.controlNames.slice(0, 6) }));
+
+const vNoShot = await simOp({ op: 'verify', name: 'self-test-noshot', expect: [{ kind: 'var', entityType: 'PlayerSelf', name: 'Gold', equals: 999 }], shotOnFail: false });
+ok('op=verify shotOnFail:false：不落图（运行时控件名仍给，不额外花一次截图）',
+  vNoShot.passed === false && vNoShot.shot === undefined && !!vNoShot.runtime,
+  JSON.stringify({ passed: vNoShot.passed, shot: vNoShot.shot, runtime: !!vNoShot.runtime }));
+
+/* ---------------------------------------- 一组用例一次跑（op=verify cases[]） */
+
+const vCases = await simOp({
+  op: 'verify',
+  cases: [
+    { name: 'c-pass-log', expect: [{ kind: 'log', contains: 'SIM_SELFTEST_OK' }] },
+    { name: 'c-fail-var', steps: [{ setVar: { entityType: 'PlayerSelf', name: 'Gold', value: 1 } }], expect: [{ kind: 'var', entityType: 'PlayerSelf', name: 'Gold', equals: 2 }] },
+    { name: 'c-pass-key', steps: [{ key: 'KeyboardCraftspersonKey3Down' }], expect: [{ kind: 'log', contains: 'GOT_KEY_3' }] },
+  ],
+});
+ok('★ op=verify cases[]：一次调用跑一组回归，逐个给判定（首个失败**不中断**后面的用例）',
+  vCases.passed === false && vCases.caseCount === 3 && vCases.passedCount === 2 && vCases.failedCount === 1
+  && vCases.cases.length === 3 && vCases.cases[1].passed === false && vCases.cases[2].passed === true,
+  JSON.stringify({ passed: vCases.passed, caseCount: vCases.caseCount, passedCount: vCases.passedCount, failedCount: vCases.failedCount }));
+ok('op=verify cases 失败：failures[] 点名是哪个用例，hint 写「第几/共几」',
+  Array.isArray(vCases.failures) && vCases.failures[0].name === 'c-fail-var' && /2\/3/.test(vCases.hint || ''),
+  JSON.stringify({ failures: vCases.failures, hint: String(vCases.hint || '').slice(0, 80) }));
+ok('op=verify cases：只给**失败**的用例回 logs 与取证（通过的用例不带噪音）',
+  Array.isArray(vCases.cases[1].logs) && vCases.cases[1].logs.length > 0
+  && vCases.cases[0].logs === undefined && vCases.cases[2].logs === undefined
+  && !!vCases.cases[1].shot && vCases.cases[0].shot === undefined,
+  JSON.stringify({ failLogs: vCases.cases[1].logs.length, pass0: vCases.cases[0].logs, shot: vCases.cases[1].shot && vCases.cases[1].shot.name }));
+
+const vCasesOk = await simOp({
+  op: 'verify',
+  cases: [
+    { name: 'a', expect: [{ kind: 'log', contains: 'SIM_SELFTEST_OK' }] },
+    { name: 'b', steps: [{ key: 'KeyboardCraftspersonKey3Down' }], expect: [{ kind: 'log', contains: 'GOT_KEY_3' }] },
+  ],
+});
+ok('op=verify cases 全过：passed=true 且 passedCount=2/failedCount=0（且不落图）',
+  vCasesOk.passed === true && vCasesOk.passedCount === 2 && vCasesOk.failedCount === 0 && vCasesOk.shot === undefined,
+  JSON.stringify({ passed: vCasesOk.passed, p: vCasesOk.passedCount, f: vCasesOk.failedCount }));
+
+// 用例之间**互不影响**才是「能当回归套件」的前提：上一个用例按过的键，不会漏到下一个用例
+const vIsolation = await simOp({
+  op: 'verify',
+  cases: [
+    { name: '先按键', steps: [{ key: 'KeyboardCraftspersonKey3Down' }], expect: [{ kind: 'log', contains: 'GOT_KEY_3' }] },
+    { name: '全新会话', expect: [{ kind: 'log', contains: 'GOT_KEY_3' }] },
+  ],
+});
+ok('★ op=verify cases：用例之间**互不影响**（每个用例各开全新会话 —— 上个用例按过的键不会漏进下个用例）',
+  vIsolation.passed === false && vIsolation.cases[0].passed === true && vIsolation.cases[1].passed === false,
+  JSON.stringify(vIsolation.cases.map((c) => ({ n: c.name, p: c.passed }))));
+
+
+const vStop = await simOp({
+  op: 'verify', stopOnFail: true,
+  cases: [
+    { name: 's1', expect: [{ kind: 'var', entityType: 'PlayerSelf', name: 'Gold', equals: 404 }] },
+    { name: 's2', expect: [{ kind: 'log', contains: 'SIM_SELFTEST_OK' }] },
+  ],
+});
+ok('op=verify stopOnFail:true：第一个不过就停，stoppedEarly 如实标明没跑完',
+  vStop.caseCount === 1 && vStop.stoppedEarly === true && vStop.failedCount === 1,
+  JSON.stringify({ caseCount: vStop.caseCount, stoppedEarly: vStop.stoppedEarly }));
+
+const vBadCases = await err(() => simOp({ op: 'verify', cases: [{ name: 'x' }] }));
+ok('op=verify cases 里某项缺 expect：报错**点名第几个用例**（不是笼统一句）',
+  !!vBadCases && /cases\[0\]/.test(vBadCases) && /expect/.test(vBadCases), vBadCases);
+
 
 // ⑤ 用法错误要明确（不能静默"通过"）
 const vNoExpect = await err(() => simOp({ op: 'verify' }));
