@@ -24,8 +24,12 @@
   main{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 0;min-height:0}
   main.paneled{grid-template-columns:minmax(0,1fr) 340px}
   #stageWrap{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;background:#0a111d}
-  #stage{position:relative;outline:none;touch-action:none}
-  #cv{display:block;background:#101a2a;border-radius:4px;box-shadow:0 6px 30px #0007}
+  /*
+   * ★ 画布尺寸**由 CSS 固定成 16:9**：`#stage` 用 `aspect-ratio`，画布铺满它。
+   * 这样"16:9"是**声明**出来的，不靠 JS 算高度 —— JS 只负责挑宽度，任何布局抖动都不会算出怪比例。
+   */
+  #stage{position:relative;outline:none;touch-action:none;aspect-ratio:1600/900;max-width:100%;max-height:100%;}
+  #cv{display:block;width:100%;height:100%;background:#101a2a;border-radius:4px;box-shadow:0 6px 30px #0007}
   #side{display:none;border-left:1px solid #263750;background:#101a2a;min-width:0;overflow:auto;padding:10px 12px}
   main.paneled #side{display:block}
   #side h4{margin:2px 0 8px;font-size:12px;color:#9fb0c8;font-weight:600}
@@ -150,13 +154,14 @@
   }
 
   /**
-   * 把画布缩放到舞台里（保持 16:9，尽量占满）。
+   * 把画布缩放到舞台里。**16:9 由 CSS 保证**（`#stage{aspect-ratio:1600/900}`），
+   * 这里只挑一个宽度：`min(可用宽, 可用高×16/9)` —— 算错也只会得到"偏大/偏小"，不会算歪比例。
    *
    * ⚠️ **这里踩过一个坑**（作者实测：「右侧这么大的画面也太小了吧」）：
    * 页面刚被插进面板 iframe 时，舞台盒子**可能还没定下最终尺寸**（量到 ~330×180），
-   * 而 `fit()` 一旦把画布写成小尺寸就**再也没重算** —— 于是 1600×900 的场景被缩成一个小方块，四周全是空。
+   * 而 `fit()` 一旦把画布写成小尺寸就**再也没重算** —— 于是 1600×900 的场景被缩成一个小方块。
    *
-   * 现在的规则：① 盒子"明显太小"（<200×150）就**先不写**、下一帧再量（最多重试 300 帧）；
+   * 现在的规则：① 盒子"明显太小"（<200×150）就**先不写**、下一帧再量（最多 300 帧）；
    * ② 由 `onSnapshot` 驱动**节流重算**（≥350ms 一次）—— 布局怎么变，最多 0.35 秒追平；
    * ③ 把量到的数字写进 footer（`画布 668×376（可放 875×400）`）—— **肉眼可核**，不用猜。
    */
@@ -174,15 +179,14 @@
       return
     }
     fitTries = 0
-    const scale = Math.min((box.width - pad) / snap.canvasWidth, (box.height - pad) / snap.canvasHeight)
-    const w = Math.max(160, Math.floor(snap.canvasWidth * scale))
-    const h = Math.max(90, Math.floor(snap.canvasHeight * scale))
-    el.stage.style.width = w + 'px'
-    el.stage.style.height = h + 'px'
-    el.cv.style.width = w + 'px'
-    el.cv.style.height = h + 'px'
+    const ratio = snap.canvasWidth / snap.canvasHeight          // 1600/900
+    const w = Math.max(160, Math.floor(Math.min(box.width - pad, (box.height - pad) * ratio)))
+    el.stage.style.width = w + 'px'                              // 高由 aspect-ratio 决定
     const info = $('cvSize')
-    if (info) info.textContent = '画布 ' + w + '×' + h + '（可放 ' + Math.round(box.width) + '×' + Math.round(box.height) + '）'
+    if (info) {
+      info.textContent = '画布 ' + w + '×' + Math.round(w / ratio) + '（16:9 固定；可放 '
+        + Math.round(box.width) + '×' + Math.round(box.height) + '）'
+    }
   }
   /** 节流重算：由每一帧快照驱动 —— 不管布局怎么变，0.35 秒内追平。 */
   function fitSoon() {

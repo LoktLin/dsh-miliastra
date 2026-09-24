@@ -979,8 +979,14 @@ check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是�
   // ① 1:2 网格（左列有 300px 下限 —— 880px 的 1/3 只有 285px，塞不下这些按钮）+ 窄屏塌成一列
   assert(/dsh-miliastra-simgrid\{display:grid;grid-template-columns:minmax\(300px,1fr\)2fr/.test(css),
     '模拟器不是 1:2 网格：' + ((css.match(/dsh-miliastra-simgrid\{[^}]*\}/) || ['(缺 simgrid 规则)'])[0]));
-  assert(/@media\(max-width:1000px\)\{\.dsh-miliastra-simgrid\{grid-template-columns:1fr;\}\}/.test(css),
-    '缺窄屏塌成一列的兜底（浮层里会挤成一条）');
+  /*
+   * 窄屏兜底：断点必须 **< 880px**（浮层面板正好 880px 宽）—— 原来写 1000px，于是浮层里永远命中：
+   * 1:2 塌成一列 → 右列高度改由内容决定 → 舞台只剩 ~168px 高 → 画布被压成 263×148（作者实测 footer 数字）。
+   */
+  const bp = css.match(/@media\(max-width:(\d+)px\)\{\.dsh-miliastra-simgrid\{grid-template-columns:1fr;\}/);
+  assert(bp && Number(bp[1]) < 880, '窄屏断点必须小于浮层宽度 880px，实际：' + (bp ? bp[1] + 'px' : '没找到'));
+  assert(/@media\(max-width:760px\)\{\.dsh-miliastra-simgrid\{grid-template-columns:1fr;\}\.dsh-miliastra-playframe\{min-height:min\(420px,55vh\);\}\}/.test(css),
+    '窄屏塌成一列时没给 iframe 像样的 min-height（会退化成一细条）');
   // ①b 左列子项**不许收缩**：否则内容一超就被压扁、互相重叠（作者截图里的"按钮/文字叠在一起"就是这个）
   assert(/dsh-miliastra-playside>\*\{flex:00auto;min-height:auto;\}/.test(css),
     '左列子项还允许收缩（内容一多就会重叠）');
