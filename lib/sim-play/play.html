@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>千星模拟器 · 浏览器试玩</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow:hidden}
+  body{background:#0c1422;color:#edf3ff;font:13px/1.5 "Microsoft YaHei UI","Microsoft YaHei",Inter,sans-serif;
+       display:grid;grid-template-rows:48px minmax(0,1fr) 30px}
+  button{font:inherit;color:inherit;cursor:pointer;background:#16233a;border:1px solid #263750;border-radius:6px;padding:5px 11px}
+  button:hover:not(:disabled){border-color:#3d5b86}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:#1d4ed8;border-color:#2f6bff}
+  button.active{background:#1d4ed8;border-color:#2f6bff}
+  select{font:inherit;color:inherit;background:#0d1726;border:1px solid #263750;border-radius:6px;padding:4px 6px}
+  .bar{display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid #263750;background:#101a2a;flex-wrap:wrap}
+  .bar .sp{flex:1}
+  .tag{padding:2px 8px;border-radius:999px;background:#152238;border:1px solid #263750;color:#9fb0c8}
+  .tag.on{background:#0f2f1c;border-color:#1f7a45;color:#5ee08a}
+  .tag.err{background:#3a1418;border-color:#8b2635;color:#ff8a9b}
+  main{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 0;min-height:0}
+  main.paneled{grid-template-columns:minmax(0,1fr) 340px}
+  #stageWrap{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;background:#0a111d}
+  #stage{position:relative;outline:none;touch-action:none}
+  #cv{display:block;background:#101a2a;border-radius:4px;box-shadow:0 6px 30px #0007}
+  #side{display:none;border-left:1px solid #263750;background:#101a2a;min-width:0;overflow:auto;padding:10px 12px}
+  main.paneled #side{display:block}
+  #side h4{margin:2px 0 8px;font-size:12px;color:#9fb0c8;font-weight:600}
+  .row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .log{font:11px/1.45 Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#c8d6ea}
+  .log div{border-bottom:1px solid #17223a;padding:2px 0}
+  .kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;border-bottom:1px solid #17223a;padding:3px 0}
+  .hint{color:#8f9caf;font-size:11px;line-height:1.5;background:#0d1726;border:1px solid #1d2b44;border-radius:6px;padding:7px 9px;margin-top:10px}
+  code{background:#0d1726;border:1px solid #1d2b44;border-radius:4px;padding:0 4px;font-size:11px}
+  footer{display:flex;align-items:center;gap:14px;padding:0 14px;border-top:1px solid #263750;background:#101a2a;color:#9fb0c8;font-size:12px}
+  #fatal{white-space:pre-wrap;color:#ff8a9b;background:#3a1418;border:1px solid #8b2635;border-radius:6px;padding:8px 10px;margin-top:10px;display:none}
+</style>
+</head>
+<body>
+  <header class="bar">
+    <strong>千星模拟器 · 浏览器试玩</strong>
+    <span class="tag" id="state">● 未开始</span>
+    <button id="start" class="primary">开始试玩</button>
+    <button id="pause" disabled>暂停</button>
+    <button id="step" disabled>单步</button>
+    <button id="reset" disabled>重开一局</button>
+    <button id="stop" disabled>结束</button>
+    <span class="sp"></span>
+    <label>设备 <select id="deviceSel"></select></label>
+    <label>人数 <select id="playerSel"></select></label>
+    <label>视角 <select id="viewSel"></select></label>
+    <button id="panelBtn">侧栏</button>
+  </header>
+
+  <main id="main">
+    <div id="stageWrap"><div id="stage" tabindex="0"><canvas id="cv" width="1600" height="900"></canvas></div></div>
+    <aside id="side">
+      <h4>运行</h4>
+      <div id="stat"></div>
+      <h4>服务端变量</h4>
+      <div id="vars" class="log"></div>
+      <h4>日志（脚本 print）</h4>
+      <div id="logs" class="log"></div>
+      <h4>这一局的操作时间线</h4>
+      <div id="hist" class="log"></div>
+      <div class="hint" id="histHint"></div>
+      <div id="fatal"></div>
+    </aside>
+  </main>
+
+  <footer>
+    <span id="frame">Frame 0</span><span id="time">0.00s</span>
+    <span class="sp" style="flex:1"></span>
+    <span>画面由 PixiJS（WebGL）渲染 · 逻辑在与面板/AI 同一个 Worker 里跑</span>
+  </footer>
+
+<script type="module">
+  import { PixiPlayRenderer, createPlaySession } from '/miliastra/play-renderer.js'
+
+  const API = '/miliastra/engine'
+  const $ = (id) => document.getElementById(id)
+  const el = { main: $('main'), stage: $('stage'), stageWrap: $('stageWrap'), cv: $('cv'), side: $('side') }
+  let lastTimeline = 0
+
+  function showError(error) {
+    const box = $('fatal')
+    box.style.display = 'block'
+    box.textContent = '⚠ ' + (error?.message || String(error))
+    $('state').className = 'tag err'
+    $('state').textContent = '● 出错'
+  }
+
+  /**
+   * 页面 → Host：POST /miliastra/engine（与面板、与「模拟器」工具同一个 simOp 入口，
+   * 所以浏览器里玩的和 AI/面板操作的是**同一份工程状态、同一个会话**）。
+   * ⚠️ 画面要 `summaryOnly:false`：`scene` 是节点级增量场景，默认的"瘦身"会把它砍掉（只留计数）。
+   */
+  async function api(action, args = {}) {
+    const res = await fetch(API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ op: 'play', action, args: { view: true, ...args }, summaryOnly: false }),
+    })
+    const env = await res.json().catch(() => null)
+    if (!res.ok || !env || env.ok === false) throw new Error((env && env.error) || '试玩请求失败')
+    return env.data
+  }
+
+  const renderer = new PixiPlayRenderer(el.cv)
+
+  function fit() {
+    const snap = play.snapshot
+    if (!snap?.canvasWidth) return
+    const pad = 24
+    const box = el.stageWrap.getBoundingClientRect()
+    const scale = Math.min((box.width - pad) / snap.canvasWidth, (box.height - pad) / snap.canvasHeight)
+    const w = Math.max(120, Math.floor(snap.canvasWidth * scale))
+    const h = Math.max(80, Math.floor(snap.canvasHeight * scale))
+    el.stage.style.width = w + 'px'
+    el.stage.style.height = h + 'px'
+    el.cv.style.width = w + 'px'
+    el.cv.style.height = h + 'px'
+  }
+
+  function renderChrome(snap) {
+    $('frame').textContent = 'Frame ' + (snap.frame ?? 0)
+    $('time').textContent = Number(snap.time || 0).toFixed(2) + 's'
+    const paused = !!snap.paused
+    $('state').className = 'tag' + (play.running ? (paused ? '' : ' on') : '')
+    $('state').textContent = play.running ? (paused ? '● 已暂停' : '● 运行中') : '● 已结束'
+    $('pause').textContent = paused ? '继续' : '暂停'
+    for (const id of ['pause', 'step', 'reset', 'stop']) $(id).disabled = !play.running
+    $('start').disabled = !!play.running
+    const stat = [
+      ['画布', snap.canvasId || '-'],
+      ['人数', snap.playerCount ?? 1],
+      ['视角', snap.viewPlayerIndex ?? 1],
+      ['帧', snap.frame ?? 0],
+      ['时间', Number(snap.time || 0).toFixed(2) + 's'],
+      ['场景版本', snap.scene?.revision ?? '-'],
+    ]
+    $('stat').replaceChildren(...stat.map(([k, v]) => {
+      const row = document.createElement('div'); row.className = 'kv'
+      const a = document.createElement('span'); a.textContent = k
+      const b = document.createElement('b'); b.textContent = String(v)
+      row.append(a, b); return row
+    }))
+    const vars = Array.isArray(snap.serverVars) ? snap.serverVars : []
+    $('vars').replaceChildren(...(vars.length ? vars.map((v) => {
+      const d = document.createElement('div')
+      d.textContent = (v.entityType || '') + '.' + (v.name || '') + ' = ' + JSON.stringify(v.value)
+      return d
+    }) : [Object.assign(document.createElement('div'), { textContent: '(还没有变量)' })]))
+    const logs = Array.isArray(snap.logs) ? snap.logs.slice(-40) : []
+    $('logs').replaceChildren(...(logs.length ? logs.map((l) => {
+      const d = document.createElement('div'); d.textContent = l.text || ''; return d
+    }) : [Object.assign(document.createElement('div'), { textContent: '(还没有日志)' })]))
+    $('pause').disabled = !play.running
+    // 下拉框跟着真实状态走（程序改 value 不会触发 change，所以不会反过来开局）
+    const pc = String(snap.playerCount || 1)
+    if ($('playerSel').value !== pc) { $('playerSel').value = pc; renderViews(snap.playerCount || 1, snap.viewPlayerIndex || 1) }
+    if (snap.canvasId && $('deviceSel').value !== snap.canvasId) $('deviceSel').value = snap.canvasId
+    if ($('viewSel').value !== String(snap.viewPlayerIndex || 1)) $('viewSel').value = String(snap.viewPlayerIndex || 1)
+  }
+
+  async function refreshTimeline(force) {
+    const now = Date.now()
+    if (!force && now - lastTimeline < 1500) return
+    lastTimeline = now
+    try {
+      const h = await api('history')
+      const rows = (h && h.events) || []
+      $('hist').replaceChildren(...(rows.length ? rows.slice(-60).map((e) => {
+        const d = document.createElement('div')
+        const p = e.payload || {}
+        d.textContent = Number(e.t || 0).toFixed(2) + 's  ' + e.kind
+          + (p.typeName ? ' ' + p.typeName : '') + (p.type ? ' ' + p.type : '')
+          + (p.name ? ' ' + p.name : '')
+          + (p.x !== undefined ? ' (' + Math.round(p.x) + ',' + Math.round(p.y) + ')' : '')
+        return d
+      }) : [Object.assign(document.createElement('div'), { textContent: '(还没有操作)' })]))
+      $('histHint').innerHTML = '这一局的操作时间线可以直接交给 AI 做回归：'
+        + '<br><code>miliastra_sim {"op":"verify","fromHistory":true,"expect":[{"kind":"var","entityType":"PlayerSelf","name":"Gold","equals":3}]}</code>'
+        + '<br>（AI 不用手抄上面这 ' + rows.length + ' 步；注意回放会重开会话，这一局就结束了）'
+        + '<br>关掉这个页面**不会**停掉这一局 —— 好让 AI 还能取到它；不想让它跑就点「结束」。'
+    } catch (error) { /* 时间线是辅助信息，取不到不打断试玩 */ }
+  }
+
+  const play = createPlaySession({
+    renderer,
+    api,
+    onSnapshot: (snap) => { fit(); renderChrome(snap); void refreshTimeline(false) },
+    onStatus: (s) => { $('frame').textContent = 'Frame ' + (s.frame ?? 0); $('time').textContent = Number(s.time || 0).toFixed(2) + 's' },
+    onError: showError,
+  })
+  play.bindInput(el.stage, { keysOn: window })
+
+  function keepArgs() {
+    const snap = play.snapshot || {}
+    const args = {}
+    if (snap.canvasId) args.canvasId = snap.canvasId
+    if (snap.playerCount) args.playerCount = snap.playerCount
+    return args
+  }
+
+  // 设备/人数选项：与引擎的画布预设、1–8 人一致
+  const DEVICES = [['pc-16-9', 'PC 16:9'], ['pc-21-9', 'PC 21:9'], ['pc-4-3', 'PC 4:3'], ['phone-16-9', '手机 16:9'], ['phone-4-3', '手机 4:3']]
+  $('deviceSel').replaceChildren(...DEVICES.map(([v, label]) => new Option(label, v)))
+  $('playerSel').replaceChildren(...Array.from({ length: 8 }, (_, i) => new Option(String(i + 1) + ' 人', String(i + 1))))
+  function renderViews(count, current) {
+    $('viewSel').replaceChildren(...Array.from({ length: count }, (_, i) => new Option('P' + (i + 1), String(i + 1))))
+    $('viewSel').value = String(current || 1)
+  }
+  renderViews(1, 1)
+  $('playerSel').value = '1'
+  $('deviceSel').value = 'pc-16-9'
+
+  $('start').addEventListener('click', () => play.start({ canvasId: $('deviceSel').value, playerCount: Number($('playerSel').value) || 1 })
+    .then(() => { renderViews(Number($('playerSel').value) || 1, 1); fit(); void refreshTimeline(true) }).catch(showError))
+  $('pause').addEventListener('click', () => void play.act(play.snapshot?.paused ? 'resume' : 'pause').then(() => void api('get', { light: true })))
+  $('step').addEventListener('click', () => void play.act('step', { dt: 1 / 30 }))
+  $('reset').addEventListener('click', () => play.start(keepArgs()).then(() => fit()).catch(showError))
+  $('stop').addEventListener('click', () => play.stop().then(() => refreshTimeline(true)).catch(showError))
+  $('deviceSel').addEventListener('change', () => play.device(Object.assign(keepArgs(), { canvasId: $('deviceSel').value }))
+    .then(() => fit()).catch(showError))
+  $('playerSel').addEventListener('change', () => {
+    const playerCount = Number($('playerSel').value) || 1
+    play.start(Object.assign(keepArgs(), { playerCount, viewPlayerIndex: 1 }))
+      .then(() => { renderViews(playerCount, 1); fit() }).catch(showError)
+  })
+  $('viewSel').addEventListener('change', () => play.view({ playerIndex: Number($('viewSel').value) || 1 }).catch(showError))
+  $('panelBtn').addEventListener('click', (e) => {
+    el.main.classList.toggle('paneled')
+    e.target.classList.toggle('active')
+    const c = play.snapshot?.playerCount || 1
+    renderViews(c, play.snapshot?.viewPlayerIndex || 1)
+    fit()
+  })
+  addEventListener('resize', fit)
+  /*
+   * ⚠️ 关页面**故意不 stop**：
+   *   `fromHistory` 要靠这一个活着的会话把「人刚玩的这一局」变成回归用例 —— 一关页就 stop 的话，
+   *   history 直接归零，那条路就断了。想让它停就点上面的「结束」，或让插件卸载（`disposeSimAll` 会收干净）。
+   */
+  addEventListener('pagehide', () => { play.destroy() })
+
+  // 打开先**接上已有会话**（可能 AI / 面板正跑着同一份工程），接不上才新开一局 —— 别一进来就把人家的局顶掉
+  play.attach()
+    .then(() => { fit(); void refreshTimeline(true) })
+    .catch(() => play.start({ canvasId: 'pc-16-9', playerCount: 1 }).then(() => { fit(); void refreshTimeline(true) }))
+    .catch(showError)
+</script>
+</body>
+</html>

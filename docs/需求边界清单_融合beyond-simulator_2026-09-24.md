@@ -280,13 +280,13 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 工单 | 内容 | 验收（量化） | 依赖 | 状态 |
 |---|---|---|---|---|
 | **W1** | 许可与声明 → GPL-3.0-only（`LICENSE` / `NOTICE` / `package.json` / `README`） | 三处声明一致；既有 462 项仍全绿 | 无 | ✅ 已完成（`c76da4d`，与 W2 同批落地） |
-| **W2** | 引擎子树搬入 + 依赖 + esbuild 构建脚本 | 引擎测试在本仓可跑（非 skip） | W1 | 🟡 进行中：搬入 + 依赖 + **129 项引擎测试已绿**；**esbuild 构建脚本待做**（面板当前走 Host 出 PNG，不依赖浏览器产物） |
+| **W2** | 引擎子树搬入 + 依赖 + esbuild 构建脚本 | 引擎测试在本仓可跑（非 skip） | W1 | ✅ 已完成：搬入 58 文件 + 4 依赖 + **129 项引擎测试全绿**；esbuild 构建脚本 `tools/build-sim-play.mjs`（打浏览器试玩页的渲染器，产物入库 + `--check` 防过期） |
 | **W3** | Host 适配层（路由 + 工具，命名按 QT3） | 新路由/工具契约测试绿；`readme-test` 逐字比对过 | W2 | ✅ 已完成：`lib/sim.mjs` + `miliastra_sim` 工具（9 个 op/动作）+ `POST /miliastra/engine`；README 工具块已重生成，`readme-test` 14/0 |
 | **W4** | `conversation.view` 三 tab 骨架（UI 自写） | 三 tab 可切、状态独立、互不白屏 | 无（不依赖 W2/W3） | ✅ 已完成：`dsh-miliastra-basic` / `-advanced` / `-simulator`，SSR 断言 5 项（`client-render-test` 37/0） |
 | **W3** | Host 适配层（路由 + 工具，命名按 QT3） | 新路由/工具契约测试绿；`readme-test` 逐字比对过 | W2 | 待确认 |
 | **W4** | `conversation.view` 三 tab 骨架（UI 自写） | 三 tab 可切、状态独立、互不白屏 | 无（不依赖 W2/W3） | 待确认 |
 | **W5** | 初级/高级卡片归类搬家（QT1 定稿后） | 现有 10 张卡功能不变形；462 项绿 | W4 | ✅ 已完成：`Panel` 加 `inline`+`group`（basic = ①② / advanced = ③ 含高级诊断 / all = 浮层三栏），侧边栏入口保留 |
-| **W6** | 模拟器视图（接引擎 API 渲染 + 交互） | 读 `.gil` 出控件树/画布；写回经官方编辑器验证 | W2 W3 | 🟡 部分：视图 + 7 个动作（编辑器画面/开始试玩/单步/刷新画面/停止/居中点击/重置）+ 控件树 + 试玩日志可用；**写回 `.gil` 的真机验证仍未做**（保持 `pending`） |
+| **W6** | 模拟器视图（接引擎 API 渲染 + 交互） | 读 `.gil` 出控件树/画布；写回经官方编辑器验证 | W2 W3 | 🟡 部分：视图 + 面板动作 + 控件树 + 试玩日志可用，**并已接浏览器试玩页**（`GET /miliastra/play`，WebGL）；**写回 `.gil` 的真机验证仍未做**（保持 `pending`） |
 | **W7** | 搬对方测试子集进回归 | 引擎 129 + 我们的一起全绿，断言数只增不减 | W2 | ✅ 已完成：引擎 129 项 + 新增 `tests/sim-test.mjs` 31 项都进 `npm test`；`npm test` 退出码 0 |
 
 ---
@@ -319,6 +319,9 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 2026-09-24 | **上游源码全量核对 + 阅读索引**：clone 非 shallow、HEAD `22d75a7` = `origin/master`、上游**总共只有 5 个提交**（首提交即 Initial release）、3 个 `npm-*` tag；11 个顶层目录约 1 063 KB；**只吸收了三包**（studio/server/lua-runtime，每包唯一没搬的是它自己的 `package.json`） | 新增 `docs/上游源码索引与吸收地图.md`（含"没搬的读哪篇"：他们的 `dsh-plugin/`（6 工具 + runtime skill + agent 预设）、`scripts/build.mjs`（esbuild，W2 的参考）、`web/`、`agent/`） |
 | 2026-09-24 | **发版 `0.1.0`**（作者拍板：语义化 minor）：升 4 处版本号 → 重生成 README 工具块 → `npm test` 484 项全绿 → CHANGELOG 0.1.0 段 + `v0.1.0.md` 中英双语 → 打 tag 推远端 | tag `v0.1.0` → `b4d027d`（`git ls-remote` 复核 `refs/tags/v0.1.0` 与 `^{}` 都在）；⚠️ 期间踩到 **PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会加 BOM**（三个文件都中了），已按字节剥掉并复核 `first3=7b0a20/2f2a2a/232064` |
 | 2026-09-24 | **tag 之后继续推进**（作者原话「融合分支继续推进，写好每次的提交记录」）：① `op=verify` 支持**拖拽**（`drag:{from,to}` 展开成 down→move…→up；以前只能发 click，拖拽根本测不了）② 新增 **`count` 断言**（`tree{exists}` 只能答"建了吗"，列表项这类要数数量） | `sim-test` 75/0 · 引擎 130/0（新增 count 单测）· `npm test` 退出码 0 **492 项**；踩坑两处并补上：`format.js` 的 `ASSERT_KINDS` 白名单 + **归一化会丢未知字段**、`runner.js` 的 `needsTree`（漏了 count 恒为 0） |
+| 2026-09-24 | **W2 收尾**（作者：「继续上 W2 我目标是让 ai 更好使用这个插件」）：浏览器试玩页 `GET /miliastra/play`（PixiJS WebGL，复用引擎自带 `PixiPlayRenderer`+`createPlaySession`，与上游同一条浏览器循环）+ `tools/build-sim-play.mjs`（esbuild 打单文件 552 KB **入库**，`--check` 比字节防过期，`prepublishOnly` 也跑）+ 面板入口 | `tests/sim-play-test.mjs` **27/0**（产物一致性、页面约定、路由、`files` 放行 HTML、无浏览器协议冒烟）；`npm test` 退出码 0 **519 项** |
+| 2026-09-24 | ★ **W2 真正的 AI 收益点**：`op=verify fromHistory:true` —— **人玩的那一局直接变成回归用例**（AI 不用手抄 events）；因此试玩页 `pagehide` **故意不停局**（一关就 stop 的话 history 归零，这条路就断了） | `sim-play-test` 里两条 ★ 断言（fromHistory 跑通 / 没活会话时明确报错）；页面侧栏把这个调用样例写在明面上 |
+| 2026-09-24 | ★ **顺手修掉一个会让页面黑屏的真 bug**：`slimPlay` **无条件**丢 `scene`/`paint`（与「`summaryOnly` 只去体积、`false` 给全量」矛盾）⇒ 浏览器页永远拿不到场景。现在 `summaryOnly:false` 原样给，默认仍只回计数 | `sim-play-test` 两条对照断言（`false` 带 `scene.format==='tree-v1'` / 缺省仍是 `sceneOmitted`） |
 
 ```yaml
 handoff:

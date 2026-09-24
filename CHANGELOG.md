@@ -13,6 +13,23 @@
 ## [未发布]
 
 > `0.1.0` 已打 tag；下面是 tag 之后的**融合分支继续推进**。作者原话：「融合分支继续推进，写好每次的提交记录」。
+> 目标（作者原话）：「**我目标是让 ai 更好使用这个插件**」—— 所以 W2 两条腿走路：人侧的浏览器试玩页，**和它给 AI 的那条路**。
+
+### 新增
+
+- **浏览器试玩页（W2）：`GET /miliastra/play`** —— PixiJS（WebGL）真能玩的一页，工具栏（开始/暂停/单步/重开/结束 + 设备·人数·视角）+ 侧栏（状态 / 服务端变量 / 日志 / **这一局的操作时间线**）。
+  复用引擎自带的 `PixiPlayRenderer` + `createPlaySession`（与上游 DSH 插件/Web **同一条浏览器循环**），数据走 `POST /miliastra/engine` ——
+  **与面板、与 AI 工具共用同一个会话与同一份工程**。面板「模拟器」页加了入口。
+- **esbuild 构建脚本 `tools/build-sim-play.mjs`**：打成单个 ESM（552 KB，含 pixi）**入库**在 `lib/sim-play/dist/play-renderer.js`（装插件的人不做构建也能用）；
+  `--check` 现打一份比字节，`prepublishOnly` 也跑一遍，防止"改了源码忘重打包 → 页面跑旧引擎且不报错"。
+- **★ `op=verify fromHistory:true`：人玩的那一局直接变成回归用例** —— 人在试玩页里报「刚才这么点就错了」时，
+  AI 不用手抄 events，直接拿那一局的真实操作序列确定性重放 + 判定。这是浏览器页**对 AI**（而不只是对人）的价值所在；
+  因此页面**关掉时刻意不停局**（否则 history 归零，这条路就断了）。
+
+### 修复
+
+- **`slimPlay` 无条件丢掉 `scene`/`paint`** —— 与「`summaryOnly` 只去体积、`false` 时给全量」的约定矛盾，直接后果是浏览器页永远拿不到画面（黑屏）。
+  现在 `summaryOnly:false` 原样给 `scene`，默认仍是只回计数。
 
 ### 新增
 
@@ -25,9 +42,12 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0**：`sim-test` 75 · **引擎 130**（新增 1 条 count 单测）· 其余同 `0.1.0` = **492 项**。
+- `npm test` 退出码 **0**：新增 `sim-play-test.mjs` **27 项**；合计 `readme` 14 · `smoke` 49 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 103 · `sim` 75 · **`sim-play` 27** · `client-render` 43 · 引擎 130 = **519 项**。
+- 无浏览器的**协议冒烟**：`summaryOnly:false` 带 `scene`（`tree-v1`）、带 `sceneRev` 的增量轮询能接着拿、`play action=history` 拿得到时间线、`fromHistory` 跑通且没有活会话时明确报错。
+- `node tools/build-sim-play.mjs --check` 能真跑（Windows 上"字符串拼 `file://`"的主模块判定会**静默不执行** —— 踩过，已钉住）。
 - 真机形态的拖拽用例实测：`drag:{from:[800,450],to:[830,470],steps:3}` → 命中 `DRAG_BEGIN` / `DRAG_MOVE` / `DRAG_END`，
   且**不发** `CursorClick`（引擎只在原地 `up` 才算点击）—— 两条都写成了断言。
+- ⚠️ **仍待人工**：浏览器试玩页的**观感**（打开 `http://127.0.0.1:3080/miliastra/play` 看画面/手感）——本机没有浏览器自动化，产物与数据通路有测试钉住，但这最后一米只能人看。
 
 ---
 

@@ -31,6 +31,8 @@ const STARTED_AT = Date.now();
 import fsMod from 'node:fs';
 import pathMod from 'node:path';
 import { fileURLToPath } from 'node:url';
+/** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
+const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
@@ -254,7 +256,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
-  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
+  { tool: 'miliastra_sim', when: '要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
 ];
 
 export const PROMPT_RULES = [
@@ -1366,6 +1368,8 @@ const TOOLS = [
       + '\n  · 回 `passed` / `failedAt` / `results[]`（每条 ok·actual·expected）/ `snapshot.logs`；**没过时给一句 `hint`** 指出第几条、期望 vs 实际。'
       + '\n  · **没过会顺带取证**：`shot`（失败点附近的一帧 PNG，用 read_image 看）+ `runtime.controlNames`（**运行时**控件名清单 —— 编辑器工程树里没有的就是脚本动态创建的）；不要就传 `shotOnFail:false`。'
       + '\n  · **一组用例一次跑**：`cases:[{name,steps,expect},…]` —— 每个用例各开一个全新会话确定性重放（互不影响，可当回归套件）；默认跑完全部，`stopOnFail:true` 则第一个不过就停。'
+      + '\n  · **`fromHistory:true`：把「刚跑过那一局」直接变成回归用例** —— 人在浏览器试玩页（`GET /miliastra/play`，WebGL 真能玩的那页）里玩的也算，AI **不用手抄 events**；'
+      + '人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。'
       + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。'
       + '\n其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；'
       + '`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；'
@@ -1376,6 +1380,8 @@ const TOOLS = [
       + '`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；'
       + '`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；'
       + '`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。'
+      + '\n  · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；'
+      + '玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。'
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
       + '\n\n**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
@@ -1388,6 +1394,7 @@ const TOOLS = [
         steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|drag?{from,to,steps,gap}|pointer?{type,x,y}|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
         expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name|controlKind,equals|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。', items: { type: 'object', additionalProperties: true } },
         cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。', items: { type: 'object', additionalProperties: true } },
+        fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**的事件当用例（人在浏览器试玩页 /miliastra/play 里玩的也算），AI 不用手抄 events。需要会话还活着；回放会重开会话。' },
         shotOnFail: { type: 'boolean', description: 'op=verify：判定没过时自动存一帧失败点 PNG 并回 `shot`（默认 true，传 false 关掉）。' },
         stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个用例没过就停（默认 false = 跑完全部，回归语义）。' },
         keepRunning: { type: 'boolean', description: 'op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。' },
@@ -1592,6 +1599,23 @@ function sendJson(res, status, payload) {
     'Content-Length': Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+/** 直接送文件（HTML / JS bundle）。**一律不缓存** —— 浏览器试玩页与产物都在开发中反复重建，
+ *  被浏览器缓存住会变成"我明明改了怎么没生效"（这类错觉已经吃过一次）。 */
+function sendFile(res, file, contentType) {
+  let buf;
+  try { buf = fsMod.readFileSync(file); }
+  catch (e) {
+    sendJson(res, 404, { ok: false, error: '读不到文件：' + file + ' —— ' + ((e && e.message) || String(e)) });
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': contentType,
+    'Cache-Control': 'no-store',
+    'Content-Length': buf.length,
+  });
+  res.end(buf);
 }
 
 /**
@@ -1823,6 +1847,21 @@ function makeHandler() {
             })),
           },
         });
+        return;
+      }
+      // 浏览器试玩页（W2）：页面 + 渲染器 bundle。**给人玩的**；AI 那条路仍然是 PNG + op=verify。
+      if (route === PREFIX + '/play' || route === PREFIX + '/play/') {
+        sendFile(res, pathMod.join(SELF_DIR, 'lib', 'sim-play', 'play.html'), 'text/html; charset=utf-8');
+        return;
+      }
+      if (route === PREFIX + '/play-renderer.js') {
+        // 产物入库（tools/build-sim-play.mjs 打的）；缺了就直说怎么补，不静默 404
+        const bundle = pathMod.join(SELF_DIR, 'lib', 'sim-play', 'dist', 'play-renderer.js');
+        if (!fsMod.existsSync(bundle)) {
+          sendJson(res, 500, { ok: false, error: '浏览器产物缺失：' + bundle + ' —— 先跑 `node tools/build-sim-play.mjs`（或重新装一次带产物的包）' });
+          return;
+        }
+        sendFile(res, bundle, 'text/javascript; charset=utf-8');
         return;
       }
       // 模拟器路由：面板的「模拟器」tab 走这条（与工具共用同一个 simOp，状态不分裂）
