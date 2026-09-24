@@ -97,8 +97,11 @@ ok('★ 报错条在**常驻可见**的位置（不在默认隐藏的侧栏里�
   /<\/header>\s*<div id="fatal"><\/div>/.test(html) && !/<aside id="side">[\s\S]*id="fatal"/.test(html));
 ok('★ WebGL 初始化**包了 try/catch**：拿不到 WebGL 就明说（并建议用「新窗口」打开），而不是黑屏',
   /try\s*\{[\s\S]{0,120}new PixiPlayRenderer\(/.test(html) && /拿不到 WebGL/.test(html));
-ok('★ 舞台尺寸**还没定下来**时不硬套（0×0 时下一帧重试；另挂 ResizeObserver 跟着面板缩放）',
-  /box\.width < 40 \|\| box\.height < 40/.test(html) && /new ResizeObserver\(/.test(html));
+ok('★ 舞台尺寸：太小就**先不写**、下一帧再量；并由每帧快照**节流重算**（布局一变 0.35 秒内追平）',
+  /box\.width < 200 \|\| box\.height < 150/.test(html) && /new ResizeObserver\(/.test(html)
+  && /function fitSoon\(\)/.test(html) && /fitSoon\(\); renderChrome/.test(html));
+ok('★ 画布尺寸印在 footer（`画布 668×376（可放 875×400）`）——「画面太小」这类问题肉眼可核，不用猜',
+  /id="cvSize"/.test(html) && /textContent = '画布 ' \+ w/.test(html));
 /*
  * ★ 窄容器兜底：这一页在面板里是**嵌在 iframe 里**的（2/3 列 ≈ 570px）——
  * 按全屏那套排版会把工具栏折成两三行、把舞台挤没（作者截图里就是这样）。

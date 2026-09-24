@@ -36,6 +36,7 @@
   .hint{color:#8f9caf;font-size:11px;line-height:1.5;background:#0d1726;border:1px solid #1d2b44;border-radius:6px;padding:7px 9px;margin-top:10px}
   code{background:#0d1726;border:1px solid #1d2b44;border-radius:4px;padding:0 4px;font-size:11px}
   footer{display:flex;align-items:center;gap:14px;padding:0 14px;border-top:1px solid #263750;background:#101a2a;color:#9fb0c8;font-size:12px}
+  #cvSize{color:#8ad1a0}
   /*
    * ⚠️ 报错条必须在**看得见的地方**：`#fatal` 以前放在 `#side` 里，而 `#side` 默认 `display:none`
    * （要点「侧栏」才出现）—— 于是「WebGL 起不来 / 会话没跑起来」这类错误**一个字都看不到**，
@@ -98,6 +99,7 @@
 
   <footer>
     <span id="frame">Frame 0</span><span id="time">0.00s</span>
+    <span id="cvSize">画布 —</span>
     <span class="sp" style="flex:1"></span>
     <span>画面由 PixiJS（WebGL）渲染 · 逻辑在与面板/AI 同一个 Worker 里跑</span>
   </footer>
@@ -148,27 +150,50 @@
   }
 
   /**
-   * 把画布缩放到舞台里。
-   * ⚠️ 必须容忍**尺寸还没定下来**的时刻（iframe 刚插进 DOM、面板还在布局）：`0 × 0` 时
-   * 别硬套 `Math.max(120,…)`（那会得到一个 120×80 的小方块，看起来就是"什么都没画"），
-   * 而是**下一帧再试**。另外挂一个 ResizeObserver：面板缩放/侧栏开合都能自动跟上。
+   * 把画布缩放到舞台里（保持 16:9，尽量占满）。
+   *
+   * ⚠️ **这里踩过一个坑**（作者实测：「右侧这么大的画面也太小了吧」）：
+   * 页面刚被插进面板 iframe 时，舞台盒子**可能还没定下最终尺寸**（量到 ~330×180），
+   * 而 `fit()` 一旦把画布写成小尺寸就**再也没重算** —— 于是 1600×900 的场景被缩成一个小方块，四周全是空。
+   *
+   * 现在的规则：① 盒子"明显太小"（<200×150）就**先不写**、下一帧再量（最多重试 300 帧）；
+   * ② 由 `onSnapshot` 驱动**节流重算**（≥350ms 一次）—— 布局怎么变，最多 0.35 秒追平；
+   * ③ 把量到的数字写进 footer（`画布 668×376（可放 875×400）`）—— **肉眼可核**，不用猜。
    */
-  function fit() {
+  let fitTries = 0
+  let lastFitAt = 0
+  function fit(force) {
     const snap = play.snapshot
     if (!snap?.canvasWidth) return
-    const pad = 24
+    const pad = 20
     const box = el.stageWrap.getBoundingClientRect()
-    if (box.width < 40 || box.height < 40) { requestAnimationFrame(fit); return }
+    const tooSmall = box.width < 200 || box.height < 150
+    if (tooSmall && force !== true && fitTries < 300) {
+      fitTries += 1
+      requestAnimationFrame(() => fit())
+      return
+    }
+    fitTries = 0
     const scale = Math.min((box.width - pad) / snap.canvasWidth, (box.height - pad) / snap.canvasHeight)
-    const w = Math.max(120, Math.floor(snap.canvasWidth * scale))
-    const h = Math.max(80, Math.floor(snap.canvasHeight * scale))
+    const w = Math.max(160, Math.floor(snap.canvasWidth * scale))
+    const h = Math.max(90, Math.floor(snap.canvasHeight * scale))
     el.stage.style.width = w + 'px'
     el.stage.style.height = h + 'px'
     el.cv.style.width = w + 'px'
     el.cv.style.height = h + 'px'
+    const info = $('cvSize')
+    if (info) info.textContent = '画布 ' + w + '×' + h + '（可放 ' + Math.round(box.width) + '×' + Math.round(box.height) + '）'
+  }
+  /** 节流重算：由每一帧快照驱动 —— 不管布局怎么变，0.35 秒内追平。 */
+  function fitSoon() {
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    if (now - lastFitAt < 350) return
+    lastFitAt = now
+    fit()
   }
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => fit()).observe(el.stageWrap)
-  addEventListener('load', () => requestAnimationFrame(fit))
+  addEventListener('load', () => requestAnimationFrame(() => fit()))
+  addEventListener('resize', () => fit())
 
   function renderChrome(snap) {
     $('frame').textContent = 'Frame ' + (snap.frame ?? 0)
@@ -237,7 +262,7 @@
   const play = createPlaySession({
     renderer,
     api,
-    onSnapshot: (snap) => { fit(); renderChrome(snap); void refreshTimeline(false) },
+    onSnapshot: (snap) => { fitSoon(); renderChrome(snap); void refreshTimeline(false) },
     onStatus: (s) => { $('frame').textContent = 'Frame ' + (s.frame ?? 0); $('time').textContent = Number(s.time || 0).toFixed(2) + 's' },
     onError: showError,
   })
