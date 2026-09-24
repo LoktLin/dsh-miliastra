@@ -87,6 +87,28 @@ ok('页面把 AI 的交接方式写在明面上（fromHistory 的调用样例 + 
 ok('打开先 attach 已有会话，接不上才新开一局（不把人/AI 正在跑的局顶掉）',
   /play\.attach\(\)/.test(html) && /\.catch\(\(\) => play\.start\(/.test(html));
 
+{
+  /*
+   * ★ 内联 `<script type="module">` 的**语法校验**。
+   * 一个笔误就是整页白屏，而浏览器**不会**把这种错告诉我（本机也没有浏览器自动化）——
+   * 所以把那段脚本抠出来当 ESM 解析一遍（`--check` 只解析、不解析模块路径，正好）。
+   */
+  const m = /<script type="module">([\s\S]*?)<\/script>/.exec(html);
+  ok('页面里有内联 module 脚本（试玩页的接线都在里面）', !!m && m[1].length > 800, m ? m[1].length + ' 字符' : '没找到');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-miliastra-inline-'));
+  try {
+    const file = path.join(tmp, 'inline.mjs');
+    fs.writeFileSync(file, m[1]);
+    const r = await new Promise((resolve) => {
+      execFile(process.execPath, ['--check', file], (error, stdout, stderr) =>
+        resolve({ code: error ? 1 : 0, err: String(stderr) || String(stdout) }));
+    });
+    ok('★ 内联脚本语法正确（笔误 → 整页白屏，且浏览器不会报给我）', r.code === 0, r.err.split('\n').slice(0, 3).join(' | '));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 /* ------------------------------------------------- ③ 路由 + 打包清单（页面要真能送到浏览器） */
 
 const indexSrc = read('index.js');

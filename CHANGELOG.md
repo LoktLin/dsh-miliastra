@@ -42,7 +42,7 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0**：新增 `sim-play-test.mjs` **27 项**；合计 `readme` 14 · `smoke` 49 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 103 · `sim` 75 · **`sim-play` 27** · `client-render` 43 · 引擎 130 = **519 项**。
+- `npm test` 退出码 **0**：新增 `sim-play-test.mjs` **29 项**；合计 `readme` 14 · `smoke` 49 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 103 · `sim` 75 · **`sim-play` 29** · `client-render` 43 · 引擎 130 = **521 项**。
 - 无浏览器的**协议冒烟**：`summaryOnly:false` 带 `scene`（`tree-v1`）、带 `sceneRev` 的增量轮询能接着拿、`play action=history` 拿得到时间线、`fromHistory` 跑通且没有活会话时明确报错。
 - `node tools/build-sim-play.mjs --check` 能真跑（Windows 上"字符串拼 `file://`"的主模块判定会**静默不执行** —— 踩过，已钉住）。
 - 真机形态的拖拽用例实测：`drag:{from:[800,450],to:[830,470],steps:3}` → 命中 `DRAG_BEGIN` / `DRAG_MOVE` / `DRAG_END`，
