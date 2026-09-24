@@ -59,10 +59,13 @@
     "protobufjs": "8.7.2"
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
     "esbuild": "0.25.12",
     "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "typescript": "^7.0.2"
   },
   "repository": {
     "type": "git",
@@ -81,7 +84,8 @@
   ],
   "scripts": {
     "lint": "node tools/lint.mjs",
-    "test": "node tools/lint.mjs && node tests/readme-test.mjs && node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/lualint-test.mjs && node tests/shot-test.mjs && node tests/sim-test.mjs && node tests/sim-play-test.mjs && node tests/client-render-test.mjs && node --test \"engine/**/*.test.mjs\"",
+    "typecheck": "node tools/typecheck.mjs",
+    "test": "node tools/lint.mjs && node tools/typecheck.mjs && node tests/readme-test.mjs && node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/lualint-test.mjs && node tests/shot-test.mjs && node tests/sim-test.mjs && node tests/sim-play-test.mjs && node tests/client-render-test.mjs && node --test \"engine/**/*.test.mjs\"",
     "test:engine": "node --test \"engine/**/*.test.mjs\"",
     "build:sim-play": "node tools/build-sim-play.mjs",
     "prepublishOnly": "node tools/build-sim-play.mjs --check && npm test"

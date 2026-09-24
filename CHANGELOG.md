@@ -16,6 +16,18 @@
 
 ### 新增
 
+- **★ `tools/typecheck.mjs`（`npm run typecheck`，已接进 `npm test`）：`tsc --checkJs` 类型层绊线** ——
+  只检查**我们自己写的**文件（`index.js` / `lib/` / `tools/`），验收线是 **0 条**；`engine/`（上游 97 条）**如实报数但不阻断**
+  （改它等于改上游语义）。`strict:false` 是**故意**的：先只抓「声明与真实用法对不上」，不引入几百条 `implicit any`
+  把绊线淹掉（与 lint 同一条原则）。落地时我们自己的报错 **52 → 0**，全是注释/类型收敛，**零行为改动**。
+- **★ `tools/lint.mjs` 升级：`react-hooks/rules-of-hooks` + 扫 `engine/` + 死导出检查** ——
+  ① `lib/client.js` 有 **86 处** hook 调用，条件式 hook 是真 bug（实测 0 命中，属补保险）；
+  ② `engine/**` 上一版**有意排除**过（「上游代码」），实测 51 文件命中 0 ⇒ 纳进来是零成本保险，
+  并给唯一的浏览器侧文件（`engine/studio/play/pixi-renderer.js`）配了浏览器全局；
+  ③ `findDeadExports`：**零引用的 export 直接判死**（人肉发现过一次，现在改成可回归）。
+  ⚠️ `exhaustive-deps` **故意不开**：实测在 client.js 上会报 **11 条**（多数是「故意不带依赖」），会让人开始无视绊线。
+
+
 - **★ `tools/lint.mjs` + `npm run lint`（语言层绊线，已接进 `npm test`）** —— 作者要求「源码优化一下 需要健壮
   能复用就复用 找找有没有专门这插件的优化语言的思路」。**它上线第一天就抓到一条真 bug**：
   `miliastra_sim` 的 `parameters` 里有**两个 `all`**（一个给 `op=keys`、一个给 `op=cases action=remove`）——
@@ -67,6 +79,16 @@
 
 ### 修复
 
+- **★★ 坐标参数不再静默兜 0（源码审计抓到）**：`lib/sim.mjs` 的步骤规范化原来是 `Number(v) || 0`，
+  于是 AI 写错坐标（`click:{x:"abc"}`、`click:[800]`、`pointer:{x:null}`）会**静默变成 (0,0)** ——
+  一次点在左下角的点击「看起来成功」却什么都没点到；引擎那层 `isFinite` 校验救不了（Host 在更早一步就兜成 0 了）。
+  现在按**类型**过筛（`null` / `''` / `[]` / `false` 也拦住 —— `Number(null)` 也是 0）并当场报错、附上收到的原值。
+  ⚠️ 修的过程中我自己删掉了兜底那句 `throw`，被 `sim-test` 的「drag 参数写错：明确报错」**当场抓红** —— 已修回并留注释。
+- **★ 活文件路径类错误补上「下一步」（6 处）**：原来只说「没找到活文件路径。」—— 现在说明
+  「路径随账号/换图变化，先用 `miliastra_health` 定位（或直接给 source）」。
+- **★ 删掉两个零引用导出**（`findLevelAll`、一个恒返回 `null` 的 `findClientProcess`），并把它做成 lint 的常规检查。
+
+
 - **★★ `miliastra_sim` 的 schema 里有**两个 `all`** —— 后一个把前一个的说明**整个吃掉**（`no-dupe-keys` 抓到的真 bug）**：
   AI 读到的 schema 里 `all` 只被描述成「`op=cases action=remove` 删整组」，而「`op=keys all:true` 拿全量键名」
   那条**从未到达过 AI**（同一个键在对象字面量里出现两次，后者胜）。现在合成**一个** `all`，两种用法都写在同一个说明里，
@@ -99,24 +121,14 @@
   这个动作值得变成工具的一个 op。
 
 ### 已验证
-
-- `npm test` 退出码 **0** = **637 项**：**先跑 `node tools/lint.mjs`**（46 个文件 / 20 条硬规则 / 0 命中），
-  再 `readme` 14 · `smoke` 55 · `deploy` 33 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` **167** ·
-  `sim-play` 41 · `client-render` 45 · 引擎 130。
-- **语言层绊线的战果（不是"装了个工具"，是它抓到了什么）**：
-  `no-dupe-keys` → `miliastra_sim` 两个 `all` 静默覆盖（真 bug，AI 侧少一条说明）；
-  `no-redeclare` → `client.js` 的 `var s29` 重复声明（维护地雷）；
-  `no-new-func` → 把读 `client.js` 的两处无头渲染标成**有理由的例外**（`eslint-disable-next-line` + 原因）。
-- **复用验收**：`sim.mjs` 里 `fs.writeFileSync` **0 处**、`fs.renameSync` **0 处**（源码绊线断言）；
-  `atomicWriteFile` 的失败路径（写到目录上）**抛错 + 清 tmp + 旧文件完好**有断言；
-  字符串入参 + **无 BOM** 有断言（原神遇到 BOM 会报 Lua error）。
-- **真机验证两条新 op 的提取逻辑**（新 op 本身要重启 Host 才生效，所以拿**在跑那一局的真快照**喂新纯函数）：
-  · `hudTexts`：30 177 B / 31 节点 → 2 行文字，坐标 `(800,866)` / `(800,824)` 与手工算法一致（局部 `ty=374` + 容器 `450`）。
-  · `sceneNodes`：31 行全部换算成世界坐标（28 个图片来源 x `115~1440` / y `27~842.4` 正好铺满 1600×900）。
-- 真身验证（不是构造的样例）：用新扫描器读**真正的** `双相.lua`（42 947 B）⇒ 25 个键名，含 `KeyboardMoveRightKeyDown`/`…Up`、
-  `KeyboardJumpKeyDown`（**只有 Down 没配 Up** —— 跳跃是一次性触发，与 HUD 上「跳跃=切相」一致）、手柄键 `Controller*`。
-
----
+- `npm test` 退出码 **0** = **640 项**：**先跑两道语言层绊线** —— `node tools/lint.mjs`（98 文件 / 21 条硬规则 / 0 命中 / 0 死导出）
+  与 `node tools/typecheck.mjs`（我们自己的文件 **0** 条，engine 上游 97 条如实报数）；再 `readme` 14 · `smoke` **58** ·
+  `deploy` 33 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` **167** · `sim-play` 41 · `client-render` 45 · 引擎 130。
+- **P1 成本量出来了（以前全靠感觉）**：工具 schema **26.3 KB**（其中 `miliastra_sim` **6.1 KB = 23%**）、
+  sim worker 启动 **288 ms** / 停 12 ms、`/miliastra/engine` 往返 **10 ms**（`play get{view:true}` 约 216 ms）、
+  输入注入 p50 **4.6 ms**。⚠️ 顺手纠正：README 里那个「schema 46 KB」其实是**README 生成块的字符数**，与 schema 体积是两回事，已改正。
+- `smoke` 新增 3 条：第二轮验收项在岗、纯函数自测（类型报错分得清「我们/上游」、死导出只抓真的）、
+  **schema 体积棘轮 26.3 KB ≤ 32 KB**。
 
 ## [0.2.0] — 2026-09-24
 

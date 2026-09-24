@@ -21,8 +21,13 @@ const styleNodes = [];
 const fakeNode = (t) => ({ tagName: String(t).toUpperCase(), id: '', textContent: '', attributes: {}, setAttribute(k, v) { this.attributes[k] = v; }, getAttribute(k) { return this.attributes[k]; }, remove() {} });
 const documentShim = { head: { appendChild(n) { styleNodes.push(n); } }, body: {}, getElementById: () => null, createElement: fakeNode };
 const windowShim = { __ModuleLoader__: { load(s) { windowShim.__captured = s; } }, innerHeight: 900, innerWidth: 1200, addEventListener() {}, removeEventListener() {} };
-globalThis.window = windowShim;
-globalThis.document = documentShim;
+/*
+ * 故意把假 window / document 装进 globalThis（与 dump-panel-text.mjs 同一套 shim）：
+ * 无头跑 `lib/client.js` 取面板的判据函数。真 `Document` 的 260 多个成员这里一个都没有 ——
+ * 这是**有意的 shim**，所以显式转 `any`，不是类型写错了。
+ */
+globalThis.window = /** @type {any} */ (windowShim);
+globalThis.document = /** @type {any} */ (documentShim);
 // eslint-disable-next-line no-new-func -- 同上：把 client.js 塞进假 window/document 里跑（无头渲染面板），不是 eval 外部输入
 new Function('window', 'document', 'console', fs.readFileSync(path.join(PKG_DIR, 'lib', 'client.js'), 'utf8'))(windowShim, documentShim, console);
 const React = req('react');

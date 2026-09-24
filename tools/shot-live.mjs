@@ -40,20 +40,21 @@ if (flag('--list')) {
     try { thumbSize = fs.statSync(th).size + 'B'; } catch { /* 没有预览 */ }
     console.log(`  ${f.name}  ${f.size}B  预览=${fresh ? thumbSize : '（无/过期）'}`);
   }
-  show('op=list', await shot.execute({ op: 'list' }, {}));
+  show('op=list', await shot.execute({ op: 'list' }));
   process.exit(0);
 }
 if (flag('--cleanup')) {
-  show('op=clean dryRun', await shot.execute({ op: 'clean', keepLast: 3, olderThanDays: 7 }, {}));
+  show('op=clean dryRun', await shot.execute({ op: 'clean', keepLast: 3, olderThanDays: 7 }));
   process.exit(0);
 }
 
-show('op=targets', await shot.execute({ op: 'targets' }, {}));
+show('op=targets', await shot.execute({ op: 'targets' }));
 
 const target = argv.find((a) => !a.startsWith('--') && a !== winVal) || 'game';
 const args = { op: 'capture', target, label: 'live' };
 if (winVal) args.window = winVal;
-const r = await shot.execute(args, {});
+// 工具的 `execute` 只吃 args 一个参数（第二个 exec 上下文本插件所有实现都没用到）—— 别多传。
+const r = await shot.execute(args);
 show('op=capture ' + JSON.stringify(args), r);
 
 if (r.ok) {

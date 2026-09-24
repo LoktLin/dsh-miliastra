@@ -606,8 +606,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | ~~**读画面上的字**（HUD / 分数 / 关卡）~~ | 写它的 AI（为了读一行字 dump 了 30 KB 场景） | **✅ 已落地**（`op=hud`：只回 `textbox.text` + 世界坐标） | 实测 **30 177 B → ≈300 B（≈100×）**；坐标沿父链累加，AI 拿着就能点 |
 | ~~**"屏幕上有哪些控件、在哪、什么字"一次拿**（AI 要**点**东西时缺的那半张地图）~~ | 写它的 AI（自己解析了 31 个节点的矩阵才算清谁在哪） | **✅ 已落地**（`op=controls {runtime:true,geom:true}`） | 回执 1.4 KB 而底层是 75 KB 的 tree+scene；顺带查出**场景 ≠ 控件树**（`scene` 只含会被渲染的控件 ⇒ 带 `geomCovered/Missing` 并明说"没坐标≠不存在"） |
 | `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
-| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 已 46 KB，知识进 skill 能省掉常驻那部分 |
-| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 46 KB |
+| **把深层知识做成 runtime skill**（`ctx.skills.register`，按需加载） | 写它的 AI | 待办 | 工具 schema 实测 26.3 KB（其中 `miliastra_sim` 占 6.1 KB = 23%），知识进 skill 能省掉常驻那部分 |
+| **工具 schema 瘦身**（长 description 下沉到 skill / 文档） | 写它的 AI | 待办 | 每个会话都在花这 26.3 KB |
 | **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 这是**给人**看的；AI 要的"哪变了"已由 `op=frames` 的数字回答了 |
 | （等你来写） | | | |
 

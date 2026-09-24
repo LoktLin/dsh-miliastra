@@ -586,6 +586,70 @@ for (const [toolName, args] of CASES) {
   }
 }
 
+  /*
+   * ①e **第二轮验收线**（2026-09-24，作者：「给个明确的优化验收清单」）—— 把清单里那几项钉成断言：
+   *   · L1 `react-hooks/rules-of-hooks` 必须在规则表里（`lib/client.js` 有 86 处 hook 调用，条件式 hook 是真 bug）；
+   *   · L2 `engine/**` 必须被扫（上一版**有意排除**过它 —— "有意排除"不等于没问题，实测 51 文件 0 命中）；
+   *   · L3/L4 `tools/typecheck.mjs` 必须在岗（类型检查是"声明与真实用法对不上"的唯一绊线）；
+   *   · D2 死导出检查必须在岗（`findDeadExports`）。
+   * 外加 P2 **schema 体积棘轮** —— 它是"每个会话都在花的钱"，得有上限而不是无限长。
+   */
+  {
+    const { LINT_RULES, LINT_TARGETS, findDeadExports } = await import('../tools/lint.mjs');
+    const { classifyFile, parseTscOutput } = await import('../tools/typecheck.mjs');
+    const missing = [];
+    if (!LINT_RULES['react-hooks/rules-of-hooks']) missing.push('L1 react-hooks/rules-of-hooks');
+    const targets = LINT_TARGETS.join(' ');
+    if (!/engine\//.test(targets)) missing.push('L2 扫 engine/');
+    if (typeof findDeadExports !== 'function') missing.push('D2 死导出检查');
+    if (typeof classifyFile !== 'function' || typeof parseTscOutput !== 'function') missing.push('L3 类型检查的纯函数');
+    if (missing.length) {
+      fail += 1;
+      failures.push('[ergonomics] 第二轮验收项缺了：' + missing.join(' / '));
+    } else {
+      console.log('✓ 第二轮验收项在岗（hooks 规则 / 扫 engine / 死导出 / 类型检查纯函数）');
+      pass += 1;
+    }
+
+    // 纯函数自测：分类与解析都不许"看错人"（把上游的锅算到我们头上，或反过来）
+    const okClassify = classifyFile('engine/studio/a.js') === 'engine'
+      && classifyFile('lib/sim.mjs') === 'ours'
+      && classifyFile('index.js') === 'ours';
+    const parsed = parseTscOutput([
+      "lib/x.mjs(12,3): error TS2353: 'foo' does not exist",
+      'engine/y.js(1,1): error TS2339: boom',
+      'error TS2688: Cannot find type definition file',
+      '  说明行（不该被当成一条）',
+    ].join('\n'));
+    const okParse = parsed.length === 3 && parsed[0].who === 'ours' && parsed[1].who === 'engine'
+      && parsed[2].file === '(tsconfig)' && parsed[0].code === 'TS2353';
+    const dead = findDeadExports([
+      { path: 'a.mjs', text: 'export function used() {}\nexport function never() {}\n' },
+      { path: 'b.mjs', text: 'used();\n' },
+    ]);
+    const okDead = dead.length === 1 && dead[0].name === 'never';
+    if (!(okClassify && okParse && okDead)) {
+      fail += 1;
+      failures.push('[ergonomics] 第二轮验收项的纯函数自测不过：'
+        + JSON.stringify({ okClassify, okParse, okDead, parsed, dead }));
+    } else {
+      console.log('✓ 纯函数自测：类型报错分得清"我们/上游"、死导出只抓真的零引用');
+      pass += 1;
+    }
+
+    // ★ P2 schema 体积棘轮（2026-09-24 实测 26.3 KB，其中 miliastra_sim 占 6.1 KB）
+    const schemaBytes = JSON.stringify(TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length;
+    const LIMIT = 32 * 1024;
+    if (schemaBytes > LIMIT) {
+      fail += 1;
+      failures.push('[ergonomics] 工具 schema 涨到 ' + (schemaBytes / 1024).toFixed(1) + ' KB，超过棘轮上限 '
+        + (LIMIT / 1024) + ' KB —— 每个会话都要带着它，请把长 description 下沉到 skill / 文档');
+    } else {
+      console.log('✓ schema 体积在棘轮内：' + (schemaBytes / 1024).toFixed(1) + ' KB ≤ ' + (LIMIT / 1024) + ' KB');
+      pass += 1;
+    }
+  }
+
 console.log('');
 if (failures.length) {
   console.log('====== 失败明细 ======');

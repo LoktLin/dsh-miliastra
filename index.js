@@ -474,7 +474,7 @@ const TOOLS = [
         };
       }
       if (op === 'read') {
-        if (!destPath) throw new Error('没找到可读的活文件。');
+        if (!destPath) throw new Error('没找到可读的活文件 —— 先用 miliastra_health 看这台机器上有哪些关卡与 .lua。');
         const fs = await import('node:fs');
         const info = inspect(destPath);
         const text = fs.readFileSync(destPath, 'utf8');
@@ -488,7 +488,7 @@ const TOOLS = [
         };
       }
       if (op === 'backups') {
-        if (!destPath) throw new Error('没找到活文件路径。');
+        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const r = listBackups(destPath, { backupDir: args.backupDir });
         return {
           ok: true, op, dest: destPath, backupDir: r.dir,
@@ -505,7 +505,7 @@ const TOOLS = [
         };
       }
       if (op === 'backup') {
-        if (!destPath) throw new Error('没找到活文件路径。');
+        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const r = backupFile(destPath, { backupDir: args.backupDir });
         return {
           ok: r.ok, op, dest: destPath, ...r,
@@ -514,7 +514,7 @@ const TOOLS = [
         };
       }
       if (op === 'restore') {
-        if (!destPath) throw new Error('没找到目标活文件路径。');
+        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         // backup 可不传 = 用固定名那份（<原名>.bak）。这是「固定统一备份名」的用处：还原有确定目标。
         const r = restoreFile(args.backup || null, destPath, { backupDir: args.backupDir });
         return {
@@ -561,7 +561,7 @@ const TOOLS = [
         };
       }
       if (op === 'fixbom') {
-        if (!destPath) throw new Error('没找到活文件路径。');
+        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const r = stripBomFile(destPath, { backupDir: args.backupDir });
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
@@ -570,7 +570,7 @@ const TOOLS = [
         };
       }
       if (op === 'levels') {
-        if (!destPath) throw new Error('没找到活文件路径。');
+        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const src = fsMod.readFileSync(destPath, 'utf8');
         const ex = extractLevelTable(src);
         if (!ex.ok) {
@@ -1573,9 +1573,14 @@ export function apply(ctx) {
         try {
           const guarded = {
             ...def,
+            /*
+             * 第二个形参是 DSH 工具服务给的**执行上下文**（harness 是 `execute(args, exec)` 这样调的）。
+             * 本插件所有 tool 的 `execute` 都只吃 `args` 一个参数（没有哪个实现用到 exec），
+             * 所以这里**不往下转发** —— 将来哪个 tool 真需要它，给那个 tool 的 execute 补第二个形参即可。
+             */
             async execute(args, exec) {
               try {
-                return lossless(await def.execute(args, exec));
+                return lossless(await def.execute(args));
               } catch (e) {
                 return lossless({ ok: false, error: (e && e.message) || String(e), tool: def.name });
               }
@@ -1848,7 +1853,8 @@ async function runToolByName(toolName, args) {
   const def = TOOLS.find((t) => t.name === String(toolName || '').trim());
   if (!def) throw new HttpError('没有工具 ' + toolName + '（可用：' + TOOLS.map((t) => t.name).join(', ') + '）', 404);
   try {
-    return { name: def.name, ok: true, data: lossless(await def.execute({ ...(args || {}) }, {})) };
+    // 与 apply() 里那个守卫同一个理由：tool 的 execute 只吃 args，exec 上下文没有实现用到
+    return { name: def.name, ok: true, data: lossless(await def.execute({ ...(args || {}) })) };
   } catch (e) {
     return { name: def.name, ok: false, error: (e && e.message) || String(e) };
   }

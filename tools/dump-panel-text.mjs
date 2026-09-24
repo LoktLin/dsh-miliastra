@@ -29,8 +29,14 @@ const windowShim = {
   __ModuleLoader__: { load(s) { windowShim.__captured = s; } },
   innerHeight: 900, innerWidth: 1200, addEventListener() {}, removeEventListener() {},
 };
-globalThis.window = windowShim;
-globalThis.document = documentShim;
+/*
+ * 故意把假 window / document 装进 globalThis：无头跑 `lib/client.js` 取面板文案用。
+ * 这两个 shim 只有插件代码**真正用到**的那几个成员（真 `Document` 的 260 多个成员一个都没有）——
+ * 这正是目的：跑起来的必须是插件本身，而不是一个 DOM 实现。所以显式转 `any`：
+ * 这是**有意的 shim**，不是类型写错了。
+ */
+globalThis.window = /** @type {any} */ (windowShim);
+globalThis.document = /** @type {any} */ (documentShim);
 
 const source = fs.readFileSync(path.join(PKG_DIR, 'lib', 'client.js'), 'utf8');
 // eslint-disable-next-line no-new-func -- 把插件自己的 client.js 塞进假 window/document 里跑（无头渲染面板取文案），不是 eval 外部输入
