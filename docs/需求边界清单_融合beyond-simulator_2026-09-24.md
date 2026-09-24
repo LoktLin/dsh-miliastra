@@ -309,6 +309,9 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 2026-09-24 | **W7 完成**：引擎 129 + sim 31 并入 `npm test` | `npm test` 退出码 **0**；另跑 giaruns 25 / leveldata 44 / metrics 39 / playtest 63 / live-check 9 全绿 |
 | 2026-09-24 | 安全护栏实测：`while true do end` 的脚本超时后返回错误、Worker 被 terminate、随后 `stop` 仍可用 | `tests/sim-test.mjs` 的 3 条 ★ 断言（耗时 < 12 秒） |
 | 2026-09-24 | 新文档 `docs/模拟器与视图.md`（两轴对照 / tab 契约出处 / PNG 出图 / 三条安全纪律 / 已验证 vs 未验证 / 排障） | README「深入阅读」已链接，`readme-test` 的 docs 可达性通过 |
+| 2026-09-24 | 面板三页各自独立平铺（去掉「全部」）；修 `-bodyfill` 被 `repeat(3,…)` 盖掉的 CSS 顺序 bug | `client-render-test` 41/0（含「平铺规则必须在 -body 之后」断言，读注入后的真实 CSS） |
+| 2026-09-24 | **模拟器「能玩」**：连帧 5fps / 点画布任意位置 / 按键（`op=keys` 从脚本源码扫）/ 设备·人数·视角；修掉「切设备人数掉回 1」陷阱 | `sim-test` 41/0 · `client-render` 43/0 · `npm test` 退出码 0；真机实测：注入按键 → 日志出现 `GOT_KEY_3`；连帧 frame 0→7 同一文件覆盖 |
+| 2026-09-24 | ⚠️ **观察到的 flake（未复现）**：某次 `npm test` 里 `deploy-test` 报 29/1；随后同套单跑 30/0、连跑 10 遍全绿、`npm test` 重跑全绿 | 判为一次性时序 flake（当时机器刚被连帧 demo 打满）；**记在这里，不当作本次改动的问题** |
 
 ```yaml
 handoff:
