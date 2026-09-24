@@ -24,7 +24,7 @@ import { readCurrentTransform, syncTransformMaps } from './sync.js'
 import { hitTest, inspectorDto, layoutTree, painterBoxes, treeRows } from './inspector.js'
 import { rawFieldDefinition, sanitizeRawFieldValue } from '../gia/raw-fields.js'
 import { assignGuids } from '../gia/codec.js'
-import { collectUsedGuids, nextFreeGuid } from '../gia/guid.js'
+import { collectUsedGuids, isValidGuid, nextFreeGuid } from '../gia/guid.js'
 
 function parentBoxOf(project, nodeId, boxes) {
   const parent = findParent(project.root, nodeId)
@@ -288,9 +288,22 @@ function applyPatchMutating(project, op) {
   }
   if (type === 'addTemplate') {
     if (project.meta.assetType !== 'client-control-template') throw new Error('只有客户端控件模板工程可以新增模板')
+    // 模板索引（= 顶层节点的 guid）在真机上是**官方编辑器分配的、由创作者交接的**值：
+    // 脚本里 `InstantiateClientUIControl(<模板索引>, parent)` 用的就是它。
+    // 所以要允许显式指定（模拟器若自己另编一个号，脚本永远解析不到这个模板），
+    // 但必须校验：正的安全整数 + 不能与已有 guid 撞车（撞车 = 永远解析不出来，且不报错）。
+    const wanted = op.guid === undefined || op.guid === null || op.guid === '' ? 0 : Number(op.guid)
+    if (wanted && !isValidGuid(wanted)) {
+      throw new Error(`addTemplate: guid 必须是 1..2^31-1 的整数（真机交接的控件模板索引），收到 ${JSON.stringify(op.guid)}`)
+    }
+    if (wanted && collectUsedGuids(project.root).has(wanted)) {
+      throw new Error(`addTemplate: guid ${wanted} 已被本工程里别的节点占用 —— 同一模板索引不能重复`)
+    }
+    const wantedId = op.id === undefined || op.id === null || op.id === '' ? 0 : String(op.id)
+    if (wantedId && findNode(project.root, wantedId)) throw new Error(`addTemplate: id ${wantedId} 已被占用`)
     const child = createNode(op.kind, {
-      id: nextUniqueId(project.root),
-      guid: nextUniqueGuid(project.root),
+      id: wantedId || nextUniqueId(project.root),
+      guid: wanted || nextUniqueGuid(project.root),
       name: op.name || `新${op.kind === 'container' ? '容器节点' : op.kind}模板`,
     })
     project.root.children.push(child)

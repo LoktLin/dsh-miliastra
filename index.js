@@ -256,7 +256,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
-  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
+  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 创作者交接的控件模板索引；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错，**不许编造模板索引**）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）' },
 ];
 
 export const PROMPT_RULES = [
@@ -1381,6 +1381,16 @@ const TOOLS = [
       + '\n  · **`fromHistory:true`：把「刚跑过那一局」直接变成回归用例** —— 人在浏览器试玩页（`GET /miliastra/play`，WebGL 真能玩的那页）里玩的也算，AI **不用手抄 events**；'
       + '人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。'
       + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。'
+      + '\n★ **把真机工程搬进模拟器用 `op=bind`**（一条命令替掉手写探针）：给 `source`（真机活文件 .lua 绝对路径）+ '
+      + '`templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**，不许编造）+ `containerId`（交接的容器索引，只记录/交叉核对）→ '
+      + '它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 '
+      + '`run.controlCount`（控件建没建·建了几个）。默认 `fresh:true` 先清空出厂橱窗控件（只留你的工程）；`run:false` 只搭不跑；`saveAs` 存成工作区存档。'
+      + '它还会交叉核对交接值（`handover.missing/extra`：源码里出现、你没交的 10 位以上整数 = 可能还缺模板）—— 这是启发式，不是判决。'
+      + '\n★ **验收单用 `op=cases`**（人/AI 读同一份，存在模拟器工作区的 `cases.json`）：'
+      + '`action=add set=<名字> expect=[…]` 存一条自动用例（加 `fromHistory:true` 就把**刚跑过那一局**的操作变成用例，AI 不用手抄 events）；'
+      + '`manual:true, note:"人要看什么"` 存**人工项**；`action=run set=<名字>` 确定性重放全部自动项并列出 `manual[]` 等人打勾'
+      + '（`autoPassed` **不等于**验收通过）；`action=list/show/remove` 看/删（remove 默认 dryRun，要 `confirm:true`）。'
+      + '`op=verify caseSet=<名字>` 也能直接跑清单里那一组。'
       + '\n其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；'
       + '`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；'
       + '`state` 看工程/控件树/属性（要几何与父级才用它）；'
@@ -1397,17 +1407,19 @@ const TOOLS = [
       + '玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。'
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
-      + '\n\n**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
+      + '\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
+      + '自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
       + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
       + '证明动画在动：`{"op":"frames","frames":[0,0.5,1]}`；'
+      + '验收单：`{"op":"cases","action":"add","set":"双相-第1关","expect":[{"kind":"log","contains":"就绪"}]}` → `{"op":"cases","action":"run","set":"双相-第1关"}`；'
       + '看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['controls', 'state', 'patch', 'play', 'verify', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls；动画用 frames。' },
+        op: { type: 'string', enum: ['controls', 'state', 'patch', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；写断言前想省 token 看控件用 controls。' },
         steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|drag?{from,to,steps,gap}|pointer?{type,x,y}|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
         expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name|controlKind,equals|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。', items: { type: 'object', additionalProperties: true } },
-        cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。', items: { type: 'object', additionalProperties: true } },
+        cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。', items: { type: 'object', additionalProperties: true } },
         fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**的事件当用例（人在浏览器试玩页 /miliastra/play 里玩的也算），AI 不用手抄 events。需要会话还活着；回放会重开会话。' },
         frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，最多 12 个），如 [0,0.5,1]：每个点出一张 PNG，并给帧间像素差与字段级变化。', items: { type: 'number' } },
         diff: { type: 'boolean', description: 'op=frames：是否比帧间像素差（默认 true）。false = 只出帧、不解码。' },
@@ -1435,6 +1447,25 @@ const TOOLS = [
         file: { type: 'string', description: 'op=import 要导入的文件绝对路径。' },
         archive: { type: 'string', description: 'op=load 的存档相对路径；省略=列出工作区里的存档。' },
         path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
+        source: { type: 'string', description: 'op=bind：真机**活文件** .lua 的绝对路径（沙箱里那份；路径随账号/换图变化，别写死）。也可以不传它、改用 `script:{path,source}` 直接给源码。' },
+        templates: { type: 'array', description: 'op=bind：**创作者交接的控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它，**不许编造**）；`kind` = image/textbox/button/container…；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
+        containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里自己硬编码了），只记进回执并和源码交叉核对（`handover.containerIdInSource`）。' },
+        scriptName: { type: 'string', description: 'op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（双相的 checkMount 要求就是「双相.lua」），名字不对它会自己退出。' },
+        mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件上（id 或名字；缺省=服务端容器节点）。' },
+        fresh: { type: 'boolean', description: 'op=bind：默认 true = 先把两个资产重置成出厂工程、清掉已有脚本，再按交接值重建（同一份参数 → 同一份工程）。false = 追加。' },
+        keepFactory: { type: 'boolean', description: 'op=bind：保留出厂橱窗控件（默认 false 会清掉 —— 它们和你的工程无关，留着会混进渲染与控件清单）。' },
+        run: { type: 'boolean', description: 'op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs`（脚本跑没跑）与 `run.controlCount`（控件建没建）。false = 只搭不跑。' },
+        settleSec: { type: 'number', description: 'op=bind：起完会话先让时钟走几秒再读（默认 0.5，上限 3）。脚本的构建多发生在进入 RUNNING 之后，停在 frame 0 读会把「建了 31 个控件」读成 1。' },
+        saveAs: { type: 'string', description: 'op=bind：把这份工程存进模拟器工作区（缺省名 bind-<脚本名>.save.json）。' },
+        script: { type: 'object', description: 'op=bind：直接用源码代替读文件，`{path:\'双相.lua\', source:\'…\'}`。', additionalProperties: true },
+        caseSet: { type: 'string', description: 'op=verify：直接跑 `op=cases` 里存着的那一组（人/AI 同一份验收单）；人工项不代跑，只列在 `manual[]` 里。' },
+        set: { type: 'string', description: 'op=cases：用例集的名字（建议「玩法-关卡」，如 双相-第1关）。' },
+        case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组，同样要 confirm:true）。' },
+        all: { type: 'boolean', description: 'op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
+        confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true 才真删（不传只回 dryRun 计划）。' },
+        manual: { type: 'boolean', description: '存用例时用来标**人工项**（配合 note）——工具不代跑也不代判，只在 run 的 `manual[]` 里等人打勾（如「真机上小人看得见」）。' },
+        note: { type: 'string', description: '用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。' },
+        name: { type: 'string', description: 'op=bind：存档名（等价于面板上的重命名）；op=cases：set 的别名。' },
       },
       additionalProperties: false,
     },

@@ -119,7 +119,7 @@
 | **`miliastra_playtest`** | **Live** start/end detection from `output_log.txt` (measured 0.07–0.18 s). The only channel that sees the moment a run starts — `.gia` is written only after a run ends |
 | **`miliastra_shot`** | Screenshots: `capture` / **`burst`** (one call: wait for start → wait N s → shoot N frames) / `list` / `clean` / `targets` |
 | **`miliastra_probe`** | 5 read-only diagnostic templates (`ping` / `tree` / `instantiate` / `api-surface` / `api-check`): deploy → playtest → `collect` |
-| **`miliastra_sim`** | **Built-in simulator**: `state` / `patch` (build controls, set fields, mount scripts) / `play` (`start`/`step`/`pointer`/`key`/`click`/`serverSet`…) / `shot` (PNG of the editor view or the running play scene) / `load`+`save`. Runs Lua outside the game — **passing the simulator is not passing on device** |
+| **`miliastra_sim`** | **Built-in simulator**: `bind` (bring a real project in: live `.lua` + the creator's control-template indices → tells you whether the script ran and how many controls it built) / `state` / `patch` (build controls, set fields, mount scripts) / `play` (`start`/`step`/`pointer`/`key`/`click`/`serverSet`…) / `verify` (one call = steps + assertions + verdict, replayable) / `cases` (a shared acceptance sheet: auto cases replay, **manual items are listed for a human, never auto-judged**) / `frames` (animation evidence) / `shot` (PNG of the editor view or the running play scene) / `load`+`save`. Runs Lua outside the game — **passing the simulator is not passing on device** |
 | **`miliastra_echo`** | Echoes its arguments, to rule out "the plugin isn't loaded / the argument was dropped" |
 
 > **Full parameter reference** (every op, every argument, defaults and allowed values) is the
@@ -277,7 +277,7 @@ dsh web
 | **`miliastra_log`** | 读 `.gia` 运行时日志：`sessions` 列局面、`tail` 结构化读正文、`grep` 按 TAG / 正则过滤、`tags` 汇总标签、**`runs` 按「局」切分 + 局间 diff**、**`metrics` 指标汇总**（见下）。可用 `run=<epoch>` 只看某一局 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
 | **`miliastra_playtest`** | **试玩开跑 / 结束的实时侦测**（见下）：`status` 看现在在不在试玩、开了几秒；`wait` 等下一次开跑（可 `afterSec` 要「开跑 N 秒后」） | 想知道「开跑那一刻」时 —— 这是**唯一**能看到开跑的通道，`.gia` 不行 |
 | **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档（`list` 先看每个模板的白话说明）。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
-| **`miliastra_sim`** | **内置模拟器**：`state` 看工程/控件树/属性、`patch` 改工程（加控件/改字段/挂脚本）、`play` 控制试玩（`start`/`step`/`pointer`/`key`/`click`/`serverSet`…）、`shot` 出 PNG（`ui` 编辑器视图 / `play` 试玩画面）、`load`/`save` 模拟器工作区存档 | **想在游戏之外先跑一遍**（搭界面 / 改控件 / 跑 levelScript / 看画面）时。⚠️ 引擎吸收自 `miliastra-beyond-simulator`；**模拟器通过 ≠ 真机通过** |
+| **`miliastra_sim`** | **内置模拟器**：`bind` 把真机工程搬进来（活文件 + 创作者交接的控件模板索引 → 回「脚本跑没跑、控件建了几个」）、`state` 看工程/控件树/属性、`patch` 改工程（加控件/改字段/挂脚本）、`play` 控制试玩（`start`/`step`/`pointer`/`key`/`click`/`serverSet`…）、`verify` 一条调用 = 操作+断言+判定、`cases` 验收单（自动项重放 / **人工项只列出等人打勾**）、`frames` 动画证据、`shot` 出 PNG（`ui` 编辑器视图 / `play` 试玩画面）、`load`/`save` 模拟器工作区存档 | **想在游戏之外先跑一遍**（搭界面 / 改控件 / 跑 levelScript / 看画面 / 自测逻辑）时。⚠️ 引擎吸收自 `miliastra-beyond-simulator`；**模拟器通过 ≠ 真机通过** |
 | **`miliastra_shot`** | **截图**（5 个 op）：`capture` 截游戏/编辑器窗口、**`burst` 连拍**（`awaitPlaytest:true` 可「等开跑 → 等 N 秒 → 连拍」，**一次调用**；`dryRun` 先看计划）、`list` 看截到哪了、`clean` 清理（默认只报告）、`targets` 列出当前**能截哪些窗口** | 需要「看画面对不对」时 —— 日志回答不了观感 |
 | `miliastra_echo` | 回显参数 | 怀疑插件没生效 / 参数丢了时先调它 |
 <!-- END MANUAL:tool-picker -->
@@ -451,19 +451,21 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
   · **没过会顺带取证**：`shot`（失败点附近的一帧 PNG，用 read_image 看）+ `runtime.controlNames`（**运行时**控件名清单 —— 编辑器工程树里没有的就是脚本动态创建的）；不要就传 `shotOnFail:false`。
   · **一组用例一次跑**：`cases:[{name,steps,expect},…]` —— 每个用例各开一个全新会话确定性重放（互不影响，可当回归套件）；默认跑完全部，`stopOnFail:true` 则第一个不过就停。
   · **`fromHistory:true`：把「刚跑过那一局」直接变成回归用例** —— 人在浏览器试玩页（`GET /miliastra/play`，WebGL 真能玩的那页）里玩的也算，AI **不用手抄 events**；人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。
+★ **把真机工程搬进模拟器用 `op=bind`**（一条命令替掉手写探针）：给 `source`（真机活文件 .lua 绝对路径）+ `templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**，不许编造）+ `containerId`（交接的容器索引，只记录/交叉核对）→ 它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 `run.controlCount`（控件建没建·建了几个）。默认 `fresh:true` 先清空出厂橱窗控件（只留你的工程）；`run:false` 只搭不跑；`saveAs` 存成工作区存档。它还会交叉核对交接值（`handover.missing/extra`：源码里出现、你没交的 10 位以上整数 = 可能还缺模板）—— 这是启发式，不是判决。
+★ **验收单用 `op=cases`**（人/AI 读同一份，存在模拟器工作区的 `cases.json`）：`action=add set=<名字> expect=[…]` 存一条自动用例（加 `fromHistory:true` 就把**刚跑过那一局**的操作变成用例，AI 不用手抄 events）；`manual:true, note:"人要看什么"` 存**人工项**；`action=run set=<名字>` 确定性重放全部自动项并列出 `manual[]` 等人打勾（`autoPassed` **不等于**验收通过）；`action=list/show/remove` 看/删（remove 默认 dryRun，要 `confirm:true`）。`op=verify caseSet=<名字>` 也能直接跑清单里那一组。
 其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；`state` 看工程/控件树/属性（要几何与父级才用它）；`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；`keys` 从**你的脚本源码**里扫出它真正在听的按键名；`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。
   · **动画 / 动效类问题用 `op=frames`**（别只断言某个静态值）：`frames:[0,0.5,1]` → 每个时间点一张 PNG + **帧间像素差数字**（`changedPixels` / `changedRatio` / 变化区域 `bbox`）+ 字段级的 `changedControls`（**哪个控件的哪个字段**变了，如 `matrix.tx: 800 → 850`）。内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。
   · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。
 ⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。
 
-**典型调用**：自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；证明动画在动：`{"op":"frames","frames":[0,0.5,1]}`；看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`
+**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\…\\external_lua_file\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；证明动画在动：`{"op":"frames","frames":[0,0.5,1]}`；验收单：`{"op":"cases","action":"add","set":"双相-第1关","expect":[{"kind":"log","contains":"就绪"}]}` → `{"op":"cases","action":"run","set":"双相-第1关"}`；看画面：`{"op":"play","action":"start"}` → `{"op":"shot","target":"play"}`
 
 | 参数 | 类型 | 必填 | 取值 | 说明 |
 |---|---|---|---|---|
-| `op` | `string` | 否 | `controls` / `state` / `patch` / `play` / `verify` / `frames` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls；动画用 frames。 |
+| `op` | `string` | 否 | `controls` / `state` / `patch` / `bind` / `play` / `verify` / `cases` / `frames` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；写断言前想省 token 看控件用 controls。 |
 | `steps` | `array<object>` | 否 | —— | op=verify 的操作序列；每步 {at?, after?, key?\|click?{x,y}\|clickName?\|drag?{from,to,steps,gap}\|pointer?{type,x,y}\|setVar?{entityType,name,value}\|sendSignal?{name,params,target}\|view?\|pause?\|resume?}。 |
 | `expect` | `array<object>` | 否 | —— | op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id\|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name\|controlKind,equals\|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。 |
-| `cases` | `array<object>` | 否 | —— | op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。 |
+| `cases` | `array<object>` | 否 | —— | op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。 |
 | `fromHistory` | `boolean` | 否 | `true` / `false` | op=verify：用**刚跑过那一局**的事件当用例（人在浏览器试玩页 /miliastra/play 里玩的也算），AI 不用手抄 events。需要会话还活着；回放会重开会话。 |
 | `frames` | `array<number>` | 否 | —— | op=frames 的时间点（模拟秒，升序，最多 12 个），如 [0,0.5,1]：每个点出一张 PNG，并给帧间像素差与字段级变化。 |
 | `diff` | `boolean` | 否 | `true` / `false` | op=frames：是否比帧间像素差（默认 true）。false = 只出帧、不解码。 |
@@ -491,6 +493,25 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | `file` | `string` | 否 | —— | op=import 要导入的文件绝对路径。 |
 | `archive` | `string` | 否 | —— | op=load 的存档相对路径；省略=列出工作区里的存档。 |
 | `path` | `string` | 否 | —— | op=save 的存档文件名（默认 qxqy-simulator.save.json）。 |
+| `source` | `string` | 否 | —— | op=bind：真机**活文件** .lua 的绝对路径（沙箱里那份；路径随账号/换图变化，别写死）。也可以不传它、改用 `script:{path,source}` 直接给源码。 |
+| `templates` | `array<object>` | 否 | —— | op=bind：**创作者交接的控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它，**不许编造**）；`kind` = image/textbox/button/container…；缺值会直接报错。 |
+| `containerId` | `number` | 否 | —— | op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里自己硬编码了），只记进回执并和源码交叉核对（`handover.containerIdInSource`）。 |
+| `scriptName` | `string` | 否 | —— | op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（双相的 checkMount 要求就是「双相.lua」），名字不对它会自己退出。 |
+| `mountTo` | `string` | 否 | —— | op=bind：脚本挂在哪个控件上（id 或名字；缺省=服务端容器节点）。 |
+| `fresh` | `boolean` | 否 | `true` / `false` | op=bind：默认 true = 先把两个资产重置成出厂工程、清掉已有脚本，再按交接值重建（同一份参数 → 同一份工程）。false = 追加。 |
+| `keepFactory` | `boolean` | 否 | `true` / `false` | op=bind：保留出厂橱窗控件（默认 false 会清掉 —— 它们和你的工程无关，留着会混进渲染与控件清单）。 |
+| `run` | `boolean` | 否 | `true` / `false` | op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs`（脚本跑没跑）与 `run.controlCount`（控件建没建）。false = 只搭不跑。 |
+| `settleSec` | `number` | 否 | —— | op=bind：起完会话先让时钟走几秒再读（默认 0.5，上限 3）。脚本的构建多发生在进入 RUNNING 之后，停在 frame 0 读会把「建了 31 个控件」读成 1。 |
+| `saveAs` | `string` | 否 | —— | op=bind：把这份工程存进模拟器工作区（缺省名 bind-<脚本名>.save.json）。 |
+| `script` | `object` | 否 | —— | op=bind：直接用源码代替读文件，`{path:'双相.lua', source:'…'}`。 |
+| `caseSet` | `string` | 否 | —— | op=verify：直接跑 `op=cases` 里存着的那一组（人/AI 同一份验收单）；人工项不代跑，只列在 `manual[]` 里。 |
+| `set` | `string` | 否 | —— | op=cases：用例集的名字（建议「玩法-关卡」，如 双相-第1关）。 |
+| `case` | `string` | 否 | —— | op=cases action=remove：要删的用例名（不给 = 删整组，同样要 confirm:true）。 |
+| `all` | `boolean` | 否 | `true` / `false` | op=cases action=remove：删掉整个用例集（仍要 confirm:true）。 |
+| `confirm` | `boolean` | 否 | `true` / `false` | op=cases action=remove：删除不可恢复，必须显式 confirm:true 才真删（不传只回 dryRun 计划）。 |
+| `manual` | `boolean` | 否 | `true` / `false` | 存用例时用来标**人工项**（配合 note）——工具不代跑也不代判，只在 run 的 `manual[]` 里等人打勾（如「真机上小人看得见」）。 |
+| `note` | `string` | 否 | —— | 用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。 |
+| `name` | `string` | 否 | —— | op=bind：存档名（等价于面板上的重命名）；op=cases：set 的别名。 |
 <!-- END GENERATED:tools -->
 
 ### 深入阅读（**按需加载**，别一次读所有）
@@ -563,7 +584,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 想法 | 谁提的 | 状态 | 一句话价值 |
 |---|---|---|---|
 | ~~`op=verify frames:[t1,t2,…]`：按时间出一串帧 + **帧间像素差数字**~~ | 写它的 AI | **✅ 已落地**（`op=frames`） | 让 AI 能**证明动画真的在动**：实测 `matrix.tx 800→850→900` 与像素 bbox 各右移 50px **互相印证**；静态工程 `identical:true` |
-| **用例书**：把跑通的一组用例存进模拟器工作区，下次一条命令重放 | 写它的 AI | 待办 | 回归从"每次重写 steps"变成"一条命令" |
+| ~~**用例书**：把跑通的一组用例存进模拟器工作区，下次一条命令重放~~ | 写它的 AI | **✅ 已落地**（`op=cases`） | 回归从"每次重写 steps"变成"一条命令"；而且**人工项**（要人看画面 / 上真机的）也能挂进同一份清单 —— 工具不代判 |
+| ~~**把真机那份工程搬进来**（别让人/AI 手写探针：建模板 → 存盘 → 手改 guid → 挂脚本）~~ | 写它的 AI（双相预测试时踩到） | **✅ 已落地**（`op=bind`） | 一条命令搭好工程并回「脚本跑没跑、控件建了几个」；交接值错了**在跑之前**就报出来（模板索引编错 = 静默什么都不建） |
 | `op=controls diff`：相比上次多了 / 少了哪些控件 | 写它的 AI | 待办 | 验证「脚本动态创建」最直接的判据 |
 | **浏览器试玩页内嵌进面板**（现在是新开标签页） | 写它的 AI | 待办 | 人不用离开面板；AI 也不用管两个视图 |
 | `lua` 断言的**现成模板**（查控件数 / 查变量 / 查日志计数） | 写它的 AI | 待办 | `query.*` 现在要手写 |
@@ -572,7 +594,7 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | **`op=shot` 出「两帧并排 + 差异高亮」**（人一眼看出改哪了） | 写它的 AI | 待办 | 这是**给人**看的；AI 要的"哪变了"已由 `op=frames` 的数字回答了 |
 | （等你来写） | | | |
 
-**已经落地、可以照抄的形态**：`op=verify`（操作+断言+判定一次调用）· `cases[]`（一组回归）· `op=controls` · 失败自动取证 · `drag` / `count` · `fromHistory` · **`op=frames`（动画证据：多帧 + 帧间像素差 + 字段级变化）** · 浏览器试玩页 `GET /miliastra/play`。
+**已经落地、可以照抄的形态**：`op=verify`（操作+断言+判定一次调用）· `cases[]`（一组回归）· `op=controls` · 失败自动取证 · `drag` / `count` · `fromHistory` · **`op=frames`（动画证据：多帧 + 帧间像素差 + 字段级变化）** · **`op=bind`（真机工程搬进模拟器）** · **`op=cases`（验收单：自动项 + 人工项）** · 浏览器试玩页 `GET /miliastra/play`。
 
 ---
 

@@ -450,32 +450,25 @@ ok('op=frames 要推进的步数过大：报错并给出「换更大的 dt」这
  * 这条不通，双相那种"先铺背景再摆东西"的写法在模拟器里就只剩背景色（实测踩到）。
  */
 await simOp({ op: 'reset' });
-await simOp({ op: 'patch', patch: { op: 'newAsset', assetType: 'client-control-template' } });
-await simOp({ op: 'patch', patch: { op: 'addTemplate', kind: 'image', name: '层测试模板' } });
-await simOp({ op: 'save', path: 'layer-selftest.save.json' });
-{
-  const f = path.join(tmpData, 'simulator', 'layer-selftest.save.json');
-  const a = JSON.parse(fs.readFileSync(f, 'utf8'));
-  for (const n of (a.assets.client.root.children || [])) if (n.kind === 'image' && n.name === '层测试模板') n.guid = 1073741868;
-  fs.writeFileSync(f, JSON.stringify(a, null, 2));
-}
-await simOp({ op: 'load', archive: 'layer-selftest.save.json' });
-await simOp({ op: 'patch', patch: { op: 'selectAsset', assetType: 'server-control-template' } });
-await simOp({
-  op: 'patch',
-  patch: {
-    op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'layer-selftest',
-    source: [
-      'function OnStart()',
-      '  local a = game.InstantiateClientUIControl(1073741868, script.object)',
-      '  local b = game.InstantiateClientUIControl(1073741868, script.object)',
-      '  a:SetSizeDelta(1600, 900); a:SetAnchoredPosition(0, 0); a.imageColor = Color.FromRGBA(255, 0, 0, 255)',
-      '  b:SetSizeDelta(1600, 900); b:SetAnchoredPosition(0, 0); b.imageColor = Color.FromRGBA(0, 255, 0, 255)',
-      'end',
-      '',
-    ].join('\n'),
-  },
+// 这里原来要「建模板 → 存盘 → 手改 JSON 里的 guid → 读回 → 挂脚本」四步（手写探针）。
+// 现在直接用 op=bind —— 模板索引由交接值给，脚本从文件读，一个调用搭好。
+const layerLua = path.join(tmpData, 'layer-selftest.lua');
+fs.writeFileSync(layerLua, [
+  'function OnStart()',
+  '  local a = game.InstantiateClientUIControl(1073741868, script.object)',
+  '  local b = game.InstantiateClientUIControl(1073741868, script.object)',
+  '  a:SetSizeDelta(1600, 900); a:SetAnchoredPosition(0, 0); a.imageColor = Color.FromRGBA(255, 0, 0, 255)',
+  '  b:SetSizeDelta(1600, 900); b:SetAnchoredPosition(0, 0); b.imageColor = Color.FromRGBA(0, 255, 0, 255)',
+  'end',
+  '',
+].join('\n'), 'utf8');
+const layerBind = await simOp({
+  op: 'bind', source: layerLua, run: false,
+  templates: [{ guid: 1073741868, kind: 'image', name: '层测试模板' }],
 });
+ok('op=bind：模板 guid 就用交接值（不是引擎自己编的号）',
+  layerBind.templates.length === 1 && layerBind.templates[0].guid === 1073741868,
+  JSON.stringify(layerBind.templates));
 await simOp({ op: 'play', action: 'start', args: { canvasId: 'pc-16-9' } });
 const layerShot = await simOp({ op: 'shot', target: 'play', label: 'layer-selftest' });
 {
@@ -489,6 +482,138 @@ const layerShot = await simOp({ op: 'shot', target: 'play', label: 'layer-selfte
     d[1] > 200 && d[0] < 60, 'rgba(' + d[0] + ',' + d[1] + ',' + d[2] + ',' + d[3] + ')');
 }
 await simOp({ op: 'play', action: 'stop' });
+
+/* ------------------------------- op=bind：真机工程搬进模拟器（一条命令） */
+
+/*
+ * 为什么要有这条：双相那次预测试是**手写探针**跑通的（建模板 → 存盘改 guid → 挂脚本 → 起会话）。
+ * 那套流程里最容易出错的不是技术，是**交接值**：模板索引错了，脚本 `InstantiateClientUIControl`
+ * 静默什么也不建 —— 看起来"跑起来了"，其实全是空的。所以 bind 要做两件事：
+ *   ① 模板 guid 一律用交接值（缺就报错，不许编造）；② 把"源码里出现的真机 id"和交接值摆在一起核对。
+ */
+const bindLua = path.join(tmpData, '双相自检.lua');
+fs.writeFileSync(bindLua, [
+  'local IMAGE_TEMPLATE = 1073741868',
+  'local TEXT_TEMPLATE = 1073741867',
+  'local CONTAINER = 1073741866',
+  'function OnStart()',
+  '  print("[bind-selftest] ready")',
+  '  local a = game.InstantiateClientUIControl(IMAGE_TEMPLATE, script.object)',
+  '  a:SetSizeDelta(120, 60)',
+  '  a.imageColor = Color.FromRGBA(0, 128, 255, 255)',
+  'end',
+  '',
+].join('\n'), 'utf8');
+
+const bound = await simOp({
+  op: 'bind',
+  source: bindLua,
+  templates: [
+    { guid: 1073741868, kind: 'image', name: '图片模板' },
+    { guid: 1073741867, kind: 'textbox', name: '文本框模板' },
+  ],
+  containerId: 1073741866,
+});
+ok('★ op=bind：模板按交接值建好（guid 原样落地，不是引擎另编的号）',
+  bound.templateCount === 2 && bound.templates.map((t) => t.guid).sort().join(',') === '1073741867,1073741868',
+  JSON.stringify(bound.templates));
+ok('★ op=bind：脚本挂上了（mount 指向容器节点，path 用文件名）',
+  bound.scripts.length === 1 && bound.scripts[0].mounted === true && bound.scripts[0].path === '双相自检.lua',
+  JSON.stringify({ scripts: bound.scripts, mount: bound.mount }));
+ok('★ op=bind 默认起一次会话，回「脚本跑没跑」的**直接证据**（它自己 print 的那行）',
+  !!bound.run && bound.run.logs.some((l) => /bind-selftest\] ready/.test(l.text || '')),
+  JSON.stringify(bound.run && bound.run.logs));
+ok('★ op=bind 回「控件建了几个」= 运行时树拍平后的数（不是编辑器树）',
+  !!bound.run && bound.run.controlCount >= 1, 'controlCount=' + (bound.run && bound.run.controlCount));
+ok('op=bind：交接值交叉核对 —— 源码里的真机 id 与交接值对得上（missing 空 / 容器索引在源码里）',
+  bound.handover.missing.length === 0 && bound.handover.containerIdInSource === true
+  && bound.handover.idsInSource.join(',') === '1073741866,1073741867,1073741868',
+  JSON.stringify(bound.handover));
+ok('op=bind：源码指纹（sha1/字节/行数）一并回，能对「跑的是不是本地这版」',
+  /^[0-9a-f]{12}$/.test(bound.source.sha1_12) && bound.source.bytes > 0 && bound.source.lines > 0,
+  JSON.stringify(bound.source));
+ok('op=bind：默认清掉出厂橱窗控件（只留你的工程）—— 服务端树上只剩容器本身',
+  bound.treeCount <= 2, 'treeCount=' + bound.treeCount);
+ok('op=bind：会话没被留着（默认跑完就停）', bound.run.keptRunning !== true);
+
+const bindKeep = await simOp({ op: 'bind', source: bindLua, run: false, keepFactory: true, templates: [{ guid: 1073741868, kind: 'image' }] });
+ok('op=bind keepFactory:true：保留出厂控件（treeCount 明显更大）', bindKeep.treeCount > bound.treeCount,
+  bindKeep.treeCount + ' vs ' + bound.treeCount);
+
+const bindNoTemplates = await err(() => simOp({ op: 'bind', source: bindLua }));
+ok('★ op=bind 缺 templates：报错并教怎么给（**不许编造模板索引**）',
+  !!bindNoTemplates && /templates/.test(bindNoTemplates) && /guid/.test(bindNoTemplates), bindNoTemplates);
+const bindBadKind = await err(() => simOp({ op: 'bind', source: bindLua, templates: [{ guid: 1073741868, kind: '不存在的类型' }] }));
+ok('op=bind kind 不在允许表里：报错并列出可用 kind', !!bindBadKind && /image/.test(bindBadKind), bindBadKind);
+const bindDupGuid = await err(() => simOp({ op: 'bind', source: bindLua, templates: [{ guid: 1073741868, kind: 'image' }, { guid: 1073741868, kind: 'textbox' }] }));
+ok('op=bind 同一个模板索引交两次：报错（重复的 guid 永远解析不出来）', !!bindDupGuid && /重复/.test(bindDupGuid), bindDupGuid);
+const bindNoFile = await err(() => simOp({ op: 'bind', source: path.join(tmpData, '不存在.lua'), templates: [{ guid: 1, kind: 'image' }] }));
+ok('op=bind 读不到 Lua：报错说清路径与原因（不是静默空跑）', !!bindNoFile && /读不到/.test(bindNoFile), bindNoFile);
+const bindWrongCanvas = await err(() => simOp({ op: 'bind', source: bindLua, canvasId: 'nope', templates: [{ guid: 1073741868, kind: 'image' }] }));
+ok('op=bind 画布 id 不认识：报错并列出可用画布', !!bindWrongCanvas && /pc-16-9/.test(bindWrongCanvas), bindWrongCanvas);
+
+/* ------------------------------- op=cases：验收单（人/AI 读同一份） */
+
+const casesFile = path.join(tmpData, 'simulator', 'cases.json');
+const emptyBook = await simOp({ op: 'cases' });
+ok('op=cases 空清单：如实说没有（不是报错）', emptyBook.setCount === 0 && Array.isArray(emptyBook.sets), JSON.stringify(emptyBook).slice(0, 120));
+
+const caseAdd = await simOp({
+  op: 'cases', action: 'add', set: '自检-第1关',
+  cases: [
+    { name: '脚本就绪', expect: [{ kind: 'log', contains: 'bind-selftest' }] },
+    { name: '建了图片控件', expect: [{ kind: 'count', controlKind: 'image', atLeast: 1 }] },
+    { name: '人工：画面上蓝块看得见', manual: true, note: '看 op=shot target=play 的 PNG：要有 120x60 的蓝块' },
+  ],
+});
+ok('★ op=cases action=add：自动项与人工项都存下（人工项不算自动项）',
+  caseAdd.caseCount === 3 && caseAdd.manualCount === 1 && caseAdd.added.filter((c) => c.kind === 'auto').length === 2,
+  JSON.stringify(caseAdd.added));
+ok('op=cases：清单落在模拟器工作区（不在游戏目录）', fs.existsSync(casesFile) && casesFile.toLowerCase().startsWith(tmpData.toLowerCase()), casesFile);
+ok('op=cases action=add：同名用例是覆盖（改断言再存一遍不会堆两条）',
+  (await simOp({ op: 'cases', action: 'add', set: '自检-第1关', cases: [{ name: '脚本就绪', expect: [{ kind: 'log', contains: 'bind-selftest' }] }] })).replaced.join(',') === '脚本就绪');
+
+const caseList = await simOp({ op: 'cases' });
+ok('op=cases 列表：给计数与每条的 kind/断言数（不给全量 events，省 token）',
+  caseList.sets.length === 1 && caseList.sets[0].autoCount === 2 && caseList.sets[0].manualCount === 1
+  && caseList.sets[0].cases.every((c) => 'kind' in c && 'asserts' in c && !('events' in c && Array.isArray(c.events))),
+  JSON.stringify(caseList.sets[0]));
+
+// 跑之前先把那个「会跑一次会话」的工程绑回去（cases run 走 verify：自己 start/stop）
+await simOp({ op: 'bind', source: bindLua, run: false, templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }] });
+const caseRun = await simOp({ op: 'cases', action: 'run', set: '自检-第1关' });
+ok('★ op=cases action=run：自动项确定性重放并给出判定（2/2）',
+  caseRun.autoPassed === true && caseRun.passedCount === 2 && caseRun.failedCount === 0,
+  JSON.stringify({ autoPassed: caseRun.autoPassed, passedCount: caseRun.passedCount, failures: caseRun.failures }));
+ok('★ op=cases action=run：**人工项不代跑**，只列出来等人打勾（工具不下判决）',
+  caseRun.manualCount === 1 && caseRun.manual[0].name.indexOf('人工') >= 0 && /没算过|人工项/.test(caseRun.note),
+  JSON.stringify({ manual: caseRun.manual, note: caseRun.note }));
+
+// 一条会失败的用例：判定要真的说没过（否则"全绿"没有意义）
+await simOp({ op: 'cases', action: 'add', set: '自检-第1关', cases: [{ name: '故意错', expect: [{ kind: 'log', contains: '这条日志永远不会有' }] }] });
+const caseFail = await simOp({ op: 'cases', action: 'run', set: '自检-第1关', cases: ['故意错'], shotOnFail: false });
+ok('op=cases action=run 单条筛选：只跑那一句，判定如实说没过并给 hint',
+  caseFail.autoPassed === false && caseFail.failedCount === 1 && !!caseFail.result && !!caseFail.result.hint,
+  JSON.stringify({ passed: caseFail.autoPassed, failures: caseFail.failures }));
+
+const caseRmDry = await simOp({ op: 'cases', action: 'remove', set: '自检-第1关' });
+ok('op=cases action=remove 默认 dryRun：只说会删什么，不动盘', caseRmDry.dryRun === true && caseRmDry.willRemove > 0, JSON.stringify(caseRmDry));
+const caseRmCase = await simOp({ op: 'cases', action: 'remove', set: '自检-第1关', case: '故意错', confirm: true });
+ok('op=cases action=remove 带 confirm：真删那一条（其余留着）',
+  caseRmCase.removed === 1 && (await simOp({ op: 'cases', action: 'show', set: '自检-第1关' })).cases.every((c) => c.name !== '故意错'),
+  JSON.stringify(caseRmCase));
+
+const verifyBySet = await simOp({ op: 'verify', caseSet: '自检-第1关' });
+ok('op=verify caseSet：直接跑清单里那一组，人工项照样只列出来',
+  verifyBySet.passed === true && verifyBySet.passedCount === 2 && (verifyBySet.manual || []).length === 1,
+  JSON.stringify({ passed: verifyBySet.passed, manual: verifyBySet.manual }));
+const caseNoSet = await err(() => simOp({ op: 'cases', action: 'run', set: '不存在的组' }));
+ok('op=cases 指名不存在的组：报错并列出已有的', !!caseNoSet && /不存在的组/.test(caseNoSet), caseNoSet);
+const manualNoNote = await err(() => simOp({ op: 'cases', action: 'add', set: '自检-第1关', cases: [{ name: '人工无说明', manual: true }] }));
+ok('op=cases 人工项没写 note：报错（否则没人知道要看什么）', !!manualNoNote && /note/.test(manualNoNote), manualNoNote);
+
+await simOp({ op: 'cases', action: 'remove', set: '自检-第1关', confirm: true });
+ok('op=cases action=remove all：整组删掉（要 confirm:true）', (await simOp({ op: 'cases' })).setCount === 0);
 
 /* ------------------------------------------------- 失控脚本的护栏（关键） */
 

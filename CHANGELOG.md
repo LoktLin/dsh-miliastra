@@ -17,6 +17,19 @@
 
 ### 新增
 
+- **★ `op=bind`：把真机那份工程搬进模拟器（一条命令）** —— 原来"让双相在模拟器里跑起来"是**手写探针**
+  （建模板 → 存盘 → 手改 JSON 里的 guid → 读回 → 挂脚本 → 起会话）；现在给
+  `source`（活文件绝对路径）+ `templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**）+ `containerId` 就够了。
+  两个关键点各有一条断言钉住：① **模板 guid 必须用交接值**（引擎另编一个号 ⇒ `InstantiateClientUIControl` **静默什么都不建**）
+  —— 为此引擎 `addTemplate` 支持显式 `guid`（带合法性与重号校验）；② **起完会话要先走 `settleSec`（默认 0.5s）再读控件数**
+  —— 脚本的构建发生在进入 RUNNING 之后，停在 frame 0 只读到 1（容器自己），会被误读成"什么都没建"（实测踩到）。
+  默认 `fresh:true`（重置两个资产、清掉已有脚本与出厂橱窗控件 ⇒ 同一份参数 → 同一份工程）、`run:true`（顺手起一次会话，
+  回 `run.logs` + `run.controlCount`）。真机实测（双相，370ms）：`就绪（3 关，控件 31…）`、`controlCount=32`。
+- **★ `op=cases`：验收单（人/AI 读同一份）** —— 存进模拟器工作区的 `cases.json`：
+  `add`（`set` + `cases[]`；**同名覆盖**；加 `fromHistory:true` 就把**刚跑过那一局**变成用例）/
+  `list`（只给计数与 kind，省 token）/ `show` / `run`（自动项确定性重放，**人工项不代跑只列出**）/ `remove`（默认 dryRun，要 `confirm:true`）。
+  **人工项** `{manual:true, note:"人要看什么、看到什么算过"}`：工具**不代跑也不代判**，`run` 的 `manual[]` 等人打勾，
+  回执直说「自动项已跑完 —— 但**整组没算过**：还有 N 条人工项」。`op=verify caseSet=<名字>` 是同一份入口。
 - **浏览器试玩页（W2）：`GET /miliastra/play`** —— PixiJS（WebGL）真能玩的一页，工具栏（开始/暂停/单步/重开/结束 + 设备·人数·视角）+ 侧栏（状态 / 服务端变量 / 日志 / **这一局的操作时间线**）。
   复用引擎自带的 `PixiPlayRenderer` + `createPlaySession`（与上游 DSH 插件/Web **同一条浏览器循环**），数据走 `POST /miliastra/engine` ——
   **与面板、与 AI 工具共用同一个会话与同一份工程**。面板「模拟器」页加了入口。
@@ -25,6 +38,14 @@
 - **★ `op=verify fromHistory:true`：人玩的那一局直接变成回归用例** —— 人在试玩页里报「刚才这么点就错了」时，
   AI 不用手抄 events，直接拿那一局的真实操作序列确定性重放 + 判定。这是浏览器页**对 AI**（而不只是对人）的价值所在；
   因此页面**关掉时刻意不停局**（否则 history 归零，这条路就断了）。
+
+### 变更
+
+- **模拟器面板分区（作者批注）**：「画面」与「试玩日志」**横排**（原来上下叠着要来回扫），
+  下面那块**大长方形 = 「AI 试玩区域」**：试玩画面（大、可点）＋ 传输控制 ＋ 按键/设备/人数/视角 ＋ **这一局的操作时间线**
+  （就是 `verify fromHistory:true` 复用的那份 history —— 人在这里做的每一步，AI 能直接变成回归用例）。
+  顺带修掉一个**看得到点不到**的布局陷阱：面板与 `-body` 都是 `overflow:hidden`，而新区域是 `-body` 的兄弟，
+  现在 `-simbody` 是整体滚动容器（列的内滚让位，避免"滚中滚"）。布局与时间线格式化各有一条回归断言钉住。
 
 ### 修复
 
@@ -72,7 +93,10 @@
 
 ### 已验证
 
-- `npm test` 退出码 **0**：新增 `sim-play-test.mjs` **29 项**；合计 `readme` 14 · `smoke` 50 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` 87 · **`sim-play` 29** · `client-render` 43 · 引擎 130 = **535 项**。
+- `npm test` 退出码 **0**：`sim` 87 → **117 项**（新增 `op=bind` 15 项 + `op=cases` 14 项）；合计 `readme` 14 · `smoke` 50 · `deploy` 30 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` **117** · `sim-play` 29 · `client-render` **45** · 引擎 130 = **567 项**。
+- **`op=bind` 在真机上跑通了**（双相《冰镜·火烛》，370ms 建好）：`run.logs` 出现它自己 print 的
+  `就绪（3 关，控件 31，画布 1600x900）`（与真机 `.gia` 同一句），`run.controlCount=32`（容器 1 + 双相 31），
+  渲染图 `~/.dsh/miliastra/shots/sim-play-双相-bind-第1关-20260924-110733.png` 里第 1 关的平台/熔岩/冰墙/小人/状态栏都在。
 - 无浏览器的**协议冒烟**：`summaryOnly:false` 带 `scene`（`tree-v1`）、带 `sceneRev` 的增量轮询能接着拿、`play action=history` 拿得到时间线、`fromHistory` 跑通且没有活会话时明确报错。
 - `node tools/build-sim-play.mjs --check` 能真跑（Windows 上"字符串拼 `file://`"的主模块判定会**静默不执行** —— 踩过，已钉住）。
 - 真机形态的拖拽用例实测：`drag:{from:[800,450],to:[830,470],steps:3}` → 命中 `DRAG_BEGIN` / `DRAG_MOVE` / `DRAG_END`，

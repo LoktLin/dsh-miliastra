@@ -968,6 +968,46 @@ check('模拟器是**面板内的第三个页面**（不再只是提示去会话
   return '面板内第三个页面可渲染';
 });
 
+/*
+ * 2026-09-24 作者批注：「画面与日志 现在的条目横排过去，然后下面的长方形区域当作 AI 试玩区域」。
+ * 这类"布局要求"最容易在后续改动里被无声改回去（面板不报错、只是又变回上下叠着），所以钉成断言。
+ */
+check('★ 模拟器布局（作者批注）：画面与日志**横排**，下面的大区域是「AI 试玩区域」', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  // ① 横排：两卡片包在一个 simrow 里，且 CSS 是横向网格（不是默认的块级上下叠）
+  assert(/dsh-miliastra-simrow/.test(html), '没有 simrow 容器 —— 画面与日志还是上下叠着的');
+  const rowStart = html.indexOf('dsh-miliastra-simrow');
+  const rowHtml = html.slice(rowStart, html.indexOf('dsh-miliastra-simai'));
+  assert(/dsh-miliastra-sec-title[^>]*>\s*<[^>]*>\s*画面/.test(rowHtml.replace(/\s+/g, ' ')) || rowHtml.includes('画面'), 'simrow 里没找到「画面」卡片');
+  assert(rowHtml.includes('试玩日志'), 'simrow 里没找到「试玩日志」卡片 —— 两张卡没横排在一起');
+  const css = styleNodes[0].textContent;
+  assert(css.includes('dsh-miliastra-simrow{') && /dsh-miliastra-simrow\{display:grid;grid-template-columns:repeat\(auto-fit/.test(css.replace(/\s+/g, '')),
+    'simrow 的 CSS 不是横向网格（会被渲染成上下叠）');
+  // ② AI 试玩区域：标题 + 大画面 + 传输控制 + 操作时间线，且排在 ② 行**下面**
+  assert(text.includes('AI 试玩区域'), '缺「AI 试玩区域」标题');
+  assert(html.indexOf('dsh-miliastra-simrow') < html.indexOf('dsh-miliastra-simai'),
+    '「AI 试玩区域」没排在「画面与日志」下面');
+  const aiHtml = html.slice(html.indexOf('dsh-miliastra-simai'));
+  for (const label of ['开始试玩', '单步', '停止', '操作时间线', '浏览器试玩']) {
+    assert(aiHtml.includes(label), 'AI 试玩区域里缺：' + label);
+  }
+  assert(/dsh-miliastra-simai\{display:flex/.test(css.replace(/\s+/g, '')), 'simai 没有自己的样式类（会渲染成裸 div）');
+  return '画面/日志横排 + AI 试玩区域（含传输控制与时间线）';
+});
+
+check('操作时间线的一行：说清"什么时候、做了什么"（AI 照着就能写成 steps[]）', () => {
+  const f = clientExports.__testHistLine;
+  assert(typeof f === 'function', '缺少 __testHistLine（时间线格式化无法单独回归）');
+  assert(f({ t: 0.5, kind: 'pointer', payload: { type: 'click', x: 800, y: 450 } }) === 't=0.50  pointer click (800,450)',
+    'pointer 行不对：' + f({ t: 0.5, kind: 'pointer', payload: { type: 'click', x: 800, y: 450 } }));
+  assert(f({ t: 1.25, kind: 'key', payload: { typeName: 'KeyboardCraftspersonKey3Down' } }) === 't=1.25  key KeyboardCraftspersonKey3Down',
+    'key 行不对');
+  assert(f({ t: 2, kind: 'serverSend', payload: { name: 'GO', params: [1, 2] } }) === 't=2.00  signal GO(1,2)', 'signal 行不对');
+  assert(/^t=0\.00 /.test(f(undefined)), '空事件不该炸（时间线要能容忍半截数据）');
+  return 'pointer / key / signal / 空输入 都对';
+});
+
 console.log('');
 if (failures.length) {
   console.log('====== 失败明细 ======');
