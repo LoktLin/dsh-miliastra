@@ -35,6 +35,22 @@ end
   studio.playStop()
 })
 
+test('count asserts how many controls match a name or a kind', () => {
+  const snap = {
+    tree: [
+      { id: 'a', name: '列表项', kind: 'button' },
+      { id: 'b', name: '列表项', kind: 'button' },
+      { id: 'c', name: '标题', kind: 'textbox', children: [{ id: 'd', name: '列表项', kind: 'button' }] },
+    ],
+  }
+  assert.deepEqual(evaluateAssert({ kind: 'count', name: '列表项', equals: 3 }, snap), { ok: true, actual: 3, expected: 3 })
+  assert.equal(evaluateAssert({ kind: 'count', name: '列表项', equals: 2 }, snap).ok, false)
+  assert.equal(evaluateAssert({ kind: 'count', name: '列表项', equals: 2 }, snap).actual, 3)
+  assert.deepEqual(evaluateAssert({ kind: 'count', controlKind: 'button', atLeast: 3 }, snap), { ok: true, actual: 3, expected: '>=3' })
+  assert.equal(evaluateAssert({ kind: 'count', controlKind: 'button', atLeast: 4 }, snap).ok, false)
+  assert.deepEqual(evaluateAssert({ kind: 'count', controlKind: 'image', equals: 0 }, snap), { ok: true, actual: 0, expected: 0 })
+})
+
 test('server setVar reaches Lua handlers and SendSignal is recorded inbound', () => {
   const studio = createStudio()
   studio.patch({

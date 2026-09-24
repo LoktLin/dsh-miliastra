@@ -21,6 +21,22 @@ function findControl(tree, { id, name }) {
   return hit
 }
 
+/**
+ * 数一数匹配的控件有几个。
+ *
+ * 为什么需要它：`tree{exists}` 只能回答「**建了吗**」，回答不了「**建了几个**」——
+ * 而「每按一次加一条」这类动态 UI 恰恰要问数量（列表项、金币图标、连击星）。2026-09-24 加。
+ */
+function countControls(tree, { name, controlKind }) {
+  let n = 0
+  walkTree(tree, (node) => {
+    if (name && node.name !== name) return
+    if (controlKind && node.kind !== controlKind) return
+    n += 1
+  })
+  return n
+}
+
 function readField(control, field) {
   if (!control) return undefined
   if (Object.prototype.hasOwnProperty.call(control, field)) return control[field]
@@ -109,6 +125,17 @@ function evalJsonAssert(assert, snap) {
     return exists === assert.exists
       ? { ok: true, actual: exists }
       : { ok: false, actual: exists, expected: assert.exists }
+  }
+  if (assert.kind === 'count') {
+    const actual = countControls(snap.tree, assert)
+    const atLeast = assert.atLeast === undefined ? null : Number(assert.atLeast)
+    return atLeast === null
+      ? (same(actual, assert.equals)
+        ? { ok: true, actual, expected: assert.equals }
+        : { ok: false, actual, expected: assert.equals })
+      : (actual >= atLeast
+        ? { ok: true, actual, expected: '>=' + atLeast }
+        : { ok: false, actual, expected: '>=' + atLeast })
   }
   return { ok: false, message: `unsupported assert kind ${assert.kind}` }
 }

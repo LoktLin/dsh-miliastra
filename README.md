@@ -394,8 +394,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 
 内置**千星模拟器**（引擎吸收自 miliastra-beyond-simulator，GPL-3.0-only）：在游戏之外搭界面、跑 levelScript、出画面 PNG。
 ★ **AI 自测逻辑主用 `op=verify`**：一次调用 = 跑一段操作 + 到点断言 + 给判定（引擎开一个全新会话**确定性重放**，可重复）。
-  · `steps[]` 每步可带 `at`（模拟秒；省略 = 上一步 + `after`，默认 0.1s）：`key:"KeyboardCraftspersonKey3Down"` / `click:{x,y}`（**左下原点**）/ `clickName:"按钮名"` / `setVar:{entityType,name,value}` / `sendSignal:{name,params,target}` / `view:2` / `pause` / `resume`；
-  · `expect[]` 断言数组（`at` 省略 = 最后一个事件之后 0.1s ⇒ 查最终状态），kind 六种：`log{contains,level?,source?}` / `control{id?|name?,field,equals}` / `var{entityType,name,equals}` / `signal{name,direction?,values?}` / `tree{name,exists}` / `lua{source}`（Lua 查询脚本，可用 query.var / query.control / query.logContains / query.logs / query.serverLogContains / query.signals）；
+  · `steps[]` 每步可带 `at`（模拟秒；省略 = 上一步 + `after`，默认 0.1s）：`key:"KeyboardCraftspersonKey3Down"` / `click:{x,y}`（**左下原点**）/ `clickName:"按钮名"` / **`drag:{from:[x,y],to:[x,y],steps?,gap?}`**（自动展开成 down→move…→up —— **测拖拽/滑动就用它**）/ `pointer:{type,x,y}`（手排裸指针事件）/ `setVar:{entityType,name,value}` / `sendSignal:{name,params,target}` / `view:2` / `pause` / `resume`；
+  · `expect[]` 断言数组（`at` 省略 = 最后一个事件之后 0.1s ⇒ 查最终状态），kind 七种：`log{contains,level?,source?}` / `control{id?|name?,field,equals}` / `var{entityType,name,equals}` / `signal{name,direction?,values?}` / `tree{name,exists}` / **`count{name?,controlKind?,equals|atLeast}`（**建了几个** —— 列表项/连击星这类动态 UI 只能用它数）** / `lua{source}`（Lua 查询脚本，可用 query.var / query.control / query.logContains / query.logs / query.serverLogContains / query.signals）；
   · 回 `passed` / `failedAt` / `results[]`（每条 ok·actual·expected）/ `snapshot.logs`；**没过时给一句 `hint`** 指出第几条、期望 vs 实际。
   · **没过会顺带取证**：`shot`（失败点附近的一帧 PNG，用 read_image 看）+ `runtime.controlNames`（**运行时**控件名清单 —— 编辑器工程树里没有的就是脚本动态创建的）；不要就传 `shotOnFail:false`。
   · **一组用例一次跑**：`cases:[{name,steps,expect},…]` —— 每个用例各开一个全新会话确定性重放（互不影响，可当回归套件）；默认跑完全部，`stopOnFail:true` 则第一个不过就停。`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。
@@ -407,8 +407,8 @@ Miliastra Wonderland 工具链：探针 —— **「问游戏一句」的工具*
 | 参数 | 类型 | 必填 | 取值 | 说明 |
 |---|---|---|---|---|
 | `op` | `string` | 否 | `controls` / `state` / `patch` / `play` / `verify` / `shot` / `keys` / `export` / `import` / `load` / `save` / `reset` | 默认 state。**AI 自测逻辑用 verify**；写断言前想省 token 看控件用 controls。 |
-| `steps` | `array<object>` | 否 | —— | op=verify 的操作序列；每步 {at?, after?, key?\|click?{x,y}\|clickName?\|setVar?{entityType,name,value}\|sendSignal?{name,params,target}\|view?\|pause?\|resume?}。 |
-| `expect` | `array<object>` | 否 | —— | op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id\|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）。 |
+| `steps` | `array<object>` | 否 | —— | op=verify 的操作序列；每步 {at?, after?, key?\|click?{x,y}\|clickName?\|drag?{from,to,steps,gap}\|pointer?{type,x,y}\|setVar?{entityType,name,value}\|sendSignal?{name,params,target}\|view?\|pause?\|resume?}。 |
+| `expect` | `array<object>` | 否 | —— | op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id\|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name\|controlKind,equals\|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。 |
 | `cases` | `array<object>` | 否 | —— | op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）。 |
 | `shotOnFail` | `boolean` | 否 | `true` / `false` | op=verify：判定没过时自动存一帧失败点 PNG 并回 `shot`（默认 true，传 false 关掉）。 |
 | `stopOnFail` | `boolean` | 否 | `true` / `false` | op=verify 配 cases：第一个用例没过就停（默认 false = 跑完全部，回归语义）。 |

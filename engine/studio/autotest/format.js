@@ -3,7 +3,7 @@ export const CASE_VERSION = 1
 export const DEFAULT_DT = 1 / 30
 
 const EVENT_KINDS = new Set(['pointer', 'key', 'click', 'pause', 'resume', 'serverSet', 'serverSend', 'view'])
-const ASSERT_KINDS = new Set(['log', 'control', 'var', 'signal', 'tree', 'lua'])
+const ASSERT_KINDS = new Set(['log', 'control', 'var', 'signal', 'tree', 'count', 'lua'])
 
 function finiteNumber(value, label) {
   const n = Number(value)
@@ -90,6 +90,16 @@ function normalizeAssert(raw, index) {
     row.name = String(raw.name || '')
     row.exists = raw.exists !== false
     if (!row.name) throw new Error('tree assert requires name')
+  } else if (kind === 'count') {
+    // 归一化会**丢掉未知字段** —— 这里不显式搬运，count 就会失去筛选条件（变成「数所有控件」）
+    row.name = raw.name ? String(raw.name) : ''
+    row.controlKind = raw.controlKind ? String(raw.controlKind) : ''
+    if (!row.name && !row.controlKind) throw new Error('count assert requires name or controlKind')
+    if (raw.atLeast !== undefined) row.atLeast = finiteNumber(raw.atLeast, 'count.atLeast')
+    else {
+      if (!Object.prototype.hasOwnProperty.call(raw, 'equals')) throw new Error('count assert requires equals or atLeast')
+      row.equals = cloneJson(raw.equals)
+    }
   } else if (kind === 'lua') {
     row.source = String(raw.source || '')
     if (!row.source.trim()) throw new Error('lua assert requires source')

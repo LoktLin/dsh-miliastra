@@ -283,6 +283,86 @@ const vBadCases = await err(() => simOp({ op: 'verify', cases: [{ name: 'x' }] }
 ok('op=verify cases 里某项缺 expect：报错**点名第几个用例**（不是笼统一句）',
   !!vBadCases && /cases\[0\]/.test(vBadCases) && /expect/.test(vBadCases), vBadCases);
 
+/* ------------------------------- 拖拽（drag）与「建了几个」（count） */
+
+// 拖拽要看引擎的 CursorBeginDrag / CursorDrag / CursorEndDrag —— 用引擎自己测试里的同一套写法
+await simOp({
+  op: 'patch',
+  patch: {
+    op: 'addScript', controlId: 'n1', controlAsset: 'server-control-template', path: 'drag-selftest',
+    source: [
+      'local function listen(button, eventType, label)',
+      '  button:AddCursorEventListener(eventType, function(data)',
+      '    local dx, dy = data:GetUIPosDelta()',
+      '    print(label, data.dragging, dx, dy)',
+      '  end)',
+      'end',
+      'function OnStart()',
+      '  script.object.showCursor = true',
+      '  local button = script.object:FindChild("预设按钮")',
+      '  listen(button, Enum.CursorEventType.CursorBeginDrag, "DRAG_BEGIN")',
+      '  listen(button, Enum.CursorEventType.CursorDrag, "DRAG_MOVE")',
+      '  listen(button, Enum.CursorEventType.CursorEndDrag, "DRAG_END")',
+      '  listen(button, Enum.CursorEventType.CursorClick, "DRAG_CLICK")',
+      'end',
+      '',
+    ].join('\n'),
+  },
+});
+
+const vDrag = await simOp({
+  op: 'verify', name: 'drag',
+  steps: [{ drag: { from: [800, 450], to: [830, 470], steps: 3, gap: 0.05 } }],
+  expect: [
+    { kind: 'log', contains: 'DRAG_BEGIN' },
+    { kind: 'log', contains: 'DRAG_MOVE' },
+    { kind: 'log', contains: 'DRAG_END' },
+  ],
+});
+ok('★ op=verify 的 drag：一句 `drag:{from,to}` 展开成 down→move…→up，命中拖拽三阶段（begin/move/end）',
+  vDrag.passed === true && vDrag.case.events.length === 5
+  && vDrag.case.events[0].payload.type === 'down' && vDrag.case.events[4].payload.type === 'up',
+  JSON.stringify({ passed: vDrag.passed, events: vDrag.case.events.map((e) => e.payload.type + '@' + e.t), results: vDrag.results }));
+ok('op=verify 的 drag：拖完**不算点击**（引擎只有在原地 up 才发 CursorClick）',
+  !(vDrag.snapshot.logs || []).some((l) => /DRAG_CLICK/.test(String(l.text || ''))),
+  JSON.stringify(((vDrag.snapshot && vDrag.snapshot.logs) || []).map((l) => l.text).slice(-6)));
+
+const vDragBad = await err(() => simOp({ op: 'verify', steps: [{ drag: { from: 1, to: [2, 3] } }], expect: [{ kind: 'log', contains: 'x' }] }));
+ok('op=verify 的 drag 参数写错：明确报错（不静默发一个坏事件）', !!vDragBad && /drag\.from/.test(vDragBad), vDragBad);
+
+const vPointer = await simOp({
+  op: 'verify', name: 'raw-pointer',
+  steps: [{ pointer: { type: 'down', x: 800, y: 450 } }, { pointer: { type: 'up', x: 800, y: 450 } }],
+  expect: [{ kind: 'log', contains: 'DRAG_CLICK' }],
+});
+ok('op=verify 的裸 pointer：手排 down→up 就是一次点击（CursorClick）', vPointer.passed === true,
+  JSON.stringify({ passed: vPointer.passed, results: vPointer.results }));
+
+// 「建了几个」：tree{exists} 只能答建了吗，count 才能数数量
+const vCountOk = await simOp({
+  op: 'verify', name: 'count-ok',
+  expect: [{ kind: 'count', name: '文本框', equals: 1 }, { kind: 'count', controlKind: 'textbox', atLeast: 1 }],
+});
+ok('★ op=verify 的 count：数出「几个同名控件 / 几个某类型控件」（tree{exists} 答不了这个）',
+  vCountOk.passed === true && vCountOk.results[0].actual === 1,
+  JSON.stringify(vCountOk.results));
+
+const vCountFail = await simOp({
+  op: 'verify', name: 'count-fail', shotOnFail: false,
+  expect: [{ kind: 'count', name: '文本框', equals: 3 }],
+});
+ok('op=verify 的 count 不过时：actual 是**真实数量**、expected 是期望数量（AI 一眼看出差几个）',
+  vCountFail.passed === false && vCountFail.results[0].actual === 1 && vCountFail.results[0].expected === 3,
+  JSON.stringify(vCountFail.results));
+
+const vCountAtLeast = await simOp({
+  op: 'verify', name: 'count-at-least', shotOnFail: false,
+  expect: [{ kind: 'count', controlKind: 'textbox', atLeast: 9 }],
+});
+ok('op=verify 的 count atLeast：不足时报「>=(n)」而不是假装相等',
+  vCountAtLeast.passed === false && vCountAtLeast.results[0].expected === '>=9',
+  JSON.stringify(vCountAtLeast.results));
+
 
 // ⑤ 用法错误要明确（不能静默"通过"）
 const vNoExpect = await err(() => simOp({ op: 'verify' }));

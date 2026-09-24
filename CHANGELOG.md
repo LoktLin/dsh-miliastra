@@ -10,6 +10,27 @@
 
 ---
 
+## [未发布]
+
+> `0.1.0` 已打 tag；下面是 tag 之后的**融合分支继续推进**。作者原话：「融合分支继续推进，写好每次的提交记录」。
+
+### 新增
+
+- **`op=verify` 支持拖拽（`steps[{drag:{from,to,steps?,gap?}}]`）**：自动展开成 `down → move… → up`（默认 6 段 / 每段 0.05 秒）。
+  以前只能发 `click`，**拖拽/滑动这类交互根本测不了**；引擎的 `CursorBeginDrag` / `CursorDrag` / `CursorEndDrag` 都在 `move` 里发，
+  所以必须展开成一串事件。另配 `pointer:{type,x,y}` 供手排裸指针事件（`down`/`move`/`up`/`click`）。
+- **`op=verify` 新增 `count` 断言**（`{kind:"count", name?|controlKind?, equals|atLeast}`）：**数建了几个**。
+  `tree{exists}` 只能回答「建了吗」，回答不了「建了几个」—— 而「每按一次加一条」这类动态 UI（列表项、金币图标、连击星）恰恰要问数量。
+  落地时补了 `format.js` 的白名单与搬运（**归一化会丢掉未知字段**，不补就会退化成「数所有控件」）与 `runner.js` 的 `needsTree`（漏了它 count 恒为 0）。
+
+### 已验证
+
+- `npm test` 退出码 **0**：`sim-test` 75 · **引擎 130**（新增 1 条 count 单测）· 其余同 `0.1.0` = **492 项**。
+- 真机形态的拖拽用例实测：`drag:{from:[800,450],to:[830,470],steps:3}` → 命中 `DRAG_BEGIN` / `DRAG_MOVE` / `DRAG_END`，
+  且**不发** `CursorClick`（引擎只在原地 `up` 才算点击）—— 两条都写成了断言。
+
+---
+
 ## [0.1.0] — 2026-09-24
 
 > 承接 `0.0.11`。本版是**能力版**：把 [miliastra-beyond-simulator](https://github.com/1475505/miliastra-beyond-simulator)

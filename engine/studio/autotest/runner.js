@@ -43,7 +43,8 @@ export function replayCase(play, rawCase) {
   let eventIndex = 0
   const results = []
   let time = 0
-  const needsTree = asserts.some((row) => row.kind === 'control' || row.kind === 'tree' || row.kind === 'lua')
+  // ⚠️ `count` 也必须把树带进快照 —— 漏了它，count 会永远数出 0（2026-09-24 加，别删）
+  const needsTree = asserts.some((row) => row.kind === 'control' || row.kind === 'tree' || row.kind === 'count' || row.kind === 'lua')
   let snap = play.snapshot({ inspect: needsTree })
 
   const applyDueEvents = () => {
