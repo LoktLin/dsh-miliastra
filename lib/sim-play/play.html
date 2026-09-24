@@ -10,6 +10,28 @@
   /* header / 报错条 / 舞台 / footer —— 报错条是 `auto`：不报错时高度 0，报错时把舞台挤下去（永远看得见） */
   body{background:#0c1422;color:#edf3ff;font:13px/1.5 "Microsoft YaHei UI","Microsoft YaHei",Inter,sans-serif;
        display:grid;grid-template-rows:48px auto minmax(0,1fr) 30px}
+  /*
+   * ★★★ **四个格子必须显式认领行号** —— 这是"画面只有一点点大"的**第三次**根因（2026-09-24）。
+   *
+   * 坑长这样：`#fatal` 默认 `display:none`，而 **`display:none` 的元素不是 grid item**
+   * （不生成盒子）。于是**自动排行**把后面三个整体**上提一格**：
+   *     header → 第 1 行（40px）✓
+   *     main   → 第 2 行（`auto`）  ✗ 行高 = 内容高 = **舞台高**
+   *     footer → 第 3 行（`minmax(0,1fr)`）✗ 吃掉全部剩余高度
+   *     第 4 行（那 26px）**没人占**
+   * 作者截图里的实测数字：`窗 374 / main 90`，而 footer 自己有 **217px** ——
+   * 截图里 footer 文字下面那一大片"空白"就是它，跟画面一点关系都没有。
+   *
+   * 为什么症状是"重载会大一点、然后马上又被挤扁"：main 落在 `auto` 行 ⇒ 又变成
+   * **自己量自己**（行高=舞台高，舞台高又由 `fit()` 从舞台盒子量出来算）。每次
+   * `ResizeObserver → fit()` 让舞台缩 20px，一路缩到钳位 `160×90` 才停。
+   *
+   * 显式行号之后，`display:none` 的那一行**塌成 0**，其余各行该多大就多大 ——
+   * 报错条显不显示都不再改变 `main` 的行身份。
+   */
+  header{grid-row:1}
+  main{grid-row:3}
+  footer{grid-row:4}
   button{font:inherit;color:inherit;cursor:pointer;background:#16233a;border:1px solid #263750;border-radius:6px;padding:5px 11px}
   button:hover:not(:disabled){border-color:#3d5b86}
   button:disabled{opacity:.4;cursor:default}
@@ -59,8 +81,11 @@
    * 用户看到的就是"一片黑"（2026-09-24 被 iframe 嵌进面板时暴露）。
    * 现在它是一条常驻在 header 下面的红条，出错就显形。
    */
-  #fatal{display:none;white-space:pre-wrap;color:#ffd0d8;background:#3a1418;border-bottom:1px solid #8b2635;
-         padding:8px 14px;font:12px/1.5 Consolas,monospace}
+  /* `grid-row:2` 必须在（见上面 body 那段）：报错条一显形就从"不占格"变成"占第 2 格"，
+     若靠自动排行，它一出现整盘行号会再串一次。`max-height:40%` + 自己滚是第二道闸：
+     报错信息再长也不许把舞台挤没（舞台至少留 60%）。 */
+  #fatal{grid-row:2;display:none;white-space:pre-wrap;color:#ffd0d8;background:#3a1418;border-bottom:1px solid #8b2635;
+         padding:8px 14px;font:12px/1.5 Consolas,monospace;max-height:40%;overflow:auto}
   #fatal.show{display:block}
   /*
    * 窄容器（面板里那 2/3 列 ≈ 570px、甚至更窄）：这一页在面板里是**嵌在 iframe 里**的，
@@ -203,16 +228,24 @@
       info.textContent = '画布 ' + w + '×' + Math.round(w / ratio) + '（16:9 固定）'
     }
     /*
-     * ★ 三个高度摆在一起（作者要求"把下面这块删了试试"之后的教训）：
-     * 光看"画布很小"分不清是哪一层被压 —— 窗口（= iframe 高度）/ main（页面中间那行）/ 舞台。
-     *   · 窗口小 → 是**面板**没给够高度；
-     *   · 窗口正常但 main 小 → 页面自己的行没拉满；
-     *   · main 正常但舞台小 → 舞台没填满 main。
+     * ★ 五个高度摆在一起（作者两次实测"画面咋就这么点大"之后的教训）：
+     * 光看"画布很小"分不清是哪一层被压 —— 头（工具栏）/ 主（`#main`）/ 脚（footer）/ 舞台。
+     *   · 窗 小 → 是**面板**没给 iframe 够高度；
+     *   · 窗 正常但**脚**很大 → body 的格子串位了（`#fatal` 是 `display:none` 时不算 grid item，
+     *     自动排行会把 main 顶到 `auto` 行、footer 顶到 `1fr` 行 —— 实测 footer 占过 217px）；
+     *   · 头/脚 正常但**主**小 → 页面自己的行没拉满；
+     *   · 主 正常但**台**小 → 舞台没填满 main。
+     * 四个数缺一个都会看错，所以全印出来（这一行才占 26px，却省掉好几轮来回猜）。
      */
     const diag = $('diag')
     if (diag) {
-      diag.textContent = '窗 ' + window.innerHeight + ' / main ' + (el.main ? el.main.clientHeight : 0)
-        + ' / 台 ' + Math.round(box.width) + '×' + Math.round(box.height)
+      const head = document.querySelector('header')
+      const foot = document.querySelector('footer')
+      diag.textContent = '窗 ' + window.innerHeight
+        + ' · 头 ' + (head ? head.clientHeight : 0)
+        + ' · 主 ' + (el.main ? el.main.clientHeight : 0)
+        + ' · 脚 ' + (foot ? foot.clientHeight : 0)
+        + ' · 台 ' + Math.round(box.width) + '×' + Math.round(box.height)
     }
   }
   /** 节流重算：由每一帧快照驱动 —— 不管布局怎么变，0.35 秒内追平。 */

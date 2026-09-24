@@ -103,13 +103,19 @@ ok('★ 舞台尺寸：太小就**先不写**、下一帧再量；并由每帧�
 ok('★ 画布尺寸印在 footer（`画布 668×376（可放 875×400）`）——「画面太小」这类问题肉眼可核，不用猜',
   /id="cvSize"/.test(html) && /textContent = '画布 ' \+ w/.test(html));
 /*
- * ★★ 三个高度摆在一起 + 版本戳（"下面那块删掉试试"之后的教训）：
- * 光看"画布很小"分不清是哪一层被压 —— 窗口（= iframe 高度）/ main / 舞台。
- *   · 窗口小 → **面板**没给够高度；· 窗口正常但 main 小 → 页面行没拉满；· main 正常但舞台小 → 舞台没填满 main。
+ * ★★ 五个高度摆在一起 + 版本戳（"下面那块删掉试试"「画面咋就这么点大」之后的教训）：
+ * 光看"画布很小"分不清是哪一层被压 —— 窗口（= iframe 高度）/ 头（工具栏）/ 主（#main）/ 脚（footer）/ 舞台。
+ *   · 窗小 → **面板**没给够高度；· 脚大 → **body 格子串位**（见下面 ★★★）；· 主小 → 页面行没拉满；
+ *   · 主正常但台小 → 舞台没填满 main。四个数缺一个都会看错（第一版只印了"窗/main/台"，
+ *     正好漏掉当时真正出问题的 footer，于是又白跑一轮）。
  * 版本戳自证"面板里那份页面是新是旧"（改完不用猜有没有生效）。
  */
-ok('★★ footer 同时给出「窗口 / main / 舞台」三个高度（一眼分清是哪一层被压）',
-  /id="diag"/.test(html) && /'窗 ' \+ window\.innerHeight \+ ' \/ main ' \+ \(el\.main \? el\.main\.clientHeight : 0\)/.test(html));
+ok('★★ footer 同时给出「窗口/头/主/脚/舞台」五个高度（一眼分清是哪一层被压）',
+  /id="diag"/.test(html) && /'窗 ' \+ window\.innerHeight/.test(html)
+  && /' · 头 ' \+ \(head \? head\.clientHeight : 0\)/.test(html)
+  && /' · 主 ' \+ \(el\.main \? el\.main\.clientHeight : 0\)/.test(html)
+  && /' · 脚 ' \+ \(foot \? foot\.clientHeight : 0\)/.test(html)
+  && /' · 台 '/.test(html));
 ok('★ footer 有页面版本戳占位（`v__PLAY_STAMP__`，由 Host 盖成 `v<大小>-<mtime>`）',
   /id="stamp"/.test(html) && /v__PLAY_STAMP__/.test(html));
 /*
@@ -122,6 +128,23 @@ ok('★ footer 有页面版本戳占位（`v__PLAY_STAMP__`，由 Host 盖成 `v
  */
 ok('★★ `main` 把行拉满（`grid-template-rows:minmax(0,1fr)`）+ 舞台 `height:100%` —— 否则会"自己量自己"锁成一条缝',
   /main\{[^}]*grid-template-rows:minmax\(0,1fr\)/.test(html) && /#stageWrap\{[^}]*height:100%/.test(html));
+/*
+ * ★★★ **body 的四个格子必须显式认领行号** —— "画面只有一点点大"的**第三次**根因（2026-09-24 作者第三次截图）。
+ *
+ * 上面的 ★★ 只修好了 `main` **内部**的行；没修 `main` **自己被放在哪一行**。而后者被这个坑坑了：
+ * **`display:none` 的 `#fatal` 不是 grid item**（不生成盒子）⇒ 自动排行把后面三个整体上提一格：
+ *     main   → 第 2 行（`auto`）  ⇒ 行高 = 内容高 = **舞台高**（又回到"自己量自己"）
+ *     footer → 第 3 行（`minmax(0,1fr)`）⇒ 吃掉全部剩余高度
+ * 作者截图里的铁证：`窗 374 / main 90`，而 footer **自己 217px**（截图像素扫描：舞台底只有 90px，
+ * footer 底色 band 从 y348 一直铺到 y564）。用户原话"重载会大一点、然后马上又被挤扁了" =
+ * 每轮 `ResizeObserver → fit()` 把舞台缩 20px，一路缩到钳位 `160×90`。
+ * 显式 `grid-row` 之后，隐藏的那一行**塌成 0**，其余各行与"报错条显不显示"再无关系。
+ */
+ok('★★★ header/main/footer 与 `#fatal` 各自**显式认领行号**（`display:none` 的 #fatal 不生成盒子 → 自动排行会把后面全部串位）',
+  /header\{grid-row:1\}/.test(html) && /#fatal\{[^}]*grid-row:2/.test(html)
+  && /main\{grid-row:3\}/.test(html) && /footer\{grid-row:4\}/.test(html));
+ok('★ 报错条**最多占 40%**并自己滚（报错再长也不许把舞台挤没）',
+  /#fatal\{[^}]*max-height:40%/.test(html) && /#fatal\{[^}]*overflow:auto/.test(html));
 /*
  * ★ 窄容器兜底：这一页在面板里是**嵌在 iframe 里**的（2/3 列 ≈ 570px）——
  * 按全屏那套排版会把工具栏折成两三行、把舞台挤没（作者截图里就是这样）。
