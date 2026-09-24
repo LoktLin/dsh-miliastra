@@ -13,7 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection, hostStaleness, engineArgsFromBody } from '../index.js';
+import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection, hostStaleness, engineArgsFromBody, playPageSource, playPageStamp } from '../index.js';
 import { slimStats } from '../lib/metrics.mjs';
 
 let pass = 0;
@@ -503,6 +503,29 @@ for (const [toolName, args] of CASES) {
       fail += 1;
       failures.push('[route] play 形状报错但不是 play 分支的错：' + msg);
     }
+  }
+}
+
+/* ------------------------------------------------ 试玩页的版本戳（"面板里那份是不是旧的"） */
+
+/*
+ * 作者踩过：页面明明修了，面板 iframe 里还是旧行为，来回猜了两轮。
+ * 这一页是每次请求现读的（`no-store`），所以"新旧"必须**看得见** —— 响应里盖一个
+ * `大小-mtime` 的戳，页脚显示 `v<戳>`，跟磁盘一比就知道要不要点「重载页面」。
+ */
+{
+  const stamp = playPageStamp({ size: 12345, mtimeMs: 1758600000000 });
+  const html = playPageSource('<span id="stamp">v__PLAY_STAMP__</span>__PLAY_STAMP__', stamp);
+  const okStamp = /^[0-9a-z]+-[0-9a-z]+$/.test(stamp)
+    && html.indexOf('__PLAY_STAMP__') < 0 && (html.match(new RegExp(stamp, 'g')) || []).length === 2;
+  const src = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'index.js'), 'utf8');
+  const routeUsesIt = /playPageSource\(html, playPageStamp\(st\)\)/.test(src);
+  if (okStamp && routeUsesIt) {
+    console.log('✓ ★ 试玩页盖上版本戳（`v<大小>-<mtime>`，如 v9ix-1a2b3c）：页脚能自证"面板里那份是新是旧"');
+    pass += 1;
+  } else {
+    fail += 1;
+    failures.push('[page] 版本戳不对：stamp=' + stamp + ' okStamp=' + okStamp + ' routeUsesIt=' + routeUsesIt);
   }
 }
 

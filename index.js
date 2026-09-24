@@ -167,7 +167,6 @@ export { TOOLS };
 
 /**
  * `/miliastra/engine` 的请求体 → `simOp` 的参数。
- *
  * **就是原样返回** —— 看着像废话，但这里出过一次静默事故（2026-09-24）：
  * 早先写成「有 `body.args` 就用 `body.args`」，而 `op=play` 的参数**本来就装在 `args` 里**，
  * 于是 `op/action` 被吃掉 → 每次调用都退化成默认的 `op=state`、且不报错 ⇒
@@ -176,6 +175,24 @@ export { TOOLS };
  */
 export function engineArgsFromBody(body) {
   return body && typeof body === 'object' ? body : {};
+}
+
+/**
+ * 试玩页的**版本戳**（`<字节数 base36>-<mtime base36>`）。
+ *
+ * 为什么要有：这一页是每次请求现读的，改完只要「重载页面」就生效 —— 但"面板里那份到底是新的还是旧的"
+ * 以前**看不出来**（作者踩过：明明修了，面板里还是旧行为，来回猜了两轮）。
+ * 盖上戳之后，页脚会显示 `v<戳>`，跟磁盘上一比就知道该不该点「重载页面」。
+ */
+export function playPageStamp(stat) {
+  const size = Number(stat && stat.size) || 0;
+  const mtime = Math.round(Number(stat && stat.mtimeMs) || 0);
+  return size.toString(36) + '-' + mtime.toString(36);
+}
+
+/** 把版本戳盖进试玩页（占位符 `__PLAY_STAMP__`）。纯函数，便于回归。 */
+export function playPageSource(html, stamp) {
+  return String(html || '').replace(/__PLAY_STAMP__/g, String(stamp || 'unknown'));
 }
 
 /* ---------------------------------------------------------------- 公共解析 */
@@ -1920,7 +1937,27 @@ function makeHandler() {
       }
       // 浏览器试玩页（W2）：页面 + 渲染器 bundle。**给人玩的**；AI 那条路仍然是 PNG + op=verify。
       if (route === PREFIX + '/play' || route === PREFIX + '/play/') {
-        sendFile(res, pathMod.join(SELF_DIR, 'lib', 'sim-play', 'play.html'), 'text/html; charset=utf-8');
+        /*
+         * ⚠️ 这一页是**每次请求现读**的（`Cache-Control: no-store`）—— 所以改了它只要「重载页面/F5」就生效。
+         * 但"面板里那份是不是新的"以前看不出来（作者踩过：明明修了，面板里还是旧行为）。
+         * 于是在响应里**盖一个版本戳**（大小 + mtime），页脚会显示 `v<戳>` —— 对不上就是旧页面。
+         */
+        const file = pathMod.join(SELF_DIR, 'lib', 'sim-play', 'play.html');
+        let html;
+        try {
+          html = fsMod.readFileSync(file, 'utf8');
+        } catch (e) {
+          sendJson(res, 404, { ok: false, error: '读不到试玩页：' + file + ' —— ' + ((e && e.message) || String(e)) });
+          return;
+        }
+        const st = fsMod.statSync(file);
+        const body = Buffer.from(playPageSource(html, playPageStamp(st)), 'utf8');
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Content-Length': body.length,
+        });
+        res.end(body);
         return;
       }
       if (route === PREFIX + '/play-renderer.js') {

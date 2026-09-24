@@ -49,8 +49,10 @@
   .kv{display:flex;justify-content:space-between;gap:8px;font-size:12px;border-bottom:1px solid #17223a;padding:3px 0}
   .hint{color:#8f9caf;font-size:11px;line-height:1.5;background:#0d1726;border:1px solid #1d2b44;border-radius:6px;padding:7px 9px;margin-top:10px}
   code{background:#0d1726;border:1px solid #1d2b44;border-radius:4px;padding:0 4px;font-size:11px}
-  footer{display:flex;align-items:center;gap:14px;padding:0 14px;border-top:1px solid #263750;background:#101a2a;color:#9fb0c8;font-size:12px}
+  footer{display:flex;align-items:center;gap:12px;padding:0 12px;border-top:1px solid #263750;background:#101a2a;color:#9fb0c8;font-size:12px;overflow:hidden;white-space:nowrap}
   #cvSize{color:#8ad1a0}
+  #diag{color:#9fb0c8;opacity:.9}
+  #stamp{color:#6b7b91;font-size:11px}
   /*
    * ⚠️ 报错条必须在**看得见的地方**：`#fatal` 以前放在 `#side` 里，而 `#side` 默认 `display:none`
    * （要点「侧栏」才出现）—— 于是「WebGL 起不来 / 会话没跑起来」这类错误**一个字都看不到**，
@@ -113,7 +115,8 @@
     <span id="frame">Frame 0</span><span id="time">0.00s</span>
     <span id="cvSize">画布 —</span>
     <span class="sp" style="flex:1"></span>
-    <span>画面由 PixiJS（WebGL）渲染 · 逻辑在与面板/AI 同一个 Worker 里跑</span>
+    <span id="diag" title="窗口 / main / 舞台 三个高度：哪一个明显小，问题就在那一层">—</span>
+    <span id="stamp" title="试玩页版本戳（大小-mtime）；跟磁盘上的 play.html 对不上就是面板里那份是旧的，点「重载页面」">v__PLAY_STAMP__</span>
   </footer>
 
 <script type="module">
@@ -197,8 +200,19 @@
     el.stage.style.width = w + 'px'                              // 高由 aspect-ratio 决定
     const info = $('cvSize')
     if (info) {
-      info.textContent = '画布 ' + w + '×' + Math.round(w / ratio) + '（16:9 固定；可放 '
-        + Math.round(box.width) + '×' + Math.round(box.height) + '）'
+      info.textContent = '画布 ' + w + '×' + Math.round(w / ratio) + '（16:9 固定）'
+    }
+    /*
+     * ★ 三个高度摆在一起（作者要求"把下面这块删了试试"之后的教训）：
+     * 光看"画布很小"分不清是哪一层被压 —— 窗口（= iframe 高度）/ main（页面中间那行）/ 舞台。
+     *   · 窗口小 → 是**面板**没给够高度；
+     *   · 窗口正常但 main 小 → 页面自己的行没拉满；
+     *   · main 正常但舞台小 → 舞台没填满 main。
+     */
+    const diag = $('diag')
+    if (diag) {
+      diag.textContent = '窗 ' + window.innerHeight + ' / main ' + (el.main ? el.main.clientHeight : 0)
+        + ' / 台 ' + Math.round(box.width) + '×' + Math.round(box.height)
     }
   }
   /** 节流重算：由每一帧快照驱动 —— 不管布局怎么变，0.35 秒内追平。 */
