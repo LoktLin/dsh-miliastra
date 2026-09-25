@@ -35,16 +35,17 @@ import { fileURLToPath } from 'node:url';
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
-import { readGil, renderClientUI, extractStrings, compareScriptSnapshot } from './lib/gil.mjs';
+import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
   playtestSummary, shouldHit,
 } from './lib/playtest.mjs';
-import { PROBE_TEMPLATES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
+import { PROBE_TEMPLATES, PROBE_TEMPLATE_CHOICES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './lib/leveldata.mjs';
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
+import { atomicWriteFile } from './lib/fsx.mjs';
 import { simOp, disposeSimAll, simRuntimeInfo } from './lib/sim.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
@@ -173,6 +174,37 @@ function reconcileWithGil(lv, livePath) {
   } catch (e) {
     return { ok: false, reason: (e && e.message) || String(e) };
   }
+}
+
+/**
+ * `op=deploy` 的 `nextStep` —— **分清「这份挂过没有」**。
+ *
+ * 同事实测（2026-09-25）：原来只有一句「先在编辑器里存盘（地图里嵌的还不是这一版）」。
+ * 对**从没在编辑器里挂载过的新脚本**，真正缺的那一步是「**先挂到容器节点上**」——
+ * 存盘不解决任何问题（地图里根本没有这条挂载记录），而人是照着 nextStep 做事的。
+ *
+ * 判据来自 `mountStatusOf`（地图存档里嵌的脚本名 ↔ 这份活文件的名字）：
+ *   · 已挂载 → 原来的「存盘 / 重新试玩」；
+ *   · 没挂过 → 明说「先挂到容器节点上」；
+ *   · **判断不了 → 明说判断不了**（前缀一句，后面照旧给可执行的建议，绝不编一个结论出来）。
+ */
+function deployNextStep(ms, rec, destPath) {
+  const name = pathBasenameOf(destPath);
+  if (ms && ms.mounted === false) {
+    return '这份（' + name + '）**还没挂到容器节点上**：' + ms.note
+      + ' → 先在编辑器里把它**挂到客户端控件容器的容器节点上**，再重新试玩一局。'
+      + '拿不准哪个才是你正在改的，先用 miliastra_health 看清这个关卡下有哪些活文件（也可以直接传 file 指定）。';
+  }
+  const base = rec && rec.match === true
+    ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果'
+    : (rec && rec.skipped
+      // ② 跨脚本时**不给**「先别急着试玩」这种结论：两个不同脚本的哈希本来就不同源，
+      //    该做的是先弄清「哪个才是你正在改的」
+      ? '地图里嵌的是 ' + ((rec.embedded && (rec.embedded.file || rec.embedded.name)) || '另一个脚本')
+        + '，与本次的 ' + name + ' 对不上 → 先用 miliastra_health 看清这个关卡下有哪些活文件，'
+        + '确认哪个才是你正在改的（也可以直接传 file 指定）'
+      : '先在编辑器里存盘（地图里嵌的还不是这一版）→ 再重新试玩一局');
+  return ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
 }
 
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
@@ -316,6 +348,60 @@ function classifyControls(clientUI) {
   return { standalone, likelyTemplates, likelyContainers, structural };
 }
 
+/**
+ * 「哪些号真的能被创建」的**一次真机实测记录** —— 必须连**来源关卡**一起说，否则就是假事实。
+ *
+ * 同事实测（2026-09-25）：`op=clientui` 的 hint 里写死了「实测佐证：**本关** 1073741867(文本框) /
+ * 1073741868(图片) 可创建」，而他那张图的 likelyTemplates 是 1073741850/1852/1854/1846 ——
+ * 那两个号**来自另一张图**的实测。「本关 + 别人的号」看起来就是一条事实，最容易被当真。
+ */
+export const CLIENTUI_EVIDENCE = {
+  /** 那次实测是在**哪张图**上做的（不许省掉——省掉就变成"本关"了）。 */
+  levelId: '1073741833',
+  where: '《冰镜·火烛》那次真机实测',
+  creatable: [
+    { id: 1073741867, name: '文本框' },
+    { id: 1073741868, name: '图片' },
+  ],
+  notCreatable: '1073741863~1866（画布上摆的实例）一律返回 nil',
+};
+
+/**
+ * `op=clientui` 的 hint —— **本关的数据**与**别处的实测**分成两句话说，绝不同框。
+ *
+ * 只负责「**本关读到的** + **实测佐证（带来源）**」这两段；前面那几句通用说明由调用方拼接
+ * （那几句与数据无关，抄到这里会在回执里整段重复 —— 真机复核时当场抓到过）。
+ *
+ * 判据很简单：`likelyTemplates` 是从**这张图的 .gil** 里读出来的（真数据，只报本关的）；
+ * `CLIENTUI_EVIDENCE` 是**另一张图**上跑出来的结论，永远带上它的关卡 ID。
+ * 只有当前关卡**就是**那次实测的那张图时，才允许说「本关」。
+ *
+ * @param {{levelId?: any, likelyTemplates?: any[]}} [input] `levelId` = 本关关卡 ID；
+ *        `likelyTemplates` = 本关读到的独立控件（`{id, name}`）
+ * @returns {string}
+ */
+export function clientUiHint({ levelId = null, likelyTemplates = [] } = {}) {
+  const tmpl = Array.isArray(likelyTemplates) ? likelyTemplates : [];
+  const ev = CLIENTUI_EVIDENCE;
+  const isEvidenceLevel = levelId != null && String(levelId) === String(ev.levelId);
+  const parts = [
+    // ① **本关自己的数据**：只报从这张图的 .gil 里读出来的号
+    tmpl.length
+      ? '**本关读到的**独立控件（' + (levelId != null ? '关卡 ' + levelId + '，' : '') + tmpl.length + ' 条）：'
+        + tmpl.map((t) => t.id + '(' + t.name + ')').join(' / ') + '。'
+      : '**本关没有读到**任何「无父节点 + 名字是控件类型」的记录 —— 这张图多半还没把控件「存为模板」。',
+    // ② **别处的实测**：来源写在最前面，不是本关的就明说不是
+    '真机实测佐证（来源：' + (isEvidenceLevel ? '**本关**' : '**关卡 ' + ev.levelId + '**')
+      + ' ' + ev.where + '）：' + ev.creatable.map((c) => c.id + '(' + c.name + ')').join(' / ') + ' 可创建，'
+      + ev.notCreatable + '。',
+  ];
+  if (!isEvidenceLevel) {
+    parts.push('⚠️ 上面那几个号**来自关卡 ' + ev.levelId + ' 的实测，不是本关的** —— '
+      + '本关要用哪个号，以「本关读到的」那一份为准；确证某个号能不能创建，用探针「试钥匙」跑一次。');
+  }
+  return parts.join('');
+}
+
 /* ---------------------------------------------------------------- 工具定义 */
 
 /* ---------------------------------------------- 系统提示段的数据源（0.0.10）
@@ -383,6 +469,13 @@ const TOOLS = [
       type: 'object',
       properties: {
         all: { type: 'boolean', description: 'true=返回全部关卡清单（默认只返回最近 12 个）。' },
+        brief: {
+          type: 'boolean',
+          description: '**只回「我在哪张图 / 活文件是哪个 / 日志在哪」（总长 < 1KB）** —— 默认回执约 9.7KB、'
+            + 'all:true 约 25KB，而这是「任何操作前先调」的工具，多数时候只要这一小撮。'
+            + '回 current（关卡 id/品牌/账号）+ 活文件**名字**数组 + 进程状态 + 日志目录。'
+            + '⚠️ **与 all / summaryOnly 同时给时 brief 优先**（默认行为一个字不改）。',
+        },
       },
       additionalProperties: false,
     },
@@ -390,6 +483,32 @@ const TOOLS = [
     async execute(args = {}) {
       const levels = scanLevels();
       const cur = pickCurrent(levels);
+      /*
+       * ★ brief 档：只回「在哪张图 / 活文件是哪个 / 日志在哪」+ 进程状态。
+       *   实测的痛点是体积（默认 9708 B / all:true 24966 B），不是信息不够 ——
+       *   所以这一档只保留**每次都要看**的那几项，其余（每个关卡的 .gil、最近日志、ErrorLog）一律不带。
+       */
+      if (args.brief === true) {
+        const proc = clientProcesses();
+        return {
+          ok: true, brief: true,
+          current: cur ? { brand: cur.brand, accountId: cur.accountId, levelId: cur.levelId } : null,
+          luaFiles: cur ? cur.luaFiles.filter((f) => !f.auxiliary).map((f) => f.name) : [],
+          luaDir: cur ? cur.luaDir : null,
+          gil: cur && cur.gil ? pathMod.basename(cur.gil.path) : null,
+          logDir: cur ? cur.logDir : null,
+          logCount: cur ? cur.logCount : 0,
+          proc: {
+            available: proc.available === true,
+            editor: proc.summary ? proc.summary.editorRunning : null,
+            game: proc.summary ? proc.summary.gameRunning : null,
+          },
+          levelCount: levels.length,
+          hint: cur
+            ? '要看全量（每个关卡的 .gil / 最近日志 / ErrorLog / 系统提示）就别传 brief'
+            : '没扫到关卡',
+        };
+      }
       const brief = (l) => ({
         layout: l.layout || 'folder',
         brand: l.brand,
@@ -620,8 +739,11 @@ const TOOLS = [
           // 部署完立刻对账：地图里嵌的是不是刚投进去这版（不然「可以试玩了」是句空话）
           rec = reconcileWithGil(lv, destPath);
         }
+        // 这份活文件**在这个关卡里挂过没有**（GIL 里嵌的脚本名 ↔ 本次的文件名；拿不到就 known:false，不猜）
+        const ms = mountStatusOf({ mountedNames: mountedScriptNames(lv), liveName: pathBasenameOf(destPath) });
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
+          mount: ms,
           lintSummary: r.lint ? (r.lint.ok ? '结构正常' : '发现问题') : '（未校验）',
           deployFingerprint: fp ? {
             ok: fp.ok,
@@ -636,17 +758,7 @@ const TOOLS = [
           restoreWith: r.fixedBackup
             ? restoreCommand(null, destPath)
             : (r.backup ? restoreCommand(r.backup, destPath) : null),
-          nextStep: r.ok
-            ? (rec && rec.match === true
-              ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果'
-              : (rec && rec.skipped
-                // ② 跨脚本时**不给**「先别急着试玩」这种结论：两个不同脚本的哈希本来就不同源，
-                //    该做的是先弄清「哪个才是你正在改的」
-                ? '地图里嵌的是 ' + ((rec.embedded && (rec.embedded.file || rec.embedded.name)) || '另一个脚本')
-                  + '，与本次的 ' + pathBasenameOf(destPath) + ' 对不上 → 先用 miliastra_health 看清这个关卡下有哪些活文件，'
-                  + '确认哪个才是你正在改的（也可以直接传 file 指定）'
-                : '先在编辑器里存盘（地图里嵌的还不是这一版）→ 再重新试玩一局'))
-            : null,
+          nextStep: r.ok ? deployNextStep(ms, rec, destPath) : null,
         };
       }
       if (op === 'fixbom') {
@@ -792,7 +904,10 @@ const TOOLS = [
           hint: '能被 game.InstantiateClientUIControl 创建的，只有「在客户端控件模板库里【添加客户端控件】存为模板」的独立控件。'
             + '本工具把「无父节点 + 名字是客户端控件类型」的记为 likelyTemplates；'
             + '其中 容器节点 那几条通常是客户端控件容器的画布根节点（不是模板），真正的模板看 图片 / 文本框 这类。'
-            + '实测佐证：本关 1073741867(文本框) / 1073741868(图片) 可创建，1073741863~1866（画布实例）一律 nil。',
+            // ⚠️ 这段文案由 clientUiHint() 生成：**本关的数据**与**别处的实测**分两句、带来源，
+            //    不许再出现「本关 + 别的关卡的号」这种看起来是事实的误导（见 CLIENTUI_EVIDENCE）
+            // ⚠️ `gil.level` 是 `{id, name}` 对象（不是数字）—— 传错会让 hint 里印出「关卡 [object Object]」
+            + clientUiHint({ levelId: gil.level && gil.level.id, likelyTemplates: c.likelyTemplates }),
         };
         if (args.summaryOnly === true) {
           // 全量 `records` + `rendered` 是 37 条控件 × 多列，光扫一眼就要几千字符
@@ -843,7 +958,7 @@ const TOOLS = [
       + 'op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；'
       + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）；'
       + '**op=runs 按「局」切分** —— 一个 `.gia` 里可能装多局（实测 `21-24-16_155` 装了两段完整生命周期），'
-      + 'op=runs 给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / 错误样式）**并和上一局做 diff**，'
+      + 'op=runs 给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / 错误样式 / **命中的词**）**并和上一局做 diff**，'
       + '省掉「把 30 多条倒过来再分清哪段属于哪局」这一步。'
       + '记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。'
       + '\n\n⚠️ **「试玩了却没有新日志」先看这里**：`.gia` 里**只有脚本自己 `print` 出来的东西**。'
@@ -866,7 +981,17 @@ const TOOLS = [
           description: 'op=tail/grep/tags：**只看某一局**。给 epoch 秒（如 1790170177）或 instance 片段。'
             + 'op=runs 的 epochSec 与 miliastra_playtest 报的是同一个值。',
         },
-        limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120）；op=runs/metrics：最多返回几局/几条时间线（默认 10 / 40）；op=sessions：几个文件（默认 40）。' },
+        limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120，**超限时留最新的那些**）；op=runs/metrics：最多返回几局/几条时间线（默认 10 / 40）；op=sessions：几个文件（默认 40）。' },
+        last: {
+          type: 'number',
+          description: 'op=tail/grep：**只取尾部 N 条**（要看"这一局怎么结束的"就用它）—— 与 limit 的区别是它把「取尾」这件事说死，'
+            + '并在回执 window 里如实报出来。顺序永远是 **先过滤（run/tag/pattern）→ 再取尾**，返回仍按时间正序（最早在前）。',
+        },
+        from: {
+          type: 'string',
+          enum: ['end', 'head'],
+          description: 'op=tail/grep：从哪一端取 —— `end`（默认，取尾部）/ `head`（取开头那 N 条）；limit 的行为不受影响。',
+        },
         evt: { type: 'string', description: 'op=metrics：只看某个事件名（严格约定的 `evt=`）。' },
         summaryOnly: {
           type: 'boolean',
@@ -915,7 +1040,9 @@ const TOOLS = [
             + '所以「实时看到开跑」和「事后读这局日志」能对上号：'
             + 'miliastra_log op=tail run=<epochSec> 就只看那一局。',
           caveat: 'faultCount / errorSample 是按**通用词**（重生/死亡/失败/nil value…）归的「疑似」计数，'
-            + '不是平台给的分类；具体含义以脚本里那行 print 自己的文案为准。',
+            + '不是平台给的分类；具体含义以脚本里那行 print 自己的文案为准。'
+            + '**命中的词一并报出**（errorSample[].matched / errorMatched / faultMatched）——'
+            + '只说「errorKinds: 2」是判断不了该不该信这条归类的，得看见命中哪两个词。',
         };
       }
 
@@ -967,7 +1094,22 @@ const TOOLS = [
         return { ok: true, op, file, recordCount: gia.recordCount, tags };
       }
       const limit = Number.isFinite(args.limit) ? args.limit : 120;
-      const { records, error } = filterRecords(pool, { tag: args.tag, pattern: args.pattern, limit });
+      /*
+       * ★「从尾部取」（2026-09-25 同事反馈）：他想看**收尾阶段**（那 141 条 Destroy 拒绝）却只能从头取 ——
+       *   一个文件末尾才是「这一局怎么结束的」。所以显式加 `last`（尾部 N 条）/ `from`（end|head）：
+       *   顺序永远是 **过滤（run/tag/pattern）→ 取尾**；`limit` 的行为一个字不改。
+       */
+      const fromRaw = args.from == null ? '' : String(args.from).trim().toLowerCase();
+      if (fromRaw && fromRaw !== 'end' && fromRaw !== 'head') {
+        return {
+          ok: false, op, file,
+          error: 'from 只能是 "end"（从尾部取，默认）或 "head"（从头取），收到：' + JSON.stringify(args.from),
+        };
+      }
+      const fromHead = fromRaw === 'head';
+      const lastN = Number.isFinite(args.last) ? Math.max(0, Math.round(args.last)) : null;
+      const take = lastN == null ? limit : lastN;
+      const { records, error } = filterRecords(pool, { tag: args.tag, pattern: args.pattern, limit: take, fromEnd: !fromHead });
       if (error) return { ok: false, op, file, error };
       const slim = records.map((r) => (args.withRaw
         ? r
@@ -975,6 +1117,11 @@ const TOOLS = [
       return {
         ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
         matched: records.length, returned: slim.length,
+        // 「这次是从哪一端取的、取了几条」—— 省掉「为什么我只看到开头那 N 条」这类来回
+        window: {
+          from: fromHead ? 'head' : 'end', last: lastN, limit, take,
+          order: '返回按时间正序（最早在前）',
+        },
         filter: { tag: args.tag || null, pattern: args.pattern || null },
         records: slim,
       };
@@ -1374,13 +1521,17 @@ const TOOLS = [
       + '**代价**：部署会**临时覆盖活文件**，所以试玩那一局你的玩法不会跑（Host 会先自动备份，用完一键还原）。'
       + '**四步**：① op=deploy template=<名字> → ② 在编辑器里**重新**试玩一局（不会热加载）→ '
       + '③ op=collect 收回结论 → ④ 用 miliastra_code op=restore 还原你的脚本。'
-      + `**${PROBE_TEMPLATES.length} 个模板**（先 op=list 看详情）：`
+      + `**${PROBE_TEMPLATE_CHOICES.length} 个模板**（先 op=list 看详情）：`
       // 模板清单从 PROBE_INFO 生成 —— 硬编码过「四个模板」，加第 5 个时描述就悄悄过期了
-      + PROBE_TEMPLATES.map((t) => {
+      + PROBE_TEMPLATE_CHOICES.map((t) => {
         const i = PROBE_INFO[t] || {};
         return '`' + t + '` ' + (i.label || '') + (i.oneLine ? '=' + i.oneLine : '');
       }).join('；') + '。'
-      + '另：op=render 只生成 Lua 不部署（要先看代码用这个）。探针只读，不做场景写操作。'
+      + '另：op=render 只生成 Lua 不部署（要先看代码用这个；给了 saveTo 才落盘）。探针只读，不做场景写操作。'
+      + '★ **`template:"custom"`**：现成模板答不了的问题（OnInit/OnEnable 期能不能创建控件、锚点是不是归一化 0..1…），'
+      + '用 `lua` 传一段**完整 Lua** 当正文 —— 它走**同一条流水线**（render → 人部署 → 试玩 → collect → `miliastra_code op=restore` 还原），'
+      + '部署前照样**先备份活文件**，正文还会先过一遍**结构校验**（缺 end / 括号不配平直接拒绝渲染）。'
+      + '它**不给探针任何新能力**：仍然只能 print + 只读 API。'
       + '\n\n**典型调用**：`{"op":"deploy","template":"ping"}` → 人重新试玩 → `{"op":"collect","tag":"P1"}` → '
       + '**还原**：`miliastra_code {"op":"restore"}`（不传 backup 就是用固定名那份）',
     parameters: {
@@ -1389,9 +1540,17 @@ const TOOLS = [
         op: { type: 'string', enum: ['list', 'render', 'deploy', 'collect'], description: '默认 list。' },
         template: {
           type: 'string',
-          enum: PROBE_TEMPLATES,
+          enum: PROBE_TEMPLATE_CHOICES,
           description: '模板名。怕选错先 op=list 看每个模板的大白话说明：'
-            + PROBE_TEMPLATES.map((t) => `${t}=${(PROBE_INFO[t] || {}).label || ''}（${(PROBE_INFO[t] || {}).oneLine || ''}）`).join('；'),
+            + PROBE_TEMPLATE_CHOICES.map((t) => `${t}=${(PROBE_INFO[t] || {}).label || ''}（${(PROBE_INFO[t] || {}).oneLine || ''}）`).join('；')
+            + '。⚠️ `custom` 必须再给 `lua`（正文），其余模板都不用。',
+        },
+        lua: {
+          type: 'string',
+          description: '**只有 template:"custom" 用**：探针正文，一段**完整 Lua**（建议定义 `function run()` —— '
+            + '探针会在试玩起来后第 3 帧调它一次；也能自己在 OnStart/OnUpdate 里输出）。'
+            + '正文里只做两件事：print + 只读 API —— **探针不会写地图 / 写存档**。'
+            + '不通过结构校验（缺 end / 括号不配平 / 字符串没闭合）会被**拒绝渲染**并指出哪里不合法。',
         },
         tag: { type: 'string', description: '日志标签（默认 PROBE）。collect 时用它过滤。' },
         level: { type: 'string', description: '关卡；省略=当前关卡。' },
@@ -1413,13 +1572,13 @@ const TOOLS = [
       const op = String(args.op || 'list');
       if (op === 'list') {
         return {
-          ok: true, op, templates: PROBE_TEMPLATES,
+          ok: true, op, templates: PROBE_TEMPLATE_CHOICES,
           whatIsAProbe: PROBE_OVERVIEW.what,
           why: PROBE_OVERVIEW.why,
           cost: PROBE_OVERVIEW.cost,
           steps: PROBE_OVERVIEW.steps,
           // 每个模板的大白话说明 —— 面板直接拿这份渲染，避免两边各写一套文案
-          info: PROBE_TEMPLATES.map((t) => Object.assign({ template: t }, PROBE_INFO[t] || {})),
+          info: PROBE_TEMPLATE_CHOICES.map((t) => Object.assign({ template: t }, PROBE_INFO[t] || {})),
           usage: 'miliastra_probe op=deploy template=instantiate tag=P1 → 在编辑器里重新试玩一局 → '
             + 'miliastra_probe op=collect tag=P1 → miliastra_code op=restore 还原你的脚本',
         };
@@ -1438,15 +1597,24 @@ const TOOLS = [
           lines: records.map((r) => r.message),
         };
       }
-      const r = renderProbe(args.template || 'tree', { tag: args.tag, ids: args.ids, from: args.from, to: args.to });
+      const r = renderProbe(args.template || 'tree', { tag: args.tag, ids: args.ids, from: args.from, to: args.to, lua: args.lua });
       if (!r.ok) return r;
       const fs = await import('node:fs');
       if (args.saveTo) {
-        fs.mkdirSync((await import('node:path')).dirname(args.saveTo), { recursive: true });
-        fs.writeFileSync(args.saveTo, r.lua, 'utf8');
+        // 写盘一律走共享原子实现（同目录 tmp + fsync + rename），不留半截文件
+        atomicWriteFile(args.saveTo, r.lua);
       }
       if (op === 'render') {
-        return { ok: true, op, template: r.template, tag: r.tag, bytes: r.bytes, savedTo: args.saveTo || null, lua: r.lua };
+        return {
+          ok: true, op, template: r.template, tag: r.tag, bytes: r.bytes, savedTo: args.saveTo || null,
+          ...(r.custom ? { custom: true } : {}),
+          ...(r.warnings ? { warnings: r.warnings } : {}),
+          // ⚠️ render **不部署、不覆盖活文件**（没给 saveTo 就只在回执里）；要真跑必须走 op=deploy
+          note: 'render 只出代码、**不碰任何文件**（给 saveTo 才落盘）。要真跑就 `op=deploy`：'
+            + '它会**临时覆盖活文件**（先自动备份），在编辑器里重新试玩一局后 `op=collect` 收结论，'
+            + '**收完记得还原**：`miliastra_code op=restore`（不传 backup 就是用固定名那份）。',
+          lua: r.lua,
+        };
       }
       if (op === 'deploy') {
         const lv = resolveLevel(args.level);
@@ -1466,8 +1634,7 @@ const TOOLS = [
         const probeDir = defaultBackupDir(dest, args.backupDir);
         const probeSrc = args.saveTo || (probeDir + '\\_探针_' + r.template + '_' + r.tag + '_' + stamp + '.lua');
         if (!args.saveTo) {
-          fs.mkdirSync(probeDir, { recursive: true });
-          fs.writeFileSync(probeSrc, r.lua, 'utf8');
+          atomicWriteFile(probeSrc, r.lua);
         }
         const dep = deployFile(probeSrc, dest, { backupDir: args.backupDir, lintMode: args.lintMode });
         return {
@@ -1521,6 +1688,12 @@ const TOOLS = [
       + '`templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**，不许编造）+ `containerId`（交接的容器索引，只记录/交叉核对）→ '
       + '它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 '
       + '`run.controlCount`（控件建没建·建了几个）。默认 `fresh:true` 先清空出厂橱窗控件（只留你的工程）；`run:false` 只搭不跑；`saveAs` 存成工作区存档。'
+      + '\n  · **`kind` 猜错是静默的**（控件类型不对时脚本设属性直接报错中止，什么都不建）→ 拿不准就传 `kind:"auto"`：'
+      + '按 **image → textbox → container** 逐个起会话，**谁让控件数增长就用谁**，回执给 `kindTried[]` / `kindWinner`；'
+      + '不给 auto 而控件数又没涨，回执会自动附一条 `kindHint`（点破「可能是 kind 不对」）。'
+      + '\n  · `mount` 回的是**真实层级**（`parent` / `ancestors` / `isClientUI`）：真机上客户端脚本就是挂在'
+      + '`客户端控件容器(server-container) → 容器节点(container)` 的那个容器节点上；`assetType` 只是**控件模板资源**的名字，'
+      + '**不代表"挂在服务端"**（回执里另有 `assetTypeNote` 说明）。'
       + '它还会交叉核对交接值（`handover.missing/extra`：源码里出现、你没交的 10 位以上整数 = 可能还缺模板）—— 这是启发式，不是判决。'
       + '⚠️ **Host 是启动快照**：每次重启 `dsh web`，模拟器内存里的工程都回到**出厂默认**'
       + '（`op=state` 的 `factoryDefault:true` 会如实说）。成功 bind 会记一份**配方**（`last-bind.json`），'
@@ -1564,6 +1737,7 @@ const TOOLS = [
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
       + '\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
+      + '控件类型拿不准：`{"op":"bind","source":"…\\\\双相.lua","templates":[{"guid":1073741867,"kind":"auto"}]}`；'
       + '自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
       + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
       + '证明动画在动：`{"op":"frames","frames":[0,0.5,1]}`；'
@@ -1593,7 +1767,8 @@ const TOOLS = [
         geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带上**世界坐标 `x/y` + 源尺寸 `w/h` + `text`**（"能点哪儿/哪行字"）—— 坐标左下原点，可直接喂 pointer/click。默认不带（省 token）。' },
         namedOnly: { type: 'boolean', description: 'op=controls：只列有名字的控件（只有它们能按 name 断言）。' },
         nameContains: { type: 'string', description: 'op=controls：按名字子串过滤（Host 侧过滤，中文可用）。' },
-        kind: { type: 'string', description: 'op=controls：按类型过滤（container / server-container / textbox / button / image …）。' },
+        kind: { type: 'string', description: 'op=controls：按类型过滤（container / server-container / textbox / button / image …）。'
+          + '⚠️ op=bind 的模板类型**不在这个参数上**，在 `templates[].kind` 里 —— 那里还支持 `"auto"`（拿不准控件类型时用）。' },
         maxDepth: { type: 'number', description: 'op=controls：只列到第几层（0=根）。' },
         limit: { type: 'number', description: 'op=controls：最多回多少条，默认 200（回执里 `omitted` 说明截掉了多少）。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
@@ -1610,7 +1785,7 @@ const TOOLS = [
         archive: { type: 'string', description: 'op=load 的存档相对路径；省略=列出工作区里的存档。' },
         path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
         source: { type: 'string', description: 'op=bind：真机**活文件** .lua 的绝对路径（沙箱里那份；路径随账号/换图变化，别写死）。也可以不传它、改用 `script:{path,source}` 直接给源码。' },
-        templates: { type: 'array', description: 'op=bind：**创作者交接的控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它，**不许编造**）；`kind` = image/textbox/button/container…；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
+        templates: { type: 'array', description: 'op=bind：**创作者交接的控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它，**不许编造**）；`kind` = image/textbox/button/container…，**或 `"auto"`**（= 不猜：按 image → textbox → container 逐个起会话，谁让控件数增长就用谁，回执给 `kindTried[]` / `kindWinner`）；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
         containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里自己硬编码了），只记进回执并和源码交叉核对（`handover.containerIdInSource`）。' },
         scriptName: { type: 'string', description: 'op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（双相的 checkMount 要求就是「双相.lua」），名字不对它会自己退出。' },
         mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件上（id 或名字；缺省=服务端容器节点）。' },

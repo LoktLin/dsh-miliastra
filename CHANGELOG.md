@@ -16,6 +16,18 @@
 
 ### 新增
 
+- **★ `miliastra_health` 加 `brief:true`**（同事实测：默认 **9454 B** / `all:true` **13518 B**，而它是最常被调的工具）——
+  `brief` 只回当前关卡 + **活文件名数组** + 日志目录 + 进程状态，实测 **600 B**（测试断言 < 1 KB）。默认档行为不变。
+- **★ `miliastra_probe` 自定义探针**：`op=render template:"custom" lua:"<一段 Lua>"` —— 复用现成的
+  render → 部署 → 试玩 → collect → 还原 流水线，且**正文本体与拼装结果都过结构校验**（不合法就拒渲染并给行号），
+  回执明写「会临时覆盖活文件、用完 `miliastra_code op=restore` 还原」。它**不新增任何能力**（只能 print + 只读 API）。
+- **★ `miliastra_log op=tail` 加 `last:N` / `from:"end"`**（同事要看收尾：他遇到 141 条 Destroy 拒绝却只能从头取）。
+  顺序恒为「过滤(run/tag/pattern) → 取尾」，`limit` 语义一字未改；回执带 `window{from,last,limit,take,order}`。
+- **★ `op=bind` 支持 `kind:"auto"` + `mount` 回真实层级**：auto 按 image→textbox→container 逐个起会话，
+  以「控件数有没有增长」为唯一判据，回执给 `kindTried[]`/`kindWinner`；不给 auto 且控件数没涨时自动附 `kindHint`。
+  `mount` 现在带 `parent{name,kind}` / `ancestors[]` / `isClientUI` / `clientUIRoot`，并说明 `assetType` 是**控件模板资源**的名字、不代表挂在服务端。
+
+
 - **★ `tools/typecheck.mjs`（`npm run typecheck`，已接进 `npm test`）：`tsc --checkJs` 类型层绊线** ——
   只检查**我们自己写的**文件（`index.js` / `lib/` / `tools/`），验收线是 **0 条**；`engine/`（上游 97 条）**如实报数但不阻断**
   （改它等于改上游语义）。`strict:false` 是**故意**的：先只抓「声明与真实用法对不上」，不引入几百条 `implicit any`
@@ -79,6 +91,32 @@
 
 ### 修复
 
+<!-- 2026-09-25 · 来自另一位 AI 的实测反馈（两批，每条附回执）；已逐条核过代码位置后修复 -->
+- **★★ 默认活文件解析会稳定选中『陈旧』文件（P0）**：旧实现是关键字启发式 `/双相|测试|main|levelScript/` **命中即返回**，
+  于是目录里只要有个 `测试.lua` 就必赢、mtime 兜底永远轮不到 —— 实测后果三条：`inspect` 体检了最旧的文件、
+  `map op=script` 报「一致」是**假安心**、`deploy` 的 reconcile 反向告警「先别急着试玩」。
+  现在：显式 `file` > **地图存档里嵌的脚本名** > mtime；新增 `pickedBy`(explicit/gil/mtime) + `candidates`；
+  `chooseLua` 与 `codefile.mjs` 的 `pickLuaFile` **共用唯一实现** `rankLuaFiles`（原来两套规则会给出不同文件）。
+- **★★ `reconcile` 跨文件比对（P0）**：拿 GIL 里 A 脚本的快照比 B 脚本的活文件 ⇒ 假告警。现在先比脚本名，
+  不同名则 `comparable:false` + `match:null` + `skipped`，那句「先别急着试玩」整条回执里再没有。
+- **★ 部署指纹单份 ⇒ 多活文件必然串（P1）**：新增按文件名索引的指纹（旧那份照写保持兼容）；
+  读到别人的指纹时 `foreign:true`，`changedSinceDeploy` 如实给 `null` 而不是假告警。
+- **★ `lib/fsx.mjs` 失败清理改 `unlinkSync`（P1）**：同事在 DSH 打包版 **Node v24.9.0** 上最小复现出
+  `fs.rmSync(p,{force:true})` **不报错、正常返回、文件仍在**（`unlinkSync` 正常）。本机 Node v24.18 行为断言看不出来，
+  所以另加**结构断言**：`lib/fsx.mjs` 里不许再出现 `rmSync(`。
+- **★ 测试可移植性三件（P1）**：`lualint-test` 隐式依赖工作区的 `../../code` ⇒ 目录不存在时**跳过并如实标注**；
+  `op=levels` 只认 `local LEVELS = {` ⇒ 支持 `X.LEVELS`/多级前缀/裸赋值，抽不到时**列候选**并指向新暴露的 `nameHint`；
+  `npm test` 原来 `&&` 串联（第一个套件红带走后面 8 套）⇒ 新增 `tools/test-all.mjs`，顺序跑完全部套件再汇总。
+- **★ 消灭一处『看起来是事实』的误导文案**：`map op=clientui` 的 hint 曾写「**本关** 1073741867/68 可创建」，
+  而那两个号**来自别的关卡**。现在「本关读到的」只报本关 `.gil` 里的号，真机佐证一律**带来源关卡**；面板侧同一句文案也已同步。
+- **★ `log op=runs` 的 `errorKinds` 现在说清命中了哪些词**：词表从一条大正则拆成「一个词一条」再推导合并正则（计数与命中词**同源**），
+  `errorSample[]` 每项带 `matched: []`，另加 `errorMatched` / `faultMatched`。⚠️ **回执形状变更**：`errorSample` 由字符串数组变成对象数组。
+- **★ `playtest op=status` 给 `closed` 枚举加人话**（`seen` / `implicit`，后者 = 没看到显式结束标记，多半被切场景/关窗口）；
+  未知取值如实回 `null`。判据一字未改。
+- **★ `code op=deploy` 的 `nextStep` 分清『挂过没有』**：新增 `mount{mounted,known}`（名字比较复用 `sameScriptName`）——
+  未挂载时提示「先挂到客户端控件容器的容器节点上」，判断不了时明说判断不了。
+
+
 - **★★ 坐标参数不再静默兜 0（源码审计抓到）**：`lib/sim.mjs` 的步骤规范化原来是 `Number(v) || 0`，
   于是 AI 写错坐标（`click:{x:"abc"}`、`click:[800]`、`pointer:{x:null}`）会**静默变成 (0,0)** ——
   一次点在左下角的点击「看起来成功」却什么都没点到；引擎那层 `isFinite` 校验救不了（Host 在更早一步就兜成 0 了）。
@@ -121,14 +159,13 @@
   这个动作值得变成工具的一个 op。
 
 ### 已验证
-- `npm test` 退出码 **0** = **640 项**：**先跑两道语言层绊线** —— `node tools/lint.mjs`（98 文件 / 21 条硬规则 / 0 命中 / 0 死导出）
-  与 `node tools/typecheck.mjs`（我们自己的文件 **0** 条，engine 上游 97 条如实报数）；再 `readme` 14 · `smoke` **58** ·
-  `deploy` 33 · `probe-deploy` 16 · `lualint` 32 · `shot` 104 · `sim` **167** · `sim-play` 41 · `client-render` 45 · 引擎 130。
-- **P1 成本量出来了（以前全靠感觉）**：工具 schema **26.3 KB**（其中 `miliastra_sim` **6.1 KB = 23%**）、
-  sim worker 启动 **288 ms** / 停 12 ms、`/miliastra/engine` 往返 **10 ms**（`play get{view:true}` 约 216 ms）、
-  输入注入 p50 **4.6 ms**。⚠️ 顺手纠正：README 里那个「schema 46 KB」其实是**README 生成块的字符数**，与 schema 体积是两回事，已改正。
-- `smoke` 新增 3 条：第二轮验收项在岗、纯函数自测（类型报错分得清「我们/上游」、死导出只抓真的）、
-  **schema 体积棘轮 26.3 KB ≤ 32 KB**。
+- `npm test` 退出码 **0** = **15 个套件 / 702 条断言**（新增 `tests/locate-test.mjs` 15 · `tests/leveldata-hint-test.mjs` 11 ·
+  `tests/feedback2-test.mjs` 32；`tools/test-all.mjs` 顺序跑完全部套件再汇总，不再 `&&` 串联）。
+- **跨 Node 健壮性**：`Node v24.9.0` 的 `fs.rmSync` 静默失败已按实测改掉（`unlinkSync` + 注释 + 结构断言）。
+- **真机只读复核**：`op=inspect` 报 `pickedBy:"gil" / selectedFile:"双相.lua"`；`health brief` 600 B；
+  `probe render custom` 走通且**不落盘**；活文件目录与 `_backup` 全程零改动。
+- ⚠️ **诚实记录**：`playtest-test` 里那条「真机日志找得到开跑」在本机**因日志换代**（261 KB 里 `SetCurLevelData` 0 次）
+  改成「一条信号都没有 → 跳过并打印原因」；只要日志里有任何开跑行，断言照旧执行。
 
 ## [0.2.0] — 2026-09-24
 

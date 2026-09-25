@@ -200,11 +200,20 @@ const realLog = playtestLogPath('原神');
 if (fs.existsSync(realLog)) {
   const r = scanLog(realLog);
   ok('真机 output_log.txt 扫得动', r.ok === true && r.size > 0, r.error || '');
+  // ⚠️ `output_log.txt` **按游戏启动换代**（重启即重建）——刚换代时整份日志里一条 SetCurLevelData 都没有，
+  //    那时「找不到开跑」是**日志的事实**，不是解析的毛病（这条原本会假红）。
+  const raw = (() => { try { return fs.readFileSync(realLog, 'utf8'); } catch { return ''; } })();
+  const sawAnyPlaytest = /SetCurLevelData/.test(raw);
   const runs = r.ok ? r.state.runs.length : 0;
   const hasStart = r.ok ? Number.isFinite(r.state.lastStartAtMs) || runs > 0 : false;
-  ok('真机日志里确实找得到「试玩开跑」记录', hasStart, 'runs=' + runs);
-  if (r.ok && r.state.epochSec) {
-    console.log('  · 本机最近一次开跑 epoch = ' + r.state.epochSec + '，在跑=' + r.state.inPlaytest + '，历史上共 ' + runs + ' 局');
+  if (!sawAnyPlaytest) {
+    console.log('- 跳过真机开跑检查：这份 output_log.txt 里**一条 SetCurLevelData 都没有**'
+      + '（游戏重启换代了，这一轮还没试玩过）—— 与「没有这个文件就跳过」同一类，不算失败');
+  } else {
+    ok('真机日志里确实找得到「试玩开跑」记录', hasStart, 'runs=' + runs);
+    if (r.ok && r.state.epochSec) {
+      console.log('  · 本机最近一次开跑 epoch = ' + r.state.epochSec + '，在跑=' + r.state.inPlaytest + '，历史上共 ' + runs + ' 局');
+    }
   }
 } else {
   console.log('- 跳过真机检查：本机没有 ' + realLog);
