@@ -3,7 +3,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具 ——
 > 让 AI Agent 自己定位活文件、读地图存档、跑探针、取运行时日志、看画面，不用你手动复制粘贴。
 
-**版本 `0.2.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
+**版本 `0.3.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 🎯 **目标是让 AI 更好用。** 这个插件是**一个 AI 写给其它 AI 用的**：不是"替人省点击"，
@@ -48,24 +48,22 @@ miliastra_health {}
 `.gia` 是二进制日志，`print` 的东西肉眼很难捞 —— 每次排障都在「人肉找路径 → 手动拷贝 → 复制日志给 AI」里打转。
 本插件把这套动作变成 **9 个工具 + 一个侧边栏面板**。
 
-## 安装：目前**只能从源码 / git 装**（npm 上没有版本）
+## 安装
 
-> ⚠️ **暂不支持 npm**：本包**在 npm 上没有任何已发布版本**（`npm view dsh-miliastra` → **404**）。
-> 所以**不存在**「装一个 npm 版本」这种装法 —— 现在跑这类命令只会失败。唯一可行的是**源码 / git**：
-> 克隆仓库 → 软链进 profile 的 `node_modules` → 注册进 `dsh.profile.bundles` → 重启 `dsh web`。
+**方式一：npm（推荐）**
 
 ```powershell
-git clone <本仓库地址> dsh-miliastra
-cd dsh-miliastra
-# ① 软链到 profile 的 node_modules（开发态）
-cmd /c mklink /J "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-miliastra" (Get-Location).Path
-# ② **注册进 bundles** —— 少了这步插件完全不会加载（只放软链没用，原因见教程）
-#    编辑 %USERPROFILE%\.dsh\profiles\web\package.json，把 "dsh-miliastra" 加进 dsh.profile.bundles
-# ③ 重启 Web GUI（Host 半边是启动时加载的快照，不重启不生效）
-dsh web
+dsh plugin --profile web add dsh-miliastra@0.3.0
 ```
 
-每一步为什么会这样、装完怎么自查、常见坑、以后要发 npm 时怎么做 → [`docs/快速上手与教程.md`](docs/快速上手与教程.md)。
+装完**重启 `dsh web`**（插件在启动时加载）。包页：<https://www.npmjs.com/package/dsh-miliastra>
+
+**方式二：源码 / git**（要改插件本身时用）
+
+克隆 → 软链进 profile 的 `node_modules` → 注册进 `dsh.profile.bundles` → 重启 `dsh web`。
+三步细节、装完怎么自查、常见坑、发版流程 → [`docs/快速上手与教程.md`](docs/快速上手与教程.md)。
+
+> ⚠️ **只放软链没用**：少了注册 `dsh.profile.bundles` 这一步，插件完全不会加载（原因见教程）。
 
 ---
 
