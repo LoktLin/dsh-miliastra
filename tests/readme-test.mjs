@@ -1,23 +1,25 @@
 #!/usr/bin/env node
 /**
- * README 与代码的**一致性**测试（防止「主文档又变旧」）。
+ * README / `docs/工具参考.md` 与代码的**一致性**测试（防止「文档又变旧」）。
  *
- * 背景：本文件（README）是**第二份副本**，手写的工具清单**必然漂移** ——
- * 实测过两次：① 第一段版本号停在 `0.0.1` 六次发布没人发现；
- * ② 系统提示段的工具指路漏了 4 个版本（两个工具在 AI 开场提示里根本没指路）。
- * 所以工具清单**不手写**：由 `tools/gen-readme-tools.mjs` 从 `index.js` 的 `TOOLS` 生成，
- * 这里**逐字比对** + 检查导航表覆盖全部工具 + 检查 README 里没有「已经不存在的工具名」。
+ * 背景：手写的工具清单**必然漂移** —— 实测过两次：① README 第一段版本号停在 `0.0.1`
+ * 六次发布没人发现；② 系统提示段的工具指路漏了 4 个版本（两个工具在 AI 开场提示里根本没指路）。
+ * 所以工具清单**不手写**：由 `tools/gen-readme-tools.mjs` 从 `index.js` 的 `TOOLS` 生成到
+ * **`docs/工具参考.md`**（README 只留导航与链接），这里**逐字比对**那一篇 +
+ * 检查 README 导航表覆盖全部工具 + 检查 README 里没有「已经不存在的工具名」；
+ * 另有一条**反向绊线**：README 里**不许再出现**生成标记（搬走的生成块不许爬回来）。
  *
  * 失败时怎么办：
  *   - 「生成块与代码不一致」 → 跑 `node tools/gen-readme-tools.mjs --write`
  *   - 「导航表缺某个工具」   → 在 `<!-- BEGIN MANUAL:tool-picker -->` 那一段补一行
  *   - 「README 提到不存在的工具」 → 改文档（或把工具加回去）
+ *   - 「README 里又出现生成标记」 → 生成块只属于 `docs/工具参考.md`，README 改成链接
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TOOLS } from '../index.js';
-import { BEGIN, END, README_PATH, extractToolsSection, renderToolsSection } from '../tools/gen-readme-tools.mjs';
+import { BEGIN, END, README_PATH, TOOLS_DOC_PATH, extractToolsSection, renderToolsSection } from '../tools/gen-readme-tools.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const MANUAL_BEGIN = '<!-- BEGIN MANUAL:tool-picker -->';
@@ -43,15 +45,27 @@ const assert = (cond, msg) => {
 
 // 统一成 LF 再断言：文件在 Windows 上可能是 CRLF，而 `\n\n` 这种正则会被 `\r` 破坏（实测踩过）
 const readme = fs.readFileSync(README_PATH, 'utf8').replace(/\r\n/g, '\n');
+// 工具速查的生成块已从 README 搬到 `docs/工具参考.md` —— 逐字比对针对那一篇（README 只留导航与链接）
+const toolsDoc = fs.readFileSync(TOOLS_DOC_PATH, 'utf8').replace(/\r\n/g, '\n');
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8'));
 const toolNames = TOOLS.map((tool) => tool.name);
 const nameSet = new Set(toolNames);
 
 /* ---- 1. 标记与生成块 ---- */
 
-t('README 里有成对的生成标记', () => {
-  assert(readme.includes(BEGIN) && readme.includes(END), `找不到 ${BEGIN} … ${END}；生成块被删了？`);
+t('`docs/工具参考.md` 里有成对的生成标记', () => {
+  assert(toolsDoc.includes(BEGIN) && toolsDoc.includes(END), `找不到 ${BEGIN} … ${END}；生成块被删了？`);
   return `${BEGIN} … ${END}`;
+});
+
+// ★ 反向绊线（作者要求「自动生成的工具说明移到子文档」）：搬走了就不许爬回来 ——
+//   否则下一次有人「顺手补文档」时，README 会重新长出一份重复/手写的清单，两份又各自漂移。
+t('README 里**不再**有生成标记（生成块只在 `docs/工具参考.md`）', () => {
+  assert(
+    !readme.includes(BEGIN) && !readme.includes(END),
+    `README 里又出现了 ${BEGIN} … ${END} —— 生成块只属于 \`docs/工具参考.md\`；README 里要补说明请改成链接`,
+  );
+  return '反向绊线：README 里没有生成标记';
 });
 
 t('README 里有成对的「导航表」标记', () => {
@@ -60,7 +74,7 @@ t('README 里有成对的「导航表」标记', () => {
 });
 
 t('生成块与 `TOOLS` **逐字一致**', () => {
-  const { markersFound, body } = extractToolsSection(readme);
+  const { markersFound, body } = extractToolsSection(toolsDoc);
   assert(markersFound, '标记缺失');
   const expected = renderToolsSection();
   if (body === expected) return `${expected.length} 字符，与 ${toolNames.length} 个工具的 schema 一致`;
@@ -68,7 +82,7 @@ t('生成块与 `TOOLS` **逐字一致**', () => {
   const at = [...Array(Math.min(body.length, expected.length) + 1).keys()].find((i) => body[i] !== expected[i]);
   const line = body.slice(0, at).split('\n').length;
   throw new Error(
-    `生成块与代码不一致（第一处差异在第 ${line} 行）→ 跑 \`node tools/gen-readme-tools.mjs --write\`；` +
+    `docs/工具参考.md 的生成块与代码不一致（第一处差异在第 ${line} 行）→ 跑 \`node tools/gen-readme-tools.mjs --write\`；` +
       `块 ${body.length} 字符 vs 代码 ${expected.length} 字符`,
   );
 });
@@ -99,10 +113,10 @@ t('`TOOLS` 里每个工具都在 README 里出现', () => {
   return `${toolNames.length} 个都在`;
 });
 
-/* ---- 4. 每个工具的每个 op 与参数都在生成块里（生成块 = schema 投影）---- */
+/* ---- 4. 每个工具的每个 op 与参数都在生成块里（生成块 = schema 投影，落在 docs/工具参考.md）---- */
 
-t('每个 op 取值都出现在生成块里', () => {
-  const body = extractToolsSection(readme).body || '';
+t('每个 op 取值都出现在 `docs/工具参考.md` 的生成块里', () => {
+  const body = extractToolsSection(toolsDoc).body || '';
   const ops = [];
   for (const tool of TOOLS) {
     const props = (tool.parameters && tool.parameters.properties) || {};
@@ -121,8 +135,8 @@ t('每个 op 取值都出现在生成块里', () => {
   return `${ops.length} 个 op 取值（${[...new Set(ops.map((p) => p.split(':')[0]))].length} 个工具）`;
 });
 
-t('每个参数名都在生成块里', () => {
-  const body = extractToolsSection(readme).body || '';
+t('每个参数名都在 `docs/工具参考.md` 的生成块里', () => {
+  const body = extractToolsSection(toolsDoc).body || '';
   const missing = [];
   for (const tool of TOOLS) {
     const props = (tool.parameters && tool.parameters.properties) || {};

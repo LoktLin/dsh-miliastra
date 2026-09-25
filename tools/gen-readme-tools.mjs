@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * 从 `index.js` 的 `TOOLS` 生成 README 里的「工具速查」块。
+ * 从 `index.js` 的 `TOOLS` 生成 `docs/工具参考.md` 里的「工具速查」块。
  *
- *   node tools/gen-readme-tools.mjs --write    # 刷新 README 里对应的块
+ *   node tools/gen-readme-tools.mjs --write    # 刷新 `docs/工具参考.md` 里对应的块
  *   node tools/gen-readme-tools.mjs            # 只打印（不写盘）
  *
- * 为什么要生成：README 是**第二份副本**，手写的工具清单**必然漂移**
+ * 为什么要生成：`docs/工具参考.md` 是**第二份副本**，手写的工具清单**必然漂移**
  * （实测：README 第一段的版本号曾一路停在 0.0.1 六次发布没人发现；
  * 系统提示段的工具指路漏了 4 个版本）。所以工具清单不做手写 ——
  * 从**唯一真身**（工具 schema）生成，并由 `tests/readme-test.mjs` 逐字比对。
@@ -17,9 +17,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TOOLS } from '../index.js';
+import { atomicWriteFile } from '../lib/fsx.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+/** 主文档 README。生成块已搬到 `docs/工具参考.md`；这个导出保留给 `tests/readme-test.mjs` 读主文档。 */
 export const README_PATH = path.join(here, '..', 'README.md');
+/** 工具速查块所在的**子文档**：README 只留导航与链接，完整说明（含每个 op / 参数）在这里，由 `--write` 生成。 */
+export const TOOLS_DOC_PATH = path.join(here, '..', 'docs', '工具参考.md');
 export const BEGIN = '<!-- BEGIN GENERATED:tools -->';
 export const END = '<!-- END GENERATED:tools -->';
 
@@ -102,18 +106,21 @@ export function renderToolsSection() {
 /** 文件自己的行尾 —— 生成块必须跟着它，不然会写出「一半 CRLF 一半 LF」的文件。 */
 const eolOf = (text) => (text.includes('\r\n') ? '\r\n' : '\n');
 
-/** 把 README 里两个标记之间的内容替换成 `renderToolsSection()`。返回新全文。 */
-export function spliceIntoReadme(readme) {
-  const start = readme.indexOf(BEGIN);
-  const end = readme.indexOf(END);
+/** 把 `docs/工具参考.md` 里两个标记之间的内容替换成 `renderToolsSection()`。返回新全文。 */
+export function spliceIntoDoc(text) {
+  const start = text.indexOf(BEGIN);
+  const end = text.indexOf(END);
   if (start < 0 || end < 0 || end < start) {
-    throw new Error(`README 里找不到成对的标记 → ${BEGIN} … ${END}`);
+    throw new Error(`docs/工具参考.md 里找不到成对的标记 → ${BEGIN} … ${END}`);
   }
-  const eol = eolOf(readme);
+  const eol = eolOf(text);
   let body = renderToolsSection();
   if (eol === '\r\n') body = body.replace(/\n/g, '\r\n');
-  return readme.slice(0, start + BEGIN.length) + eol + body + readme.slice(end);
+  return text.slice(0, start + BEGIN.length) + eol + body + text.slice(end);
 }
+
+/** 兼容别名：外部若仍 `import { spliceIntoReadme }`，拿到的是同一实现（改名不断外部 import）。 */
+export const spliceIntoReadme = spliceIntoDoc;
 
 /** 只读出标记之间的正文（不比对）。**统一成 LF**（否则 CRLF 与 LF 会被当成不一致）。 */
 export function extractToolsSection(readme) {
@@ -129,14 +136,15 @@ export function extractToolsSection(readme) {
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const readme = fs.readFileSync(README_PATH, 'utf8');
-  const next = spliceIntoReadme(readme);
+  const doc = fs.readFileSync(TOOLS_DOC_PATH, 'utf8');
+  const next = spliceIntoDoc(doc);
   if (process.argv.includes('--write')) {
-    if (next === readme) {
-      console.log('README 的工具速查块**已是最新**，没有改动。');
+    if (next === doc) {
+      console.log('docs/工具参考.md 的工具速查块**已是最新**，没有改动。');
     } else {
-      fs.writeFileSync(README_PATH, next);
-      console.log(`已刷新 README 的工具速查块（${readme.length} → ${next.length} 字符）。`);
+      // 写盘只走 `lib/fsx.mjs`（本仓库规矩：原子替换，不留半截文件）
+      atomicWriteFile(TOOLS_DOC_PATH, next);
+      console.log(`已刷新 docs/工具参考.md 的工具速查块（${doc.length} → ${next.length} 字符）。`);
     }
   } else {
     console.log(renderToolsSection());
