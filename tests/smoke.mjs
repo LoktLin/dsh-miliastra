@@ -12,6 +12,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { TOOLS, PROMPT_GUIDE, PROMPT_SKIP, renderPromptSection, hostStaleness, engineArgsFromBody, playPageSource, playPageStamp } from '../index.js';
 import { slimStats } from '../lib/metrics.mjs';
@@ -462,23 +463,56 @@ for (const [toolName, args] of CASES) {
     }
   }
 
-  const lvFull = await codeTool.execute({ op: 'levels' }, {});
-  const lvSlim = await codeTool.execute({ op: 'levels', summaryOnly: true }, {});
-  const lvOne = await codeTool.execute({ op: 'levels', stage: 3 }, {});
-  const jFull = JSON.stringify(lvFull).length;
-  const jSlim = JSON.stringify(lvSlim).length;
-  const row = (lvSlim.levels || [])[0] || {};
-  const keepsNumbers = ['stage', 'platCount', 'adjacentCount', 'adjacentOverlaps', 'risingOverlaps', 'trueOverlaps', 'nearMiss', 'spanX']
-    .every((k) => typeof row[k] === 'number');
-  if (jSlim < jFull / 5 && keepsNumbers && (lvOne.levels || []).length === 1 && JSON.stringify(lvOne).length < jFull) {
-    console.log(`✓ op=levels 的 summaryOnly 真的省上下文 → 全量 ${jFull}B → 摘要 ${jSlim}B（${Math.round(jSlim / jFull * 100)}%），`
-      + `stage=3 单关 ${JSON.stringify(lvOne).length}B，且摘要里的数字都在`);
-    pass += 1;
-  } else {
-    fail += 1;
-    failures.push('[ergonomics] op=levels summaryOnly 没省到 / 丢了数字：'
-      + JSON.stringify({ jFull, jSlim, keepsNumbers, one: (lvOne.levels || []).length }));
-  }
+/*
+     * ⚠️ 这条以前**直接跑本机当前活文件** —— 一换到没有 `LEVELS` 表的工程（实测：1073741835 的 6 脚本图）
+     * 就会红成「summaryOnly 没省到」，其实是被测对象没了（假红，跟 `lualint-test` 那条是同一类病）。
+     * 现在**自造一棵假 LocalLow + 合成关卡表**（`MILIASTRA_LOCALLOW`，同 `locate-test` 的做法）：
+     * 可移植、可复现、不碰真实存档与活文件。夹具标定：3 关 × 每关 20 块 → 压缩比 ≈ 0.07（判据 0.2）。
+     */
+    const lvTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-levels-'));
+    const lvSavedLow = process.env.MILIASTRA_LOCALLOW;
+    const lvSavedBak = process.env.MILIASTRA_BACKUP_DIR;
+    const lvRoot = path.join(lvTmp, 'miHoYo', '原神', 'BeyondLocal', '201170108', 'Beyond_Local_Save_Level', '1073741999');
+    const lvLuaDir = path.join(lvRoot, 'external_lua_file');
+    fs.mkdirSync(lvLuaDir, { recursive: true });
+    {
+      const rows = [];
+      for (let i = 1; i <= 3; i++) {
+        const plats = [];
+        for (let k = 0; k < 20; k++) plats.push('{' + (k * 12) + ',' + (i * 3) + ',10,10,0}');
+        rows.push("  { name = 'L" + i + "', plats = { " + plats.join(', ') + ' } }');
+      }
+      fs.writeFileSync(path.join(lvLuaDir, 'main.lua'),
+        ['-- 合成关卡表（smoke 用；不依赖本机活文件）', 'local LEVELS = {', rows.join(',\n'), '}', 'return LEVELS', ''].join('\n'), 'utf8');
+    }
+    fs.writeFileSync(path.join(lvRoot, '1073741999.gil'), Buffer.from('DSHTESTGIL', 'utf8'));
+    process.env.MILIASTRA_LOCALLOW = path.join(lvTmp, 'miHoYo');
+    process.env.MILIASTRA_BACKUP_DIR = path.join(lvTmp, 'backups');
+    let lvFull, lvSlim, lvOne;
+    try {
+      lvFull = await codeTool.execute({ op: 'levels' }, {});
+      lvSlim = await codeTool.execute({ op: 'levels', summaryOnly: true }, {});
+      lvOne = await codeTool.execute({ op: 'levels', stage: 3 }, {});
+    } finally {
+      process.env.MILIASTRA_LOCALLOW = lvSavedLow === undefined ? '' : lvSavedLow;
+      process.env.MILIASTRA_BACKUP_DIR = lvSavedBak === undefined ? '' : lvSavedBak;
+      fs.rmSync(lvTmp, { recursive: true, force: true });
+    }
+    const jFull = JSON.stringify(lvFull).length;
+    const jSlim = JSON.stringify(lvSlim).length;
+    const row = (lvSlim.levels || [])[0] || {};
+    const keepsNumbers = ['stage', 'platCount', 'adjacentCount', 'adjacentOverlaps', 'risingOverlaps', 'trueOverlaps', 'nearMiss', 'spanX']
+      .every((k) => typeof row[k] === 'number');
+    if (lvFull.ok && (lvFull.levels || []).length === 3 && jSlim < jFull / 5 && keepsNumbers
+      && (lvOne.levels || []).length === 1 && JSON.stringify(lvOne).length < jFull) {
+      console.log(`✓ op=levels 的 summaryOnly 真的省上下文（合成夹具 3 关 × 20 块）→ 全量 ${jFull}B → 摘要 ${jSlim}B（${Math.round(jSlim / jFull * 100)}%），`
+        + `stage=3 单关 ${JSON.stringify(lvOne).length}B，且摘要里的数字都在`);
+      pass += 1;
+    } else {
+      fail += 1;
+      failures.push('[ergonomics] op=levels summaryOnly 没省到 / 丢了数字：'
+        + JSON.stringify({ ok: lvFull.ok, levels: (lvFull.levels || []).length, jFull, jSlim, keepsNumbers, one: (lvOne.levels || []).length, err: String(lvFull.error || '').slice(0, 80) }));
+    }
 
   const mFull = await logTool.execute({ op: 'metrics' }, {});
   const mSlim = await logTool.execute({ op: 'metrics', summaryOnly: true }, {});

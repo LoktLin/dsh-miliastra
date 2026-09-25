@@ -575,7 +575,7 @@ const TOOLS = [
       + '"Read text file with BOM header may cause Lua error"）。BOM 不是本工具加的，'
       + '实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → '
       + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。'
-      + '\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
+      + '\n★ **部署不会热加载**：改完脚本要 **stop → `op=deploy` → 重新试玩**；想确认某局跑的是哪版代码，看 `.gia` 里脚本自己 `print` 出来的版本行。\n⚠️ **多脚本地图**：`mount` 目前只读存档里单条嵌入脚本名（多脚本工程可能误报未挂载）—— 详见 `miliastra_map` 的同一条说明。\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
       + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua —— 不在沙箱里也行）｜'
       + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua"}`（投代码）｜'
       + '`{"op":"levels","summaryOnly":true}`（先扫全部关卡几何）→ `{"op":"levels","stage":3}`（再钻第 3 关）',
@@ -858,7 +858,7 @@ const TOOLS = [
       + 'op=strings 提取可读字符串（偏移+文本），存盘前后 diff 用。'
       + '判据：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**；'
       + '画布上摆的实例、以及模板控件的子节点，一律返回 nil。'
-      + '\n\n**典型调用**：`{"op":"summary"}`（版本/脚本映射/模板数）｜'
+      + '\n⚠️ **多脚本地图的已知限制**（2026-09-25 实测）：`mount` 目前只能读到存档里**单条**嵌入脚本名 ⇒ 6 个脚本的工程可能全部误报「未挂载」。判挂载请以 `embedded` 与工作区 `tools/scan-gil-ids.mjs <gil> <映射索引…>` 的命中数为准。\n\n**典型调用**：`{"op":"summary"}`（版本/脚本映射/模板数）｜'
       + '`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）',
     parameters: {
       type: 'object',
@@ -1272,7 +1272,7 @@ const TOOLS = [
       + '**不会自动删**：清理要显式给条件（`all` 或 `olderThanDays`），真删还要 `confirm:true`。'
       + '回执恒带 `pid / process / title` —— 明确告诉你**截到的到底是哪个窗口**'
       + '（第一版抓错了程序，光看 `ok:true` 根本发现不了）。'
-      + '\n\n**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜'
+      + '\n★ **连拍每张约 2.6~3.5 秒**（回执里的 `measuredIntervalMs` 是实测值，`burstMs` 给再小也无效）：**短局（< 20 秒）覆盖不了全程**，且**开局头 ~8 秒通常是加载画面** —— 要抓中后段得自己按 `miliastra_playtest` 的开局时刻算，别指望连拍自动落在局内。\n\n**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜'
       + '`{"op":"burst","awaitPlaytest":true,"afterSec":3,"count":5}`（**等开跑 → 等 3 秒 → 连拍 5 张**，一次调用）｜'
       + '`{"op":"burst","dryRun":true}`（先看要多久、拍几张）',
     parameters: {
@@ -1771,7 +1771,7 @@ const TOOLS = [
       + '\n⚠️ `frame` **不是秒表**：连续注入按键会顺带推帧（实测静置 30fps、注入期间 41.7/s），要计时用 `time`。'
       + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
-      + '\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
+      + '\n⚠️ **`op=shot` / `op=frames` 的 PNG 渲染不含「客户端控件层」** —— 脚本建的控件不在那张图里（`op=bind` 的 `run.controlCount` 与 `op=controls runtime:true` 里是有的）⇒ 手写客户端 UI 的**视觉验收必须看真机或面板右栏那个试玩页**；模拟器只能验逻辑与控件树。\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
       + '控件类型拿不准：`{"op":"bind","source":"…\\\\双相.lua","templates":[{"guid":1073741867,"kind":"auto"}]}`；'
       + '自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
       + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
