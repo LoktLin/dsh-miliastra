@@ -47,6 +47,7 @@ export const SUITES = [
   { name: 'sim-play-test（浏览器试玩页那一串调用）', args: ['tests/sim-play-test.mjs'] },
   { name: 'client-render-test（客户端控件渲染）', args: ['tests/client-render-test.mjs'] },
   { name: 'feedback2-test（第二批反馈修复 ①~⑧）', args: ['tests/feedback2-test.mjs'] },
+  { name: 'feedback3-test（第三批：A1/A2/B1~B4/C1/D1）', args: ['tests/feedback3-test.mjs'] },
   { name: 'engine（`node --test` 上游单测）', args: ['--test', 'engine/**/*.test.mjs'] },
 ];
 

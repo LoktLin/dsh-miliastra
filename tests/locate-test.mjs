@@ -254,6 +254,13 @@ await check('★ 集成：op=inspect（不带 file）→ 选 **GIL 里嵌的那�
   assert(r.mountedName === 'game_01.lua' || r.mountedName === 'game_01', '没报出 GIL 的挂载名：' + r.mountedName);
   assert(Array.isArray(r.candidates) && r.candidates.length === 3, 'candidates 不对：' + JSON.stringify(r.candidates));
   assert(r.candidates.some((c) => c.name === '测试.lua'), '候选里应当能看到「测试.lua」（透明，但不选它）');
+  // 任务书 2026-09-25 §3 口径 #1：**inspect 也必须能判挂载**（旧实现在多脚本地图上只会假阴性）。
+  // ⚠️ 这棵树里的**合成 .gil 没有挂载表**（新解析器读 `#5{槽位,映射索引}`），所以这里验的是不变量；
+  //    正向已在真机六脚本图核过：`op=inspect file=主控 main.lua` → known:true / mounted:true / matched:主控 main.lua。
+  assert(r.mount && typeof r.mount === 'object' && 'known' in r.mount,
+    'op=inspect 必须带 mount（任务书 §3 口径 #1）：' + JSON.stringify(r.mount));
+  assert(!(r.mount.mounted === false && r.mount.known !== true),
+    '拿不到挂载信息时不许报 mounted:false —— 那正是 A1 的假阴性：' + JSON.stringify(r.mount));
   return `selectedFile=${r.selectedFile} pickedBy=${r.pickedBy} 候选=${r.candidates.map((c) => c.name).join(' > ')}`;
 });
 

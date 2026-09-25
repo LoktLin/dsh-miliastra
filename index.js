@@ -35,11 +35,11 @@ import { fileURLToPath } from 'node:url';
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt } from './lib/codefile.mjs';
-import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf } from './lib/gil.mjs';
-import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns } from './lib/gia.mjs';
+import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
+import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
-  playtestSummary, shouldHit,
+  playtestSummary, shouldHit, logSize,
 } from './lib/playtest.mjs';
 import { PROBE_TEMPLATES, PROBE_TEMPLATE_CHOICES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
 import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './lib/leveldata.mjs';
@@ -51,7 +51,7 @@ import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
   shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture,
   thumbPathFor, resolveShotFile, ensureThumbnail,
-  planBurst, burstSummary, BURST_FLOOR_MS, BURST_MAX_COUNT,
+  planBurst, burstSummary, BURST_FLOOR_MS, BURST_MAX_COUNT, frameInRun,
 } from './lib/shot.mjs';
 
 const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
@@ -141,7 +141,8 @@ function reconcileWithGil(lv, livePath) {
     if (!lv.gil || !lv.gil.path) return { ok: false, reason: '这个关卡下没有 .gil（编辑器里还没存过盘？）' };
     const gil = readGil(lv.gil.path);
     if (!gil.ok) return { ok: false, reason: '地图读不出来：' + gil.error, gilPath: lv.gil.path };
-    if (!gil.script) {
+    const all = Array.isArray(gil.scripts) ? gil.scripts : (gil.script ? [gil.script] : []);
+    if (!all.length) {
       return {
         ok: false, gilPath: lv.gil.path,
         reason: '地图里没有脚本映射记录 —— 说明编辑器还没把脚本挂到这个关卡上（或没存盘）',
@@ -149,13 +150,21 @@ function reconcileWithGil(lv, livePath) {
     }
     const cur = inspect(livePath);
     /*
+     * ★ 先按**名字**在多脚本映射表里挑出与本次活文件同一条（0.3.1，反馈 A1）：
+     *   多脚本工程的 `#50` 第一条常常是**旧占位**（实测「新建客户端脚本」），
+     *   直接拿它去比，得到的永远是「地图快照属于另一个脚本」这种没用的话。
+     *   挑不到就**退回第一条**（行为与旧版一致，不假装）。
+     */
+    const picked = pickScriptMapping(all, pathBasenameOf(livePath));
+    const embedded = picked.mapping || all[0];
+    /*
      * ⚠️ 判据**不是**「拿地图里嵌的哈希和这个文件比」那么简单（2026-09-25 修）：
      *    一个关卡可以有多个活文件，若地图里嵌的**根本是另一个脚本**，那两个哈希本来就不同源 ——
      *    这时报「地图里嵌的还是旧版 → 先别急着试玩」是**反向假告警**。
      *    所以判断逻辑抽到 `compareScriptSnapshot`（纯函数，可单测）：名字对不上就**不比**，如实说清。
      */
     const cmp = compareScriptSnapshot({
-      embedded: gil.script,
+      embedded,
       live: { name: pathBasenameOf(livePath), path: livePath, sha256: cur.sha256, size: cur.size },
     });
     return {
@@ -165,6 +174,10 @@ function reconcileWithGil(lv, livePath) {
       skipped: cmp.skipped || null,
       embedded: cmp.embedded,
       live: cmp.live,
+      // 多脚本工程里「挑中的是不是同一份」也要能看见（挑不到时 matchedBy 为 null）
+      mappingId: embedded ? embedded.mappingId : null,
+      mappingMatchedBy: picked.matchedBy,
+      mappingCount: all.length,
       embeddedSha256: cmp.embedded ? cmp.embedded.sha256 : null,
       liveSha256: cur.sha256,
       embeddedBytes: cmp.embedded ? cmp.embedded.bytes : null,
@@ -265,25 +278,72 @@ function resolveLevel(q) {
  * 编辑器认的是地图里记着的挂载名，不是「名字里带没带『测试』」。
  * 读不到 GIL（没有 .gil / 解析失败 / 没脚本映射）就返回空数组 —— **静默回退 mtime**，不为它报错。
  *
+ * ★ 0.3.1（反馈 A1）：**读全部映射、并且区分「已挂载集合」**。
+ *   旧实现只读 `#50` 的**第一条**——6 脚本地图里第一条是旧占位「新建客户端脚本」，
+ *   于是 6 次部署全部误报 `mount.mounted:false`（假阴性）。
+ *
  * 按「gil 路径 + mtime」缓存：一次工具调用里可能选好几回文件，不必反复解 86KB 的 protobuf。
  */
-const mountedNamesCache = new Map();
-function mountedScriptNames(lv) {
-  if (!lv || !lv.gil || !lv.gil.path) return [];
+const gilScriptCache = new Map();
+/**
+ * 一个关卡的地图脚本信息：`{ok, mappings, allNames, mountedNames, mountedIds, mountKnown, mountSource}`。
+ * `allNames` 用于**挑活文件**（宁多勿漏）；`mountedNames` + `mountKnown` 用于**判挂载**（宁缺勿假）。
+ */
+function gilScriptInfo(lv) {
+  const empty = {
+    ok: false, mappings: [], allNames: [], mountedNames: [], mountedIds: [], mountKnown: false, mountSource: null,
+  };
+  if (!lv || !lv.gil || !lv.gil.path) return empty;
   const key = lv.gil.path + '@' + (lv.gil.mtimeMs || lv.gil.mtime || '');
-  if (mountedNamesCache.has(key)) return mountedNamesCache.get(key);
-  let names = [];
+  if (gilScriptCache.has(key)) return gilScriptCache.get(key);
+  let info = empty;
   try {
     const gil = readGil(lv.gil.path);
-    if (gil.ok && gil.script) {
-      const raw = [gil.script.file, gil.script.name].filter((x) => typeof x === 'string' && x.trim());
-      names = raw.map((x) => pathBasenameOf(x));
-      for (const x of raw) if (!/\.lua$/i.test(x)) names.push(pathBasenameOf(x) + '.lua');
-      names = [...new Set(names)];
+    if (gil.ok) {
+      const mappings = Array.isArray(gil.scripts) ? gil.scripts : (gil.script ? [gil.script] : []);
+      const mounts = gil.scriptMounts || { known: false, refs: [], ids: [], byId: {}, note: null };
+      const mountedIds = Array.isArray(mounts.ids) ? mounts.ids : [];
+      const pick = (list) => {
+        const out = [];
+        for (const m of list) {
+          const raw = [m.file, m.name].filter((x) => typeof x === 'string' && x.trim());
+          for (const x of raw) {
+            out.push(pathBasenameOf(x));
+            if (!/\.lua$/i.test(x)) out.push(pathBasenameOf(x) + '.lua');
+          }
+        }
+        return [...new Set(out)];
+      };
+      const mountKnown = mounts.known === true;
+      const mounted = mappings.filter((m) => mountedIds.indexOf(m.mappingId) >= 0);
+      info = {
+        ok: true,
+        mappings: mappings.map((m) => ({
+          mappingId: m.mappingId,
+          name: m.name,
+          file: m.file,
+          bytes: m.sourceBytes,
+          sha256: m.sourceSha256,
+          mountedOn: (mounts.byId && mounts.byId[m.mappingId]) || null,
+          mounted: mountedIds.indexOf(m.mappingId) >= 0,
+        })),
+        allNames: pick(mappings),
+        // 挂载表读得到就用**已挂载集合**；读不到（老存档没有界面控件组层级）退回全部映射名
+        mountedNames: mountKnown ? pick(mounted) : pick(mappings),
+        mountedIds,
+        mountKnown,
+        mountSource: mountKnown ? 'gil-script-mounts' : 'gil-script-names',
+        mountNote: mounts.note || null,
+      };
     }
-  } catch { names = []; }
-  mountedNamesCache.set(key, names);
-  return names;
+  } catch { info = empty; }
+  gilScriptCache.set(key, info);
+  return info;
+}
+
+/** 挑活文件用的名字候选（**全部映射**，宁多勿漏）。 */
+function mountedScriptNames(lv) {
+  return gilScriptInfo(lv).allNames;
 }
 
 /**
@@ -575,7 +635,7 @@ const TOOLS = [
       + '"Read text file with BOM header may cause Lua error"）。BOM 不是本工具加的，'
       + '实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → '
       + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。'
-      + '\n★ **部署不会热加载**：改完脚本要 **stop → `op=deploy` → 重新试玩**；想确认某局跑的是哪版代码，看 `.gia` 里脚本自己 `print` 出来的版本行。\n⚠️ **多脚本地图**：`mount` 目前只读存档里单条嵌入脚本名（多脚本工程可能误报未挂载）—— 详见 `miliastra_map` 的同一条说明。\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
+      + '\n★ **部署不会热加载**：改完脚本要 **stop → `op=deploy` → 重新试玩**；想确认某局跑的是哪版代码，看 `.gia` 里脚本自己 `print` 出来的版本行。\n★ **多脚本工程**：`mount` 读**全部脚本映射**并只按**已挂载集合**判（`mount.source` 说明用的是哪一份）；取不到才 `known:false`，不瞎报 false。逐条对账用 `miliastra_map op=script` 的 `mappings[]`。\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
       + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua —— 不在沙箱里也行）｜'
       + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua"}`（投代码）｜'
       + '`{"op":"levels","summaryOnly":true}`（先扫全部关卡几何）→ `{"op":"levels","stage":3}`（再钻第 3 关）',
@@ -673,11 +733,21 @@ const TOOLS = [
         const info = destPath ? inspect(destPath) : null;
         // 「上次部署的是哪一版」↔「现在磁盘上是哪一版」—— 不一致就直接说，别让人以为跑的是刚投进去那版
         const fp = destPath ? readDeployFingerprint(destPath, { backupDir: args.backupDir }) : null;
+        // 这份活文件在这个关卡里挂过没有（GIL 已挂载集合 ↔ 本文件名；拿不到就 known:false，绝不猜 false）
+        //   —— 任务书 §3 的验收口径：`op=inspect file=主控 main.lua` 必须能回 mounted:true
+        const inspGil = gilScriptInfo(lv);
+        const inspMount = destPath ? mountStatusOf({
+          mountedNames: inspGil.mountedNames,
+          liveName: pathBasenameOf(destPath),
+          mountKnown: inspGil.mountKnown === true,
+          mountSource: inspGil.mountSource,
+        }) : null;
         return {
           ok: true,
           op,
           level: { brand: lv.brand, levelId: lv.levelId, accountId: lv.accountId },
           ...picked,
+          mount: inspMount,
           luaDir: lv.luaDir,
           files: lv.luaFiles.map((f) => ({ name: f.name, size: f.size, mtime: f.mtime, ...(f.auxiliary ? { auxiliary: true } : {}) })),
           inspected: info,
@@ -769,8 +839,14 @@ const TOOLS = [
           // 部署完立刻对账：地图里嵌的是不是刚投进去这版（不然「可以试玩了」是句空话）
           rec = reconcileWithGil(lv, destPath);
         }
-        // 这份活文件**在这个关卡里挂过没有**（GIL 里嵌的脚本名 ↔ 本次的文件名；拿不到就 known:false，不猜）
-        const ms = mountStatusOf({ mountedNames: mountedScriptNames(lv), liveName: pathBasenameOf(destPath) });
+        // 这份活文件**在这个关卡里挂过没有**（GIL 里的**已挂载集合** ↔ 本次的文件名；拿不到就 known:false，不猜）
+        const gi = gilScriptInfo(lv);
+        const ms = mountStatusOf({
+          mountedNames: gi.mountedNames,
+          liveName: pathBasenameOf(destPath),
+          mountKnown: gi.mountKnown === true,
+          mountSource: gi.mountSource,
+        });
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
           mount: ms,
@@ -858,7 +934,7 @@ const TOOLS = [
       + 'op=strings 提取可读字符串（偏移+文本），存盘前后 diff 用。'
       + '判据：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**；'
       + '画布上摆的实例、以及模板控件的子节点，一律返回 nil。'
-      + '\n⚠️ **多脚本地图的已知限制**（2026-09-25 实测）：`mount` 目前只能读到存档里**单条**嵌入脚本名 ⇒ 6 个脚本的工程可能全部误报「未挂载」。判挂载请以 `embedded` 与工作区 `tools/scan-gil-ids.mjs <gil> <映射索引…>` 的命中数为准。\n\n**典型调用**：`{"op":"summary"}`（版本/脚本映射/模板数）｜'
+      + '\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列出全部映射（含 `mappingId` / `mounted` / `mountedOn`），`embedded` = **按名字挑中本次那一份**（`embeddedPickedBy` 说明凭什么）；`op=summary` 的 `script` 仍然只是第一条。\n\n**典型调用**：`{"op":"summary"}`（版本/脚本映射/模板数）｜'
       + '`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）',
     parameters: {
       type: 'object',
@@ -960,20 +1036,75 @@ const TOOLS = [
           const i = inspect(live.path);
           liveInfo = { name: live.name, path: live.path, size: i.size, sha256: i.sha256, mtime: i.mtime };
         }
-        // ② 同名才比哈希：名字对不上就是**另一个脚本**，原来那种 `match: true` 只是「两个不相干的文件正好同内容」
-        //    式的假安心（实测同事遇到过：报 match，其实与他正在改的文件无关）
+        /*
+         * ★ 多脚本工程（反馈 A1 / 实践文档 §2 第 2 条）：一张图的 `#50` 里有 **N 条**脚本映射，
+         *   旧实现只回**第一条**（实测是旧占位「新建客户端脚本」），于是 `embedded` 与 6 个活文件
+         *   "对不上"，`pickedNote` 只能让人去人工确认 —— 多脚本工程根本没法对账。
+         *   现在：① `mappings` 给**全部**映射（含 mappingId / mountedOn）；② `embedded` 改成
+         *   **按名字挑中本次那一份**；③ `candidates` 逐份列出「与哪条映射对上、哈希一致不一致」。
+         */
+        const all = Array.isArray(gil.scripts) ? gil.scripts : (gil.script ? [gil.script] : []);
+        const mounts = gil.scriptMounts || { known: false, ids: [], byId: {}, note: null };
+        const mappings = all.map((m) => ({
+          mappingId: m.mappingId,
+          name: m.name,
+          file: m.file,
+          bytes: m.sourceBytes,
+          sha256: m.sourceSha256,
+          mounted: Array.isArray(mounts.ids) && mounts.ids.indexOf(m.mappingId) >= 0,
+          mountedOn: (mounts.byId && mounts.byId[m.mappingId]) || null,
+        }));
+        const picked = liveInfo ? pickScriptMapping(all, liveInfo.name) : { mapping: null, matchedBy: null };
+        // ② 同名才比哈希（名字对不上就是**另一个脚本**）；挑不到本次那一份时**退回第一条**并如实说明
+        const embedded = picked.mapping || all[0] || null;
         const cmp = compareScriptSnapshot({
-          embedded: gil.script,
+          embedded,
           live: liveInfo ? { name: liveInfo.name, path: liveInfo.path, sha256: liveInfo.sha256, size: liveInfo.size } : null,
         });
+        const isMounted = (m) => !!m && Array.isArray(mounts.ids) && mounts.ids.indexOf(m.mappingId) >= 0;
+        // ⚠️ 回执里**绝不能带 `source`（源码全文）** —— 那是几十 KB，会让这个 op 一下超 10KB
+        const embeddedSlim = embedded ? {
+          mappingId: embedded.mappingId,
+          name: embedded.name,
+          file: embedded.file,
+          bytes: embedded.sourceBytes,
+          sha256: embedded.sourceSha256,
+          mounted: isMounted(embedded),
+          mountedOn: (mounts.byId && mounts.byId[embedded.mappingId]) || null,
+        } : null;
+        const candidates = cur
+          ? (pick && pick.candidates ? pick.candidates : []).map((c) => {
+            const m = pickScriptMapping(all, c.name).mapping;
+            return {
+              name: c.name,
+              bytes: c.bytes,
+              mtime: c.mtime,
+              mappingId: m ? m.mappingId : null,
+              mappingName: m ? m.name : null,
+              mappingBytes: m ? m.sourceBytes : null,
+              mappingMounted: m ? isMounted(m) : null,
+            };
+          })
+          : [];
         return {
           ok: true, op, path: gilPath,
           ...pickedFields(pick),
-          embedded: cmp.embedded,
+          scriptCount: mappings.length,
+          mappings,
+          mountKnown: mounts.known === true,
+          mountNote: mounts.note || null,
+          embedded: embeddedSlim,
+          embeddedMappingId: embedded ? embedded.mappingId : null,
+          embeddedPickedBy: picked.mapping ? ('name:' + picked.matchedBy) : (all.length ? 'fallback:first' : null),
           live: liveInfo,
           match: cmp.match,
           skipped: cmp.skipped || null,
-          note: cmp.conclusion,
+          candidates,
+          note: cmp.conclusion
+            + (mappings.length > 1
+              ? '　（这张图里共 **' + mappings.length + ' 条**脚本映射 —— 多脚本工程请用 `mappings[]` 逐条对账，'
+                + '`embedded` 只是**本次这一份**对应（或退回第一条）的那一条。）'
+              : ''),
         };
       }
       throw new Error('未知 op：' + op);
@@ -991,6 +1122,7 @@ const TOOLS = [
       + 'op=runs 给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / 错误样式 / **命中的词**）**并和上一局做 diff**，'
       + '省掉「把 30 多条倒过来再分清哪段属于哪局」这一步。'
       + '记录字段：time / account / player / channel（关卡或模式名）/ message（正文）。'
+      + '\n★ **本局没有 `.gia` 时不会静默给旧数据**：回执带 `staleLog` / `logBelongsTo`（文件名 + epochSec），`staleLog:true` = **不属于本次会话**，别当本局证据。本局落没落盘看 `miliastra_playtest op=status` 的 `localGia`。'
       + '\n\n⚠️ **「试玩了却没有新日志」先看这里**：`.gia` 里**只有脚本自己 `print` 出来的东西**。'
       + '实测最坑的一次是**压根忘了从编辑器开试玩**（游戏客户端开着 ≠ 在试玩）——'
       + '另一种是编辑器「日志」面板里 `客户端脚本` 没勾上。工具不再替这种现象下结论，'
@@ -1050,6 +1182,19 @@ const TOOLS = [
       const gia = readGia(file);
       if (!gia.ok) return { ok: false, op, file, error: gia.error };
       const withMsg = gia.records.filter((r) => r.message);
+      /*
+       * ★ 「这份 .gia 是不是本次会话的」（反馈 A2 ②）：本局没有 `.gia` 时，这里取到的是**上一局**的文件，
+       *   而在回执里它只是一行 `file` —— 子代理三次都把它当成了本局的证据。
+       *   判据与 `miliastra_playtest op=status` 的 `localGia` 同源（文件里有没有本局那个 epochSec）。
+       */
+      const staleness = logStalenessFor(lv, file, giaRunEpochs(gia.records));
+      const staleFields = Object.assign({
+        staleLog: staleness.staleLog,
+        logBelongsTo: staleness.logBelongsTo,
+      }, staleness.staleLog ? {
+        staleLogWarning: '⚠️ 这份日志**不属于本次会话**：' + staleness.logFreshnessNote
+          + '（本局 epochSec ' + (staleness.sessionEpochSec == null ? '未知' : staleness.sessionEpochSec) + '）',
+      } : {});
 
       // 按局过滤：run 可以是 epoch 秒，也可以是 instance 的任意片段
       const runQ = args.run == null || String(args.run).trim() === '' ? null : String(args.run).trim();
@@ -1060,6 +1205,7 @@ const TOOLS = [
         const play = playRunsOf(runs);
         return {
           ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+          ...staleFields,
           runCount: runs.length,
           playRunCount: play.length,
           runs: summarizeRuns(runs, Number.isFinite(args.limit) ? args.limit : 10),
@@ -1093,6 +1239,7 @@ const TOOLS = [
         const loose = c.loose.length ? summarizeLoose(c.loose, { bins }) : null;
         return {
           ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+          ...staleFields,
           scanned: c.scanned, milCount: c.mil.length, looseCount: c.loose.length, ignored: c.ignored,
           summaryOnly: slim,
           // ① 严格约定（`[MIL] evt=… k=v`）：每个事件一张卡 + 一条时间线
@@ -1121,7 +1268,7 @@ const TOOLS = [
           counter.set(k, (counter.get(k) || 0) + 1);
         }
         const tags = [...counter.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count);
-        return { ok: true, op, file, recordCount: gia.recordCount, tags };
+        return { ok: true, op, file, recordCount: gia.recordCount, ...staleFields, tags };
       }
       const limit = Number.isFinite(args.limit) ? args.limit : 120;
       /*
@@ -1146,6 +1293,7 @@ const TOOLS = [
         : { time: r.time, account: r.account, player: r.player, channel: r.channel, message: r.message }));
       return {
         ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+        ...staleFields,
         matched: records.length, returned: slim.length,
         // 「这次是从哪一端取的、取了几条」—— 省掉「为什么我只看到开头那 N 条」这类来回
         window: {
@@ -1173,25 +1321,44 @@ const TOOLS = [
       + 'op=status 看当前状态 + 最近几局；op=wait 等下一次开跑（`backSec` 可回扫刚过去那局，'
       + '`afterSec` 要「开跑 N 秒后」）——命中后接着调 `miliastra_shot` 截一张，'
       + '就是「游戏开跑 N 秒后的画面」。op=wait 超时**不报错**，如实回 `hit:false`。'
-      + '\n\n**典型调用**：`{"op":"status"}`（现在在不在试玩）｜'
-      + '`{"op":"wait","afterSec":3}`（等开跑再等 3 秒 —— 但**要截图就别用这条**：'
-      + '直接 `miliastra_shot {"op":"burst","awaitPlaytest":true,"afterSec":3}` 一次调用更准）',
+      + '\n★ **`op=arm`（武装后台截图）**：一次调用完成**「等新局开跑 → 按秒点抓拍 → 落盘」**——'
+      + '`op=arm afterSec:[8,12,16,20] timeoutSec:300`：等**下一次**开跑（默认不回扫，避免拍到已结束的旧局），'
+      + '每个秒点各拍一张，**这一局一结束就停**（剩余秒点标 `skipped`），回执逐张给路径 + `inRun`。人点完「试玩」后 AI 不用再参与。'
+      + '\n★ **`op=status` 的 `localGia`**：直接回答「**本局 `.gia` 落盘了没有**」（`landed`/`missing`/`running`/`none`）——'
+      + '`missing` 时 `miliastra_log` 取到的是**更早那一局**，别当本局证据。'
+      + '\n\n**典型调用**：`{"op":"status"}`（现在在不在试玩 + 本局 `.gia` 落盘没有）｜'
+      + '`{"op":"arm","afterSec":[8,12,16,20],"timeoutSec":300}`（等下一次开跑、按秒点各拍一张）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['status', 'wait'], description: '默认 status。' },
+        op: { type: 'string', enum: ['status', 'wait', 'arm'], description: '默认 status。**arm = 武装后台截图**：等新局开跑后按 `afterSec` 秒点各拍一张（局结束就停），回执给每张路径 + `inRun`。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用来定位该品牌的 output_log.txt）。' },
-        backSec: { type: 'number', description: 'op=wait：回扫窗口秒数 —— 调用之前 backSec 秒内已经开跑的也算命中（默认 0）。人点了试玩再叫 AI 时用得上。' },
-        timeoutSec: { type: 'number', description: 'op=wait：最多等多少秒（默认 90，上限 300）。' },
-        afterSec: { type: 'number', description: 'op=wait：命中开跑后再等 N 秒才返回（默认 0，上限 120）—— 这就是「开跑 N 秒后」。' },
-        pollMs: { type: 'number', description: 'op=wait：轮询间隔毫秒（默认 400，100~5000）。' },
+        backSec: { type: 'number', description: 'op=wait/arm：回扫窗口秒数（默认 0）。⚠️ op=arm 回扫会命中**已结束**的旧局（拍到的是局外画面），所以默认 0。' },
+        timeoutSec: { type: 'number', description: 'op=wait：最多等多少秒（默认 90，上限 300）；op=arm：默认 300（上限 3600）。' },
+        /*
+         * ⚠️ `afterSec` 有两种取法（op=wait 传**数字**、op=arm 传**秒点数组**），但 DSH 的工具 schema
+         * **子集只收单个 `type` 字符串** —— `type: ['number','array']` 会被注册期校验直接拒掉
+         * （实测报 `type arrays are not supported`；探针见 `tests/feedback3-test.mjs` 里那条断言）。
+         * 所以这里用子集支持的 `oneOf`（exact-one）表达同样的能力。
+         */
+        afterSec: {
+          oneOf: [
+            { type: 'number', description: 'op=wait：命中后再等 N 秒才返回（默认 0，上限 120）。' },
+            { type: 'array', items: { type: 'number' }, description: 'op=arm：**秒点数组**（默认 `[8,12,16,20]`）—— 到每个秒点各拍一张，相对**开跑时刻**算。' },
+          ],
+          description: 'op=wait 传**数字**（命中后再等 N 秒才返回）；**op=arm 传秒点数组**（如 `[8,12,16,20]`，最多 12 个，到每个秒点各拍一张）。',
+        },
+        target: { type: 'string', enum: Object.keys(SHOT_TARGETS), description: 'op=arm：截哪个窗口（默认 game=游戏客户端）。' },
+        process: { type: 'string', description: 'op=arm：直接指定进程名（覆盖 target）。' },
+        label: { type: 'string', description: 'op=arm：文件名里的用途标签（默认用 `arm-<秒点>s`）。' },
+        pollMs: { type: 'number', description: 'op=wait/arm：轮询间隔毫秒（默认 400，100~5000）。' },
       },
       additionalProperties: false,
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
       const op = String(args.op || 'status');
-      if (op !== 'status' && op !== 'wait') throw new HttpError('op 只能是 status / wait，收到：' + op, 400);
+      if (op !== 'status' && op !== 'wait' && op !== 'arm') throw new HttpError('op 只能是 status / wait / arm，收到：' + op, 400);
       const lv = resolveLevel(args.level);
       const logPath = playtestLogPath(lv.brand);
       const base = scanLog(logPath);
@@ -1213,10 +1380,16 @@ const TOOLS = [
       if (op === 'status') {
         return {
           ok: true, op, ...common, ...playtestSummary(base.state),
+          // ★ 本局 `.gia` 落盘了没有（反馈 A2 ①）：没有这一句时，人很容易把上一局的日志当成本局的证据
+          localGia: giaLandingFor(lv, base.state),
           note: '开跑/结束读的是 output_log.txt（实时）。`.gia` 是**这一局结束之后**才落盘的，'
-            + '所以「本局的运行时日志」要等局结束才有 —— 局中要看画面对不对只能截图。',
+            + '所以「本局的运行时日志」要等局结束才有 —— 局中要看画面对不对只能截图。'
+            + '`localGia` 直接回答「本局的 `.gia` 到底有没有」；未落盘时 `miliastra_log` 取到的是**更早的某一局**。',
         };
       }
+
+      /* op === 'arm' —— 「武装后台截图」（反馈 D1）：**不依赖 base 的扫描结果**，自己等新局 */
+      if (op === 'arm') return await armPlaytestShots(args, lv);
 
       /* op === wait —— 判据走 waitForPlaytestStart（与 miliastra_shot op=burst 是同一份） */
       const timeoutSec = clampNum(args.timeoutSec, 90, 5, 300);
@@ -1272,8 +1445,12 @@ const TOOLS = [
       + '**不会自动删**：清理要显式给条件（`all` 或 `olderThanDays`），真删还要 `confirm:true`。'
       + '回执恒带 `pid / process / title` —— 明确告诉你**截到的到底是哪个窗口**'
       + '（第一版抓错了程序，光看 `ok:true` 根本发现不了）。'
-      + '\n★ **连拍每张约 2.6~3.5 秒**（回执里的 `measuredIntervalMs` 是实测值，`burstMs` 给再小也无效）：**短局（< 20 秒）覆盖不了全程**，且**开局头 ~8 秒通常是加载画面** —— 要抓中后段得自己按 `miliastra_playtest` 的开局时刻算，别指望连拍自动落在局内。\n\n**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜'
-      + '`{"op":"burst","awaitPlaytest":true,"afterSec":3,"count":5}`（**等开跑 → 等 3 秒 → 连拍 5 张**，一次调用）｜'
+      + '\n★ **连拍每张约 2.6~3.5 秒**（回执的 `measuredIntervalMs` 是实测值，`burstMs` 给再小也无效）。'
+      + '**短局（< 20 秒）别用「等 8 秒再连拍 4 张」**（4 张会全落局外）：用 '
+      + '`op=burst awaitPlaytest:true startAfterSec:<小值> untilGone:true`（命中就开拍、局一结束就停，逐张标 `inRun`），'
+      + '或 `miliastra_playtest op=arm afterSec:[8,12,16,20]`。**开局头 ~8 秒通常是加载画面**。'
+      + '\n\n**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜'
+      + '`{"op":"burst","awaitPlaytest":true,"startAfterSec":1,"untilGone":true,"count":20}`（短局：命中就拍、局结束就停，逐张给 `inRun`）｜'
       + '`{"op":"burst","dryRun":true}`（先看要多久、拍几张）',
     parameters: {
       type: 'object',
@@ -1314,9 +1491,17 @@ const TOOLS = [
           description: 'op=burst：**默认 false（立刻开拍）**。传 true 就变成「等试玩开跑 → 再等 afterSec 秒 → 连拍」——'
             + '这条链**一次调用就能完成**（判据与 miliastra_playtest op=wait 是同一份）。',
         },
-        afterSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：命中开跑后再等 N 秒才开拍（默认 0，上限 120）。' },
+        afterSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：命中开跑后再等 N 秒才开拍（默认 0，上限 120）。⚠️ 短局别给大值，改用 `startAfterSec` + `untilGone`。' },
+        startAfterSec: {
+          type: 'number',
+          description: 'op=burst（0.3.1 新增）：命中开跑后等 N 秒**立刻开拍**（默认 = `afterSec`，不传时行为一字不改）——短局给小值，配 `untilGone:true`。',
+        },
+        untilGone: {
+          type: 'boolean',
+          description: 'op=burst（0.3.1 新增）：**拍到这一局结束就自动停**（默认 false），剩余张数不再拍。',
+        },
         timeoutSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：等开跑最多多少秒（默认 90，上限 300）。' },
-        backSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：回扫窗口秒数 —— 调用之前 backSec 秒内已经开跑的也算命中（默认 0）。' },
+        backSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：回扫窗口秒数（默认 0）。⚠️ 回扫命中的局**可能已经结束** —— 那些图会逐张标 `inRun:false`。' },
       },
       additionalProperties: false,
     },
@@ -1405,8 +1590,15 @@ const TOOLS = [
         const plan = planBurst({ count: args.count, intervalMs: args.burstMs });
         let playtest = null;
         let startedAtMs = null;
+        let runWindow = null;
+        let lvForWatch = null;
+        let watchPath = null;
+        let watchOffset = null;
+        let goneAt = null;
+        const untilGone = args.untilGone === true;
         if (args.awaitPlaytest === true) {
-          playtest = await waitForPlaytestStart(resolveLevel(args.level), {
+          lvForWatch = resolveLevel(args.level);
+          playtest = await waitForPlaytestStart(lvForWatch, {
             timeoutSec: clampNum(args.timeoutSec, 90, 5, 300),
             backSec: clampNum(args.backSec, 0, 0, 3600),
             pollMs: clampNum(args.pollMs, 400, 100, 5000),
@@ -1419,23 +1611,57 @@ const TOOLS = [
                 + '刚点过一小会儿的话加 `backSec=60` 回扫那一局。',
             };
           }
-          const afterSec = clampNum(args.afterSec, 0, 0, 120);
-          if (afterSec > 0) await sleep(afterSec * 1000);
+          /*
+           * ★ `startAfterSec`（反馈 C1 ①）：命中后等 N 秒**立刻开拍**。
+           *   为什么不复用 `afterSec` 一个就够：实战里那个值被拿来当「加载窗口」（8 秒），
+           *   而 16 秒的短局里 8 秒窗口 + 每次 2.6 秒的连拍 ⇒ 全落在局外。
+           *   不传时**沿用 `afterSec`**（老调用的行为一个字不改），传了就单独生效。
+           */
+          const startAfterSec = clampNum(args.startAfterSec, clampNum(args.afterSec, 0, 0, 120), 0, 120);
+          if (startAfterSec > 0) await sleep(startAfterSec * 1000);
           startedAtMs = Date.now();
+          /*
+           * ★ 本局窗口（反馈 C1 ③）：逐张 `inRun` 靠它算。
+           *   `backSec` 回扫命中的**已经结束**的局，这里会直接拿到 `endedAtMs` ——
+           *   于是那批图会被标成 `inRun:false`，而不是让人以为「拍到了」。
+           */
+          const sum = playtest.summary || {};
+          const last = sum.lastRun || null;
+          const endedAlready = !sum.inPlaytest && last && last.epochSec === playtest.epochSec;
+          runWindow = {
+            startedAtMs: Number.isFinite(playtest.atMs) ? playtest.atMs : null,
+            endedAtMs: endedAlready && Number.isFinite(last.endedAtMs) ? last.endedAtMs : null,
+          };
+          if (endedAlready) {
+            runWindow.warning = '⚠️ 命中时这一局**已经结束了**（多半是 `backSec` 回扫命中的旧局）——'
+              + '接下来拍到的每一张都会被标 `inRun:false`。要局内画面就别把 `backSec` 放那么大。';
+          }
+          if (untilGone) {
+            watchPath = playtestLogPath(lvForWatch.brand);
+            const sz = logSize(watchPath);
+            watchOffset = Number.isFinite(sz) ? sz : null;
+          }
         }
         if (!processName) throw new Error('没给出要截哪个进程（target/process 都是空的）。');
         if (args.dryRun === true) {
           return {
             ok: true, op, dryRun: true, plan, dir, target: targetKey, process: processName,
+            startAfterSec: clampNum(args.startAfterSec, clampNum(args.afterSec, 0, 0, 120), 0, 120),
+            untilGone,
             playtest: playtest ? { hit: playtest.hit, epochSec: playtest.epochSec, startedAt: playtest.startedAt } : null,
-            note: '这是**计划**，一张都没拍。去掉 dryRun 才真拍 —— 连拍要花约 ' + plan.spanMs + 'ms。',
+            note: '这是**计划**，一张都没拍。去掉 dryRun 才真拍 —— 连拍要花约 ' + plan.spanMs + 'ms。'
+              + (untilGone ? ' `untilGone:true`：拍到**这一局结束**为止（直到看得到结束标记，或拍满 count 张）。' : ''),
           };
         }
         fsMod.mkdirSync(dir, { recursive: true });
         const frames = [];
         let abortedAt = null;
+        let stoppedBecause = null;
         for (const f of plan.frames) {
-          if (f.i > 1) await sleep(plan.intervalMs);
+          if (f.i > 1) {
+            if (goneAt) { stoppedBecause = 'run-ended'; break; }
+            await sleep(plan.intervalMs);
+          }
           const base = args.label ? String(args.label) : 'burst';
           const label = plan.count > 1 ? base + '-' + f.i : base;
           const name = nextFreeName(dir, shotFileName({ target: targetKey, label, when: new Date() }));
@@ -1456,11 +1682,39 @@ const TOOLS = [
             error: r.ok ? null : (r.error || '截图失败'),
           });
           if (!r.ok) { abortedAt = f.i; break; }
+          /*
+           * ★ `untilGone`（反馈 C1 ②）：拍着拍着**这一局结束了就停**。
+           *   判据与 `miliastra_playtest` 同一份（`QuickSwitchToBeyondSettleSceneNormally`），
+           *   而且只吃**基线之后新增的字节** —— 不会把上一局的结束标记当成本局的。
+           */
+          if (watchPath && watchOffset != null) {
+            const inc = readIncrement(watchPath, watchOffset);
+            if (inc.ok && inc.rotated) {
+              // 游戏重启 → 日志换代：重新对齐，不当成「本局结束」
+              watchOffset = inc.size;
+            } else if (inc.ok && inc.text) {
+              watchOffset = inc.size;
+              const red = reduceLogLines(createPlaytestState(), inc.text.split(/\r?\n/));
+              const end = (red.events || []).find((e) => e.type === 'end');
+              if (end) {
+                goneAt = end;
+                if (runWindow && !Number.isFinite(runWindow.endedAtMs)) runWindow.endedAtMs = end.atMs;
+              }
+            }
+          }
+          if (goneAt) { stoppedBecause = 'run-ended'; break; }
         }
-        const sum = burstSummary(frames, { startedAtMs, requestedMs: plan.intervalMs });
+        const sum = burstSummary(frames, {
+          startedAtMs, requestedMs: plan.intervalMs,
+          run: runWindow,
+        });
         return Object.assign({
           ok: sum.okCount > 0, op, target: targetKey, process: processName, dir,
           plan,
+          startAfterSec: clampNum(args.startAfterSec, clampNum(args.afterSec, 0, 0, 120), 0, 120),
+          untilGone,
+          stoppedBecause,
+          endedAtMs: runWindow && Number.isFinite(runWindow.endedAtMs) ? runWindow.endedAtMs : null,
           playtest: playtest
             ? { hit: true, backHit: playtest.backHit, epochSec: playtest.epochSec, startedAt: playtest.startedAt, afterSec: clampNum(args.afterSec, 0, 0, 120) }
             : null,
@@ -1468,8 +1722,11 @@ const TOOLS = [
         }, sum, {
           hint: abortedAt
             ? '第 ' + abortedAt + ' 张就失败了，**剩下的没拍**（不白耗时间）—— 看那一张的 error。'
-            : '看图走 `GET /miliastra/shot?name=<file>`（原图）或 `&thumb=1`（小图），回执不带 base64。'
-              + '**截图不会自动删**，记得 `op=clean` 看一眼。',
+            : (stoppedBecause === 'run-ended'
+              ? '这一局结束了就自动停（`untilGone:true`）—— 上面 `frames[].inRun` 说清了哪几张在局内。'
+              : '看图走 `GET /miliastra/shot?name=<file>`（原图）或 `&thumb=1`（小图），回执不带 base64。'
+                + '**截图不会自动删**，记得 `op=clean` 看一眼。')
+              + (runWindow && runWindow.warning ? ' ' + runWindow.warning : ''),
         });
       }
 
@@ -1769,9 +2026,10 @@ const TOOLS = [
       + '**可直接照抄的请求体**（指针坐标**左下原点**）；`op=keys` 传 `all:true` 给**全量 164 个键名**（默认只有 10 条 presets）。'
       + '⚠️ **按了 `…Down` 就要配对发 `…Up`**，否则等于一直按住这个键（实测：只发 Down 会把角色一路推到掉出边界重生）。'
       + '\n⚠️ `frame` **不是秒表**：连续注入按键会顺带推帧（实测静置 30fps、注入期间 41.7/s），要计时用 `time`。'
-      + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate），**模拟器通过 ≠ 真机通过**；'
+      + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate）；'
       + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
-      + '\n⚠️ **`op=shot` / `op=frames` 的 PNG 渲染不含「客户端控件层」** —— 脚本建的控件不在那张图里（`op=bind` 的 `run.controlCount` 与 `op=controls runtime:true` 里是有的）⇒ 手写客户端 UI 的**视觉验收必须看真机或面板右栏那个试玩页**；模拟器只能验逻辑与控件树。\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
+      + '\n★ **PNG 里有脚本建的客户端控件**（0.3.1 实测；旧免责句「不含客户端控件层」是错的）：脚本 `InstantiateClientUIControl` 建的控件（含挂在客户端模板上的脚本再建的子控件）**都会画进图**；只有客户端控件模板工程**自己那棵树**不在（它是实例化来源，不是场景根）。但它仍是**离线渲染**（官方素材/动效/联机不覆盖）⇒ 最终视觉验收要看真机。'
+      + '\n★ **`op=patch` 脚本字段**：`addScript` 要 `source` 或 `sourceFrom`（.lua 绝对路径），**都不给会明确拒绝**（旧版会静默写空脚本）；`removeScript`/`updateScript` 支持 `path`。**`op=bind` 可一次挂多个**：`scripts:[{path, source|sourceFrom}]`。\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
       + '控件类型拿不准：`{"op":"bind","source":"…\\\\双相.lua","templates":[{"guid":1073741867,"kind":"auto"}]}`；'
       + '自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
       + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
@@ -1808,7 +2066,7 @@ const TOOLS = [
         limit: { type: 'number', description: 'op=controls：最多回多少条，默认 200（回执里 `omitted` 说明截掉了多少）。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
         treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树，默认 200。' },
-        patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。', additionalProperties: true },
+        patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。脚本类：addScript{controlId,controlAsset,path,source|sourceFrom}（**缺源码会被明确拒绝**）、updateScript{id|path,…}、removeScript{id|path}。', additionalProperties: true },
         action: { type: 'string', description: 'op=play 的动作：start / device / view / get / step / pointer / key / click / pause / resume / stop / serverGet / serverSet / serverSend。' },
         args: { type: 'object', description: 'op=play 的参数，如 {"x":640,"y":360} / {"dt":0.033} / {"type":"click","x":640,"y":360}。', additionalProperties: true },
         target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 的取景：ui=编辑器视图（静态），play=试玩画面（需先 op=play action=start）。' },
@@ -1819,7 +2077,13 @@ const TOOLS = [
         file: { type: 'string', description: 'op=import 要导入的文件绝对路径。' },
         archive: { type: 'string', description: 'op=load 的存档相对路径；省略=列出工作区里的存档。' },
         path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
-        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**。op=handover 用它**只读**读那一份文件并抽候选交接值（>8 MB / 二进制 / 相对路径一律拒绝，读完零改动）；op=bind 用它当要搬进模拟器的脚本（通常给真机**活文件** .lua；路径随账号/换图变化，别写死）。op=bind 也可以不传它、改用 `script:{path,source}` 直接给源码。' },
+        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**。op=handover 用它**只读**读那一份文件并抽候选交接值（>8 MB / 二进制 / 相对路径一律拒绝，读完零改动）；op=bind 用它当要搬进模拟器的脚本（通常给真机**活文件** .lua；路径随账号/换图变化，别写死）。op=bind 也可以不传它、改用 `script:{path,source}` 直接给源码，或用 `scripts:[…]` 一次给多份。' },
+        scripts: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: 'op=bind：**一次挂多个脚本** `[{path, source|sourceFrom}, …]` —— `path` = 挂载名（默认用文件名）；'
+            + '`source` / `sourceFrom` 与 `op=patch addScript` 同义。给了它就不看顶层 `source`。',
+        },
         templates: { type: 'array', description: 'op=bind：**控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它）—— **优先自动拿，不许编**：① `op=handover`（可带 `source`）从源码抽 → ② `miliastra_map op=clientui` 从 `.gil` 读 → ③ 两个都拿不到才问创作者；`kind` = image/textbox/button/container…，**或 `"auto"`**（= 不猜：按 image → textbox → container 逐个起会话，谁让控件数增长就用谁，回执给 `kindTried[]` / `kindWinner`）；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
         containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里自己硬编码了），只记进回执并和源码交叉核对（`handover.containerIdInSource`）。' },
         scriptName: { type: 'string', description: 'op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（双相的 checkMount 要求就是「双相.lua」），名字不对它会自己退出。' },
@@ -2226,6 +2490,225 @@ async function waitForPlaytestStart(lv, { timeoutSec = 90, backSec = 0, pollMs =
     timeoutSec,
     summary: playtestSummary(state),
   };
+}
+
+/**
+ * 「本局的 `.gia` 落盘了没有」—— 反馈 A2 ①。
+ *
+ * 为什么要有这一句（2026-09-25 同事实测）：16:23 / 16:26 / 16:29 / 16:34 四局结束后**都没有生成 `.gia`**，
+ * 而 `op=grep`/`op=runs` 会静默回退到 16:16 那局的旧文件 —— 子代理三次抓取都把旧局当成了本局。
+ * 所以状态里必须直接写明「已落盘 / 未落盘（可能该局不产生）」，而不是让人自己去看目录时间。
+ *
+ * 判据是**文件里有没有本局那个 epochSec**（`giaRunEpochs`）：`.gia` 的 instance 第三段就是开跑时刻，
+ * 与 `miliastra_playtest` 报的是同一个值 —— 这比「比 mtime」准（mtime 分不清「本局」与「更晚的另一局」）。
+ */
+function giaLandingFor(lv, state) {
+  const latest = lv && lv.latestLog ? lv.latestLog : null;
+  const running = !!(state && state.inPlaytest);
+  const last = state && state.runs && state.runs.length ? state.runs[state.runs.length - 1] : null;
+  const runEpochSec = running ? state.epochSec : (last ? last.epochSec : null);
+  const runStartedAtMs = running ? state.startedAtMs : (last ? last.startedAtMs : null);
+  let fileEpochSecs = [];
+  let readError = null;
+  if (latest && latest.path && !running) {
+    try {
+      const g = readGia(latest.path);
+      if (g.ok) fileEpochSecs = giaRunEpochs(g.records);
+      else readError = g.error;
+    } catch (e) { readError = (e && e.message) || String(e); }
+  }
+  const land = giaLandingState({ latest, running, runEpochSec, runStartedAtMs, fileEpochSecs, readError });
+  return {
+    ...land,
+    runEpochSec: Number.isFinite(runEpochSec) ? runEpochSec : null,
+    runStartedAt: last ? (last.startedAtText || null) : (running ? state.startedAtText : null),
+    fileEpochSecs,
+    note2: '⚠️ `.gia` **只在脚本真的 print 出东西时才产生** —— 「未落盘」不等于「没试玩」，'
+      + '它等于「这一局没有任何客户端脚本日志」。原因与复测口径见 `docs/功能详解.md`。',
+  };
+}
+
+/**
+ * 这次取到的 `.gia` **属不属于本次会话**—— 反馈 A2 ②（`op=tail|grep|runs` 的回执都带它）。
+ *
+ * 为什么必须显式告警：那四局没有 `.gia` 时，`op=grep` 返回的是**上一局**的内容，
+ * `file` 字段虽然标了文件名，但人（和 AI）都容易把它当成本局证据 —— 这是整条取证链最容易张冠李戴的一环。
+ */
+function logStalenessFor(lv, file, epochs) {
+  let state = null;
+  try {
+    const base = scanLog(playtestLogPath(lv.brand));
+    if (base && base.ok) state = base.state;
+  } catch { /* 读不到试玩日志就退化成「判断不了」，不报错 */ }
+  const running = !!(state && state.inPlaytest);
+  const last = state && state.runs && state.runs.length ? state.runs[state.runs.length - 1] : null;
+  const runEpochSec = running ? (state.epochSec || null) : (last ? last.epochSec : null);
+  const runStartedAtMs = running ? state.startedAtMs : (last ? last.startedAtMs : null);
+  const f = logFreshness({ file, fileEpochSecs: epochs, runEpochSec, runStartedAtMs });
+  return {
+    staleLog: f.stale === true,
+    logKnown: f.known,
+    logBelongsTo: f.logBelongsTo,
+    sessionEpochSec: Number.isFinite(runEpochSec) ? runEpochSec : null,
+    logFreshnessNote: f.note
+      + (f.stale === true
+        ? ' ⇒ **别把这份日志当成本局证据**：用 `miliastra_playtest op=status` 看本局的 `.gia` 有没有落盘；'
+          + '本局没落盘时，先确认为什么这一局一条 print 都没有。'
+        : ''),
+  };
+}
+
+/**
+ * `op=arm` —— **「武装后台截图」**（反馈 D1）：一次调用完成「等新局开跑 → 按给定秒点抓拍 → 落盘 → 回执」。
+ *
+ * 为什么要有它（2026-09-25 同事实测）：只能靠「人先在编辑器点试玩、再叫 AI」或靠子代理后台等，而那条路踩了三个坑：
+ *   ① `backSec` 回扫**命中已结束的旧局**（拍到的是局外画面）；
+ *   ② 等待期间那一局已经结束；
+ *   ③ 连拍每次 2.6 秒，短局（<20 秒）根本追不上「加载窗口 + 连拍」。
+ * 这里把「秒点」交给调用方（`afterSec:[8,12,16,20]`）：每个秒点**只拍一张**，
+ * 局一结束就停（剩下的秒点如实标 `skipped`），并在回执里逐张标 `inRun`。
+ *
+ * @param {Record<string, any>} args `afterSec`（秒点数组）/ `target` / `label` / `timeoutSec` / `backSec` / `pollMs`
+ * @param {any} lv `resolveLevel()` 的结果（关卡）
+ */
+async function armPlaytestShots(args, lv) {
+  const targetKey = String(args.target || 'game');
+  const tgt = SHOT_TARGETS[targetKey] || null;
+  const processName = String(args.process || (tgt ? tgt.process : targetKey) || '').replace(/\.exe$/i, '');
+  const dir = shotsDir();
+  const timeoutSec = clampNum(args.timeoutSec, 300, 5, 3600);
+  const rawPoints = Array.isArray(args.afterSec) ? args.afterSec : null;
+  const points = [...new Set((rawPoints && rawPoints.length ? rawPoints : [8, 12, 16, 20])
+    .map((x) => Math.round(Number(x)))
+    .filter((x) => Number.isFinite(x) && x >= 0 && x <= 600))]
+    .sort((a, b) => a - b)
+    .slice(0, 12);
+  if (!points.length) throw new Error('op=arm 的 `afterSec` 至少要有一个 0~600 的秒点，例如 afterSec:[8,12,16,20]');
+  if (!processName) throw new Error('op=arm 没给出要截哪个进程（target/process 都是空的）。');
+
+  const w = await waitForPlaytestStart(lv, {
+    timeoutSec,
+    // ⚠️ 默认**不回扫**：`backSec` 回扫会命中「已经结束的旧局」，那正是这个工具要消灭的坑之一
+    backSec: clampNum(args.backSec, 0, 0, 3600),
+    pollMs: clampNum(args.pollMs, 400, 100, 5000),
+  });
+  const baseOut = {
+    ok: true, op: 'arm', level: { brand: lv.brand, levelId: lv.levelId },
+    target: targetKey, process: processName, dir,
+    points, timeoutSec, waitedSec: w.waitedSec,
+  };
+  if (!w.hit) {
+    return Object.assign(baseOut, {
+      hit: false, timedOut: true, shots: [], inRunCount: 0,
+      hint: '这段时间里没有新的「试玩开跑」，所以**一张都没拍**（不白耗）。'
+        + '确认人在编辑器里真的点了「试玩」；刚点过一小会儿就用 `backSec=60` 回扫那一局（但要注意那是**已经过去**的局）。',
+    });
+  }
+
+  /** @type {any} */
+  const sum = w.summary || {};
+  const last = sum.lastRun || null;
+  const endedAlready = !sum.inPlaytest && last && last.epochSec === w.epochSec;
+  const runWindow = {
+    startedAtMs: Number.isFinite(w.atMs) ? w.atMs : null,
+    endedAtMs: endedAlready && Number.isFinite(last.endedAtMs) ? last.endedAtMs : null,
+  };
+  const head = Object.assign(baseOut, {
+    hit: true, backHit: w.backHit,
+    startedAt: w.startedAt, startedAtMs: runWindow.startedAtMs, epochSec: w.epochSec, token: w.token,
+    endedAtMs: runWindow.endedAtMs,
+  });
+  if (endedAlready) {
+    // 回扫命中的**已经结束**的局：一张都不拍（拍了也是局外画面），但把话说清楚
+    return Object.assign(head, {
+      shots: points.map((p) => ({ afterSec: p, skipped: true, reason: 'run-ended', file: null, inRun: false })),
+      inRunCount: 0, endedBeforeFirstShot: true,
+      hint: '⚠️ 命中时这一局**已经结束了**（`backSec` 回扫到的旧局）—— 按你的秒点拍出来的都会是**局外画面**，所以一张都没拍。'
+        + '去掉 `backSec`（默认 0）就会等**下一次**开跑。',
+    });
+  }
+
+  // 结束标记的观测基线：从命中那一刻**之后新增的字节**里找，不会把上一局的结束当成这一局的
+  const watchPath = playtestLogPath(lv.brand);
+  let watchOffset = logSize(watchPath);
+  let endEvent = null;
+  const checkEnd = () => {
+    if (endEvent || !Number.isFinite(watchOffset)) return endEvent;
+    const inc = readIncrement(watchPath, watchOffset);
+    if (!inc.ok) return null;
+    if (inc.rotated) { watchOffset = inc.size; return null; }   // 游戏重启换代：重新对齐，不当成「结束」
+    if (!inc.text) return null;
+    watchOffset = inc.size;
+    const red = reduceLogLines(createPlaytestState(), inc.text.split(/\r?\n/));
+    const e = (red.events || []).find((x) => x.type === 'end');
+    if (e) endEvent = e;
+    return endEvent;
+  };
+
+  fsMod.mkdirSync(dir, { recursive: true });
+  const shots = [];
+  let stoppedBecause = null;
+  for (const pt of points) {
+    const deadline = (Number.isFinite(runWindow.startedAtMs) ? runWindow.startedAtMs : Date.now()) + pt * 1000;
+    for (;;) {
+      if (checkEnd()) break;
+      const left = deadline - Date.now();
+      if (left <= 0) break;
+      await sleep(Math.min(400, left));
+    }
+    if (endEvent) {
+      stoppedBecause = 'run-ended';
+      shots.push({ afterSec: pt, skipped: true, reason: 'run-ended', file: null, inRun: false });
+      continue;
+    }
+    const name = nextFreeName(dir, shotFileName({
+      target: targetKey,
+      label: (args.label ? String(args.label) : 'arm') + '-' + pt + 's',
+      when: new Date(),
+    }));
+    const r = await captureWindow({
+      processName, out: pathMod.join(dir, name),
+      thumbOut: thumbPathFor(dir, name),
+      bringToFront: args.bringToFront === false ? 0 : 1,
+    });
+    const judge = judgeCapture(r);
+    const atMs = Date.now();
+    let size = null;
+    try { size = fsMod.statSync(r.path).size; } catch { /* 没落盘也照报 */ }
+    shots.push({
+      afterSec: pt, file: r.ok ? name : null, atMs,
+      elapsedMs: Number.isFinite(runWindow.startedAtMs) ? atMs - runWindow.startedAtMs : null,
+      ok: r.ok, suspect: judge.suspect, warning: judge.warning,
+      inRun: frameInRun(atMs, runWindow),
+      error: r.ok ? null : (r.error || '截图失败'),
+    });
+    if (!r.ok) { stoppedBecause = 'shot-failed'; break; }
+    checkEnd();                      // 拍完这一张立刻看一眼局是不是刚结束
+  }
+
+  // 收尾：把「这一局结束了没有 / `.gia` 落盘了没有」刷新成**此刻的事实**
+  const fresh = scanLog(playtestLogPath(lv.brand));
+  const freshState = fresh.ok ? fresh.state : null;
+  const freshLast = freshState && freshState.runs.length ? freshState.runs[freshState.runs.length - 1] : null;
+  if (freshLast && freshLast.epochSec === w.epochSec && Number.isFinite(freshLast.endedAtMs)) {
+    runWindow.endedAtMs = freshLast.endedAtMs;
+  }
+  // 窗口补全后逐张重算 inRun（拍的时候可能还不知道结束时刻）
+  for (const s of shots) if (!s.skipped) s.inRun = frameInRun(s.atMs, runWindow);
+  const inRunCount = shots.filter((s) => s.inRun === true).length;
+  const captured = shots.filter((s) => !s.skipped).length;
+  return Object.assign(head, {
+    endedAtMs: runWindow.endedAtMs,
+    durationSec: Number.isFinite(runWindow.endedAtMs) && Number.isFinite(runWindow.startedAtMs)
+      ? Math.round((runWindow.endedAtMs - runWindow.startedAtMs) / 1000) : null,
+    stoppedBecause: stoppedBecause || (freshState && !freshState.inPlaytest ? 'run-ended' : null),
+    shots, capturedCount: captured, inRunCount, skippedCount: shots.length - captured,
+    localGia: freshState ? giaLandingFor(lv, freshState) : null,
+    hint: '每张正片走 `GET /miliastra/shot?name=<file>` 看原图（`&thumb=1` 看小图）。'
+      + '`shots[].inRun` 说明**这张是不是在本局窗口内**拍的；窗口外的图别当证据。'
+      + '本局的运行时日志（`.gia`）要等这一局结束**再等约 10 秒**才落盘 —— 看 `localGia`；'
+      + '没落盘时常见原因是「这一局没有任何客户端脚本日志」。',
+  });
 }
 
 function makeHandler() {
