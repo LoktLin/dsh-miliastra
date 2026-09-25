@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
-import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt } from './lib/codefile.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns } from './lib/gia.mjs';
 import {
@@ -422,7 +422,7 @@ export const PROMPT_SKIP = new Set(['miliastra_echo']);   // 纯调试工具：�
 
 export const PROMPT_GUIDE = [
   { tool: 'miliastra_health', when: '先用它定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）' },
-  { tool: 'miliastra_code', when: '改完本地 lua 用 op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM；还会跑 Lua 结构校验）；op=inspect 看有没有被编辑器写回旧版' },
+  { tool: 'miliastra_code', when: '改完本地 lua 用 op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM；还会跑 Lua 结构校验）；op=inspect 看有没有被编辑器写回旧版；op=read 给 source=<绝对路径> 就只读看任意本地 .lua（不在沙箱里也行）' },
   { tool: 'miliastra_map', when: '判断「哪些控件能被脚本动态创建」用 op=clientui（只看无父节点的独立模板）' },
   { tool: 'miliastra_log', when: '运行时结果一律用它取证（Lua 里 print，别靠猜）；op=runs 按「局」切分、op=metrics 汇总指标分布' },
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
@@ -550,7 +550,8 @@ const TOOLS = [
       TITLE + '：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。'
       + '**部署一律：先备份旧文件 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM。**'
       + '（不带 BOM 是硬要求：原神实测会打印 "Read text file with BOM header may cause Lua error"。）'
-      + 'op=read 读活文件正文；op=deploy 把 source 指向的本地文件投进沙箱（**覆盖前自动备份**）；'
+      + 'op=read 读**沙箱活文件**的正文；**给了 `source`（绝对路径）就改读那个文件** —— 只读：不备份、不写入，也不给任何写 op 开口子；'
+      + 'op=deploy 把 source 指向的本地文件投进沙箱（**覆盖前自动备份**）；'
       + '**部署前先做 Lua 结构校验**（缺 end / 括号不配平 / 字符串没闭合这类错投进去，试玩会静默不生效、'
       + '日志里什么都没有 —— 这是最难查的一类失败）；默认 lintMode:"strict" 直接拒绝，'
       + '确认没问题可 lintMode:"warn" 只提示、"off" 跳过。'
@@ -575,19 +576,26 @@ const TOOLS = [
       + '实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → '
       + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。'
       + '\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
+      + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua —— 不在沙箱里也行）｜'
       + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua"}`（投代码）｜'
       + '`{"op":"levels","summaryOnly":true}`（先扫全部关卡几何）→ `{"op":"levels","stage":3}`（再钻第 3 关）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels'], description: '默认 inspect。' },
+        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels'], description: '默认 inspect。⚠️ op=read 给了 source（绝对路径）就只读读那个文件，不读沙箱活文件。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
           description: '指定活文件名（省略=该关卡最近改动的那个 .lua；**探针源码/备份这类附属文件会被自动跳过**）。'
             + '一个关卡可以有多个活文件，拿不准先用 miliastra_health 或 op=inspect 看清单。',
         },
-        source: { type: 'string', description: 'op=deploy：要投进去的本地文件绝对路径。' },
+        source: {
+          type: 'string',
+          description: 'op=deploy：要投进去的本地文件绝对路径。'
+            + '**op=read 时也可以**：给了绝对路径就改读那个文件（**只读** —— 不备份、不写入，也不给任何写 op 开口子）；'
+            + '不给就读沙箱里的活文件。正斜杠与反斜杠都认（`C:\\x\\y.lua` 与 `C:/x/y.lua` 等价），'
+            + '但**必须是绝对路径**：面板/工具的运行目录不可预期，相对路径会指向别的文件。',
+        },
         backup: {
           type: 'string',
           description: 'op=restore：要还原的备份文件绝对路径（从 op=backups 拿）。**省略 = 用固定名那份 `<原名>.bak`**（最近一次覆盖前的版本）。',
@@ -608,7 +616,7 @@ const TOOLS = [
           enum: ['strict', 'warn', 'off'],
           description: 'op=deploy：Lua 结构校验强度。strict（默认）=不通过就拒绝部署；warn=只带提示照投；off=不校验。',
         },
-        head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。' },
+        head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。活文件与 source（绝对路径）两条路都听它。' },
         stage: {
           type: 'string',
           description: 'op=levels：**玩法里的第几关**（表里的序号，或名字片段）；省略=全部关卡。'
@@ -632,6 +640,28 @@ const TOOLS = [
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
       const op = String(args.op || 'inspect');
+      /*
+       * ★ op=read + source：读**任意绝对路径**的 .lua（**只读**）。
+       *
+       * 为什么放在 `resolveLevel` 之前：作者要读的那份脚本（背景图片.lua）根本不在沙箱里，
+       * 而「这台机器上正在开发哪张图」与「要读哪个文件」没有任何关系 ——
+       * 让关卡解析先跑，只会在「还没挂脚本 / 换过图」时把这条只读路径误伤掉。
+       *
+       * ⚠️ 只读：这条路径不写任何文件，也**不给任何写 op 开「用 source 指任意路径」的口子**
+       *    （deploy / restore / fixbom 的 source 语义一字未动）。
+       */
+      if (op === 'read' && typeof args.source === 'string') {
+        const r = readLuaAt(args.source, { head: args.head });
+        return {
+          op,
+          source: args.source,
+          readOnly: true,
+          ...r,
+          hint: r.ok
+            ? '这是只读读取（没有写入任何文件）。要把它搭进模拟器：miliastra_sim op=bind source=<同一路径> templates=[…] containerId=…'
+            : '只读读取失败（什么都没写）。按 nextSteps 处理即可。',
+        };
+      }
       const lv = resolveLevel(args.level);
       if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——说明还没在编辑器里挂客户端脚本。`);
       const pick = chooseLua(lv, args.file);

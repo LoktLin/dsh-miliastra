@@ -38,6 +38,7 @@ export const SUITES = [
   { name: 'smoke（工具契约 + 人机工效）', args: ['tests/smoke.mjs'] },
   { name: 'locate-test（当前活文件是谁 + 跨脚本不判）', args: ['tests/locate-test.mjs'] },
   { name: 'deploy-test（部署 / 备份 / 指纹 / 原子写）', args: ['tests/deploy-test.mjs'] },
+  { name: 'read-source-test（op=read source=<绝对路径>：只读读取）', args: ['tests/read-source-test.mjs'] },
   { name: 'probe-deploy-test（探针渲染 / 部署）', args: ['tests/probe-deploy-test.mjs'] },
   { name: 'lualint-test（Lua 结构校验）', args: ['tests/lualint-test.mjs'] },
   { name: 'leveldata-hint-test（关卡表写法与候选，合成样本）', args: ['tests/leveldata-hint-test.mjs'] },

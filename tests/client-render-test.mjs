@@ -1030,6 +1030,70 @@ check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是�
   return '1:2 + iframe(/miliastra/play) + 左列顺序(画面最先) + 左列内滚 + 工程折叠 + 窄屏兜底';
 });
 
+/*
+ * 2026-09-25 作者要求：「现在不能直接看 我希望编辑器面板增加一个输入 lua 的绝对路径读取的功能」；
+ * 追问后他选的是「两个都要」：**先看**（元信息 + 正文预览 + 候选交接值），**再一键搭进模拟器**。
+ *
+ * 这条断言管三件事（都是"不报错但会骗人"的那种）：
+ *   ① 输入框与两个按钮真的渲染出来了；
+ *   ② 请求体里的 `source` 是**粘贴的那个路径**（串成沙箱活文件路径就会「看起来读了、读的是另一个文件」）；
+ *   ③ 新文案里不许有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）。
+ */
+check('★ 「任意本地 .lua（绝对路径）」入口：输入框 + 读取 + 用它搭进模拟器，且 source 就是粘贴的路径', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
+  const flat = html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ');
+
+  // ① 输入框（用 aria-label / placeholder 这种稳定判据，不靠视觉）
+  assert(/aria-label="本地 \.lua 的绝对路径"/.test(html), '没有「本地 .lua 的绝对路径」输入框');
+  assert(html.includes('粘贴 .lua 的绝对路径'), '输入框的占位提示没说清要粘什么');
+  assert(html.includes('绝对路径'), '占位提示没强调「绝对路径」');
+  // ② 两个按钮
+  assert(/>读取<\/button>/.test(html), '缺「读取」按钮');
+  assert(/>用它搭进模拟器<\/button>/.test(html), '缺「用它搭进模拟器」按钮');
+  // ③ 两条路的区别要写清（上面那条是沙箱活文件，这条是任意本地 .lua）
+  assert(/任意本地 \.lua（绝对路径）/.test(flat), '没写清这条入口是什么');
+  assert(/沙箱活文件/.test(flat), '没写清它与「沙箱活文件」那条的区别');
+  assert(/只读/.test(flat), '没写清读取是只读的');
+
+  // ④ 请求体：`source` 必须是**粘贴的那个路径**（纯函数单独回归）
+  const P = 'C:/Users/me/Desktop/背景图片.lua';
+  const reqs = clientExports.__testExternalLuaReadRequests(P);
+  assert(Array.isArray(reqs) && reqs.length === 2, '「读取」应该发两个请求（read + handover）：' + JSON.stringify(reqs));
+  assert(reqs[0].name === 'miliastra_code' && reqs[0].args.op === 'read', '第一个请求不是 miliastra_code op=read：' + JSON.stringify(reqs[0]));
+  assert(reqs[0].args.source === P, 'read 的 source 不是粘贴的路径：' + JSON.stringify(reqs[0].args));
+  assert(reqs[0].args.head === 60, '预览行数不是 60：' + reqs[0].args.head);
+  assert(reqs[1].name === 'miliastra_sim' && reqs[1].args.op === 'handover', '第二个请求不是 miliastra_sim op=handover（交接值是 sim 的 op）：' + JSON.stringify(reqs[1]));
+  assert(reqs[1].args.source === P, 'handover 的 source 不是粘贴的路径：' + JSON.stringify(reqs[1].args));
+  // 反过来：绝不能把某个活文件路径写进这两个请求体（那正是"看起来读了"的病）
+  assert(!/external_lua_file|\b双相\b|picked/i.test(JSON.stringify(reqs)), '请求体里混进了活文件路径：' + JSON.stringify(reqs));
+
+  // ⑤ 「用它搭进模拟器」= 同一个 source 走 op=bind（templates / container 沿用勾选的那套）
+  const tpl = [{ guid: 1073741868, kind: 'image', name: 'IMAGE_TEMPLATE' }];
+  const bind = clientExports.__testExternalLuaBindArgs(P, tpl, '1073741863');
+  assert(bind.op === 'bind' && bind.source === P, 'bind 请求体的 op/source 不对：' + JSON.stringify(bind));
+  assert(bind.templates === tpl, 'bind 没带上勾选的模板');
+  assert(bind.containerId === 1073741863, 'bind 没带上容器索引：' + JSON.stringify(bind));
+  const noBox = clientExports.__testExternalLuaBindArgs(P, [], '');
+  assert(!('containerId' in noBox), '容器索引为空时不该塞一个 containerId 进去：' + JSON.stringify(noBox));
+
+  // ⑥ 结构化补强：按钮真的用「粘贴的路径」去调这两个构造函数（不是写死的活文件路径）
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  assert(/externalLuaReadRequests\(p\)/.test(src), '「读取」按钮没把粘贴的路径交给请求构造函数');
+  assert(/externalLuaBindArgs\(p, templates, bindContainer\)/.test(src), '「用它搭进模拟器」没把粘贴的路径交给 bind');
+  assert(/var p = extPath\.trim\(\)/.test(src), '按钮没有从输入框取值（extPath）');
+
+  // ⑦ 新文案里不许有 Markdown 记号（只查**新增这一块**，避免碰到别处的历史文案）
+  const a = flat.indexOf('任意本地 .lua（绝对路径）');
+  const b = flat.indexOf('从这台机器上的沙箱活文件里挑一份');
+  assert(a >= 0 && b > a, '「绝对路径」那一块没渲染出来（或顺序变了）');
+  const block = flat.slice(a, b);
+  const stars = block.match(/\*\*[^*]{1,40}\*\*/g);
+  assert(!stars, '新入口文案里有 Markdown 记号（会原样显示）：' + (stars || []).join(' | '));
+  const ticks = block.match(/`[^`\n]{1,40}`/g) || [];
+  assert(ticks.length === 0, '新入口文案里有反引号（会原样显示）：' + ticks.join(' | '));
+
+  return '输入框 + 读取 + 用它搭进模拟器；两个请求体的 source 都是粘贴的路径；新文案无 Markdown 记号';
+});
 check('操作时间线的一行：说清"什么时候、做了什么"（AI 照着就能写成 steps[]）', () => {
   const f = clientExports.__testHistLine;
   assert(typeof f === 'function', '缺少 __testHistLine（时间线格式化无法单独回归）');
