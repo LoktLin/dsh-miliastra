@@ -1119,6 +1119,62 @@ check('★ 「读本地 .lua（绝对路径）」入口（左列最上面那张�
 });
 
 /*
+ * 2026-09-25（作者报的缺陷）③：面板「读取」拿到候选之后，**能少一步手点就少一步**，
+ * 而候选为空时**必须说清"还缺什么"**（不能只回一句"一条都没有"，也不能让「用它搭进模拟器」看起来现在就能用）。
+ *
+ * 这条管四件事（纯函数直测 + 渲染一遍）：
+ *   ① `isTemplate:true` 的候选**默认预勾选**、`kindHint` 直接当初始 kind；
+ *   ② `containerId` 候选**预填**进输入框；没抽到就是空串（**不编号**）；
+ *   ③ 候选为空 → 指路：去 .gil 读（miliastra_map op=clientui）或手填；抽取失败 → 如实说失败；
+ *   ④ 面板文案不许出现 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）。
+ */
+check('★ ③ 面板「读取」：候选预勾选 / 容器预填 / 空候选指路 + 按钮旁写清"还缺什么"', () => {
+  const ho = {
+    readFrom: 'source',
+    containerId: 1073741845,
+    candidates: [
+      { name: 'containerNodeIndex', value: 1073741845, kindHint: null, role: 'container', isTemplate: false },
+      { name: 'prefabImage', value: 1073741852, kindHint: 'image', role: 'value', isTemplate: true },
+      { name: 'prefabTextBox', value: 1073741850, kindHint: 'textbox', role: 'value', isTemplate: true },
+    ],
+  };
+  // ① 预勾选（isTemplate 的勾上、kind 预填；容器那条不当模板勾）
+  const rows = clientExports.__testExtRowsFromHandover(ho);
+  assert(rows.length === 3, '候选行数不对：' + JSON.stringify(rows));
+  const img = rows.find((r) => r.value === 1073741852);
+  assert(img.on === true && img.kind === 'image', 'isTemplate 的候选没默认预勾选 / 没预填 kind：' + JSON.stringify(img));
+  assert(rows.find((r) => r.value === 1073741850).kind === 'textbox', 'textbox 候选的 kind 没预填');
+  assert(rows.find((r) => r.value === 1073741845).on === false, '容器索引那条不该被当模板勾上');
+  assert(clientExports.__testExtRowsFromHandover(null).length === 0, '空回执应给空表（不是炸）');
+  // ② 容器预填
+  assert(clientExports.__testExtContainerFromHandover(ho) === '1073741845', '容器索引没预填进输入框');
+  assert(clientExports.__testExtContainerFromHandover({}) === '', '没抽到容器索引时不该编一个号');
+  // ③ 空候选指路 + 抽取失败如实说
+  const empty = clientExports.__testExtCandidatesLine({ candidates: [] });
+  assert(/miliastra_map op=clientui/.test(empty), '空候选没指路（第二条自动来源是 .gil）：' + empty);
+  assert(/手填/.test(empty), '空候选没说"或手填"：' + empty);
+  assert(/抽取失败/.test(clientExports.__testExtCandidatesLine({ ok: false, error: '读不到 X' })),
+    '抽取失败被说成"没有候选"（两种情况的下一步完全不同）');
+  assert(/3 条/.test(clientExports.__testExtCandidatesLine(ho)), '有候选时没给条数：' + clientExports.__testExtCandidatesLine(ho));
+  // ④ 「还缺什么」：没勾模板 → 说清现在点会缺 templates 报错；勾了 → 说清会用什么搭
+  const miss = clientExports.__testExtBindReadyHint(rows.map((r) => Object.assign({}, r, { on: false })));
+  assert(/缺 templates/.test(miss), '没有可用模板时没写清缺什么：' + miss);
+  const ready = clientExports.__testExtBindReadyHint(rows);
+  assert(/2 个模板/.test(ready) && /prefabImage/.test(ready), '有模板时没说清会用哪几个：' + ready);
+  assert(clientExports.__testExtBindReadyHint([]).length > 0, '空表也要有一句话（不能什么都不写）');
+  // ⑤ 这些新文案都会被面板原样显示 —— 不许有 Markdown 记号
+  for (const t of [empty, miss, ready, clientExports.__testExtCandidatesLine(ho)]) {
+    assert(!/\*\*/.test(t) && !/`/.test(t), '面板文案里混进了 Markdown 记号（会原样显示）：' + t);
+  }
+  // ⑥ 渲染层：那句「还缺什么」真的挂在「用它搭进模拟器」旁边（静态渲染时表是空的 → 应出现"还缺模板"）
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
+  const flat = html.replace(/<[^>]+>/g, ' ');
+  assert(/还缺模板/.test(flat), '「用它搭进模拟器」旁边没有写清缺什么');
+  assert(flat.indexOf('还缺模板') > flat.indexOf('用它搭进模拟器'), '「还缺什么」那句没排在按钮后面（写在上方会像在说别的）');
+  return '预勾选/预填 + 空候选指路 + 缺什么（渲染可见）+ 无 Markdown 记号';
+});
+
+/*
  * ★ 反向绊线（2026-09-25 作者要求）：「画面和截取画面功能很鸡肋不要了 GUI 部分直接删除」。
  * 模拟器面板里**不许再出现**这些取图入口的文案 —— 谁把它们爬回来，先看这段。
  * ⚠️ 删的只是**面板 GUI**：AI 侧一个字没动（miliastra_shot 的 capture/burst/list/clean/targets、

@@ -428,7 +428,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
-  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 创作者交接的控件模板索引；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错，**不许编造模板索引**）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）；**你自己想"玩"先记住量级**：发输入 ≈5ms 级、读场景 ≈200ms 级（≈5Hz）⇒ 能做**回合制闭环**、**不能逐帧看画面**（实时档要么一次调用里跑循环、要么让人玩）；HUD 上的字直接从 `get{view:true}` 的 **`textbox.text`** 读（当闭环条件用）；按 `…Down` 要**配对** `…Up` 否则等于一直按住' },
+  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 控件模板索引；**索引优先自动拿**：`op=handover`（可带 `source` 读任意本地 .lua）从源码抽 → `miliastra_map op=clientui` 从 `.gil` 读 → 两个都拿不到才问创作者，**不许编**；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）；**你自己想"玩"先记住量级**：发输入 ≈5ms 级、读场景 ≈200ms 级（≈5Hz）⇒ 能做**回合制闭环**、**不能逐帧看画面**（实时档要么一次调用里跑循环、要么让人玩）；HUD 上的字直接从 `get{view:true}` 的 **`textbox.text`** 读（当闭环条件用）；按 `…Down` 要**配对** `…Up` 否则等于一直按住' },
 ];
 
 export const PROMPT_RULES = [
@@ -1711,11 +1711,16 @@ const TOOLS = [
       + '人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。'
       + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。'
       + '\n★ **交接值从哪来？先 `op=handover`** —— 它列出这台机器上的**活文件**（并标出"当前正在开发的那张图"），'
-      + '再读那份 Lua，把源码里 `local NAME = <9 位以上整数>` 的**候选交接值**摆出来（含变量名与 `kind` 提示）+ 给一份 `suggestedTemplates`。'
+      + '也可以带 `source`（**任意本地 .lua 的绝对路径，只读**）直接读那一份（读完零改动；>8 MB / 二进制 / 相对路径一律拒绝）；'
+      + '再把源码里的**候选交接值**摆出来（`local NAME = <9 位以上整数>` 与表字段 `NAME = <大整数>` 两种写法都认，'
+      + '含变量名与 `kind` 提示）+ 给一份 `suggestedTemplates`。'
       + '为什么值得单开一步：交接值**抄错一位** → 脚本静默什么都不建（不报错）；从源码抽真值比让人抄一遍可靠。'
-      + '但 `kindHint` **只是提示**（看变量名猜的），控件类型必须创作者确认。'
+      + '但 `kindHint` **只是提示**（看变量名猜的），拿不准就在 `op=bind` 里传 `kind:"auto"`（谁让控件数增长就用谁）。'
+      + '\n★ **guid / containerId 优先自动拿，拿不到才问创作者（仍然不许编）**：'
+      + '① `op=handover`（可带 `source` 读任意本地 .lua）从源码抽 → ② `miliastra_map op=clientui` 从 `.gil` 读模板索引 → '
+      + '③ 两个都拿不到才让创作者给。'
       + '\n★ **把真机工程搬进模拟器用 `op=bind`**（一条命令替掉手写探针）：给 `source`（真机活文件 .lua 绝对路径）+ '
-      + '`templates:[{guid,kind,name?}]`（**创作者交接的控件模板索引**，不许编造）+ `containerId`（交接的容器索引，只记录/交叉核对）→ '
+      + '`templates:[{guid,kind,name?}]` + `containerId`（上面那三个来源拿到的交接值；只记录/交叉核对）→ '
       + '它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 '
       + '`run.controlCount`（控件建没建·建了几个）。默认 `fresh:true` 先清空出厂橱窗控件（只留你的工程）；`run:false` 只搭不跑；`saveAs` 存成工作区存档。'
       + '\n  · **`kind` 猜错是静默的**（控件类型不对时脚本设属性直接报错中止，什么都不建）→ 拿不准就传 `kind:"auto"`：'
@@ -1814,8 +1819,8 @@ const TOOLS = [
         file: { type: 'string', description: 'op=import 要导入的文件绝对路径。' },
         archive: { type: 'string', description: 'op=load 的存档相对路径；省略=列出工作区里的存档。' },
         path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
-        source: { type: 'string', description: 'op=bind：真机**活文件** .lua 的绝对路径（沙箱里那份；路径随账号/换图变化，别写死）。也可以不传它、改用 `script:{path,source}` 直接给源码。' },
-        templates: { type: 'array', description: 'op=bind：**创作者交接的控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它，**不许编造**）；`kind` = image/textbox/button/container…，**或 `"auto"`**（= 不猜：按 image → textbox → container 逐个起会话，谁让控件数增长就用谁，回执给 `kindTried[]` / `kindWinner`）；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
+        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**。op=handover 用它**只读**读那一份文件并抽候选交接值（>8 MB / 二进制 / 相对路径一律拒绝，读完零改动）；op=bind 用它当要搬进模拟器的脚本（通常给真机**活文件** .lua；路径随账号/换图变化，别写死）。op=bind 也可以不传它、改用 `script:{path,source}` 直接给源码。' },
+        templates: { type: 'array', description: 'op=bind：**控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它）—— **优先自动拿，不许编**：① `op=handover`（可带 `source`）从源码抽 → ② `miliastra_map op=clientui` 从 `.gil` 读 → ③ 两个都拿不到才问创作者；`kind` = image/textbox/button/container…，**或 `"auto"`**（= 不猜：按 image → textbox → container 逐个起会话，谁让控件数增长就用谁，回执给 `kindTried[]` / `kindWinner`）；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
         containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里自己硬编码了），只记进回执并和源码交叉核对（`handover.containerIdInSource`）。' },
         scriptName: { type: 'string', description: 'op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（双相的 checkMount 要求就是「双相.lua」），名字不对它会自己退出。' },
         mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件上（id 或名字；缺省=服务端容器节点）。' },

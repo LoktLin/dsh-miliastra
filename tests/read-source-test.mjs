@@ -40,6 +40,11 @@ async function check(label, fn) {
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex').toUpperCase();
 
+/** 调一次工具：**必须拒绝**的那些用例靠它拿错误文字（没抛就回 null，断言据此判红）。 */
+async function refusal(fn) {
+  try { await fn(); return null; } catch (e) { return (e && e.message) || String(e); }
+}
+
 const codeTool = TOOLS.find((t) => t.name === 'miliastra_code');
 const simTool = TOOLS.find((t) => t.name === 'miliastra_sim');
 
@@ -53,6 +58,30 @@ fs.writeFileSync(EXT, BODY, 'utf8');
 const EXT_BUF = fs.readFileSync(EXT);
 const EXT_LINES = BODY.split(/\r?\n/).length;
 const EXT_MTIME = fs.statSync(EXT).mtime.toISOString();
+
+/* --------------------------- ① op=handover source=<绝对路径>：只读、抽那份文件的候选 */
+
+/*
+ * 为什么单开这一组（作者 2026-09-25 报的缺陷）：面板「读取」是拿**粘贴的路径**去调
+ * `miliastra_sim op=handover source=` 抽候选交接值的 —— 这条路径要是没做校验、或没把 source 当回事，
+ * 面板就会「看起来读了、候选表却是空的」，人只能手填 guid（正好撞上"不许编造"那句）。
+ * 判据三件：
+ *   ① **读的是那一份文件**（readFrom / picked / readMeta 都得指向它，不是沙箱活文件）；
+ *   ② **只读**（读完零改动 —— 这条是硬要求，不因为"反正只读"省掉）；
+ *   ③ 校验与 `miliastra_code op=read source=` **同一套**（相对路径 / 二进制 / 超大一律拒绝），不是第二份实现。
+ */
+const hoSrc = path.join(tmp, '交接样本.lua');
+fs.writeFileSync(hoSrc, [
+  '-- 交接样本：表字段写法（真机脚本里更常见）+ 裸 local 写法',
+  'local LIMIT = 60',
+  'local CONFIG = {',
+  '  containerNodeIndex = 1073741845,',
+  '  prefabImage        = 1073741852,',
+  '}',
+  'local prefabTextBox = 1073741850',
+  '',
+].join('\n'), 'utf8');
+const HO_BUF = fs.readFileSync(hoSrc);
 
 /* ------------------------------------------------------------------ 读对了 */
 
@@ -163,6 +192,9 @@ await check(`★ 太大：超过 ${MAX_EXTERNAL_READ_BYTES} 字节（8 MB）就�
   // ② 辅助层：小上限也能测同一个分支（不必每次都写 8 MB）
   const r2 = readLuaAt(EXT, { maxBytes: 8 });
   assert(r2.ok === false && /太大/.test(r2.error), 'readLuaAt 的 maxBytes 分支没生效：' + JSON.stringify(r2).slice(0, 160));
+  // ③ op=handover source= 走的是**同一套校验**（复用 readLuaAt）—— 同一个文件在它那里也必须被拒
+  const hoMsg = await refusal(() => simTool.execute({ op: 'handover', source: huge }));
+  assert(hoMsg !== null && /太大/.test(hoMsg), 'op=handover source= 没把 8 MB 上限这条判据复用过来：' + hoMsg);
   fs.unlinkSync(huge);
   return r.error;
 });
@@ -267,6 +299,122 @@ await check('不传 source 时完全照旧：还是读沙箱活文件，回执�
   assert(out.text.split('\n').length <= 2, 'head:1 应该只给 1 行：' + JSON.stringify(out.text));
   return 'path=…\\' + out.path.split('\\').pop() + ' · lineCount=' + out.lineCount + ' · 无 readOnly/source 字段';
 });
+/* ------------------------------------------- ① op=handover source=… 的回归 */
+
+await check('★ op=handover source=<绝对路径>：读的是**那一份**文件（readFrom/readOnly/readMeta），不是沙箱活文件', async () => {
+  const ho = await simTool.execute({ op: 'handover', source: hoSrc });
+  assert(ho.readFrom === 'source', '没标出这次读的是 source 指定的文件：readFrom=' + JSON.stringify(ho.readFrom));
+  assert(ho.readOnly === true, 'source 读取没标 readOnly（只读这件事必须写在回执里）');
+  assert(ho.sourceArg === hoSrc, 'sourceArg 没原样回显粘贴的路径：' + ho.sourceArg);
+  assert(ho.picked === path.win32.normalize(hoSrc), 'picked 不是那份文件（多半读成沙箱活文件了）：' + ho.picked);
+  assert(!!ho.readMeta && ho.readMeta.bytes === HO_BUF.length && ho.readMeta.lines === 8,
+    'readMeta 的 bytes/lines 不对：' + JSON.stringify(ho.readMeta));
+  assert(ho.readMeta.sha256_12 === sha256Hex(HO_BUF).slice(0, 12), 'readMeta.sha256_12 对不上那份文件：' + ho.readMeta.sha256_12);
+  assert(ho.readMeta.bom === false, '无 BOM 的样本被报成 bom=true');
+  // 活文件清单照旧（不传 source 时的行为一字不变）——但它只是"顺带列出"，不是这次读的东西
+  assert(Array.isArray(ho.files) && typeof ho.fileCount === 'number', 'files/fileCount 这条老形状没了');
+  assert(/readFrom:"source"/.test(ho.note) && /只读/.test(ho.note), 'note 没写清"这次读的是 source 那份、且只读"：' + ho.note);
+  return 'readFrom=source · picked=' + ho.picked.split('\\').pop() + ' · ' + ho.readMeta.bytes + ' 字节 · sha256_12=' + ho.readMeta.sha256_12;
+});
+
+await check('★ 表字段写法也认：CONFIG.prefabImage = 大整数（作者那份 背景图片.lua 就是这么写的）', async () => {
+  const ho = await simTool.execute({ op: 'handover', source: hoSrc });
+  const byName = (n) => ho.candidates.find((c) => c.name === n);
+  assert(ho.candidates.length === 3, '候选条数不对（表字段那两条要抽出来）：' + JSON.stringify(ho.candidates));
+  assert(byName('containerNodeIndex').value === 1073741845 && byName('containerNodeIndex').role === 'container',
+    '容器那条没被认成容器：' + JSON.stringify(byName('containerNodeIndex')));
+  assert(byName('prefabImage').kindHint === 'image' && byName('prefabImage').isTemplate === true,
+    'prefabImage 没提示成 image 模板：' + JSON.stringify(byName('prefabImage')));
+  assert(byName('prefabTextBox').kindHint === 'textbox' && byName('prefabTextBox').isTemplate === true,
+    'prefabTextBox 没提示成 textbox 模板：' + JSON.stringify(byName('prefabTextBox')));
+  assert(!ho.candidates.some((c) => c.value === 60), '小整数（LIMIT = 60）被当成了交接值');
+  assert(ho.suggestedTemplates.length === 2 && ho.containerId === 1073741845,
+    'suggestedTemplates / containerId 没抽出来：' + JSON.stringify({ t: ho.suggestedTemplates, c: ho.containerId }));
+  assert(/kind:"auto"|kind:auto/.test(String(ho.nextStep || '')), '抽到了模板却没提示"拿不准用 kind:auto"：' + ho.nextStep);
+  return 'containerNodeIndex=1073741845（容器）· prefabImage=1073741852（image）· prefabTextBox=1073741850（textbox）';
+});
+
+await check('★ op=handover source=… 是**只读**的：读完文件逐字节未变、mtime 未变、旁边不多出备份/临时文件', async () => {
+  const dir = path.join(tmp, 'handover只读');
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, '只读.lua');
+  fs.writeFileSync(f, '-- 只读检查\nlocal TPL = 1073741868\n', 'utf8');
+  const before = fs.readFileSync(f);
+  const beforeStat = fs.statSync(f);
+  const beforeList = fs.readdirSync(dir).sort().join('|');
+
+  const ho = await simTool.execute({ op: 'handover', source: f });
+  assert(ho.candidates.length === 1, '读取失败（候选没抽出来）：' + JSON.stringify(ho).slice(0, 200));
+  assert(Buffer.compare(fs.readFileSync(f), before) === 0, '文件内容被改动了');
+  assert(fs.statSync(f).mtime.toISOString() === beforeStat.mtime.toISOString(), 'mtime 被改动了');
+  assert(fs.readdirSync(dir).sort().join('|') === beforeList, '目录里多出了东西（备份/临时文件？）：' + fs.readdirSync(dir).join(', '));
+  assert(!fs.existsSync(path.join(dir, '_backup')), '只读抽取竟然建了 _backup 目录');
+  assert(!/restoreWith/.test(JSON.stringify(ho)), '只读回执里出现了 restoreWith（写操作的口子漏进来了）');
+  return '逐字节未变 + mtime 未变 + 目录未变 + 无 _backup';
+});
+
+await check('★ source 分支复用 op=read 那套校验（源码断言：走 readLuaAt、自己不读盘）', () => {
+  const s = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'sim.mjs'), 'utf8');
+  const block = s.slice(s.indexOf("if (op === 'handover')"), s.indexOf("if (op === 'bind')"));
+  assert(block.length > 0, '找不到 op=handover 分支');
+  const i = block.indexOf('if (fromSource) {');
+  assert(i >= 0, '找不到 fromSource 分支（source 那条路没了？）');
+  const branch = block.slice(i, block.indexOf('} else {', i));
+  assert(/readLuaAt\(/.test(branch), 'source 分支没有复用 readLuaAt（校验被写成了第二份）');
+  // ⚠️ 先去掉注释再查（注释里会点名 readFileSync —— 算进去就假红；同 §只读性（结构）那条的坑）
+  const code = branch.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert(!/readFileSync/.test(code), 'source 分支自己又读了一次盘（绕过了那套校验）');
+  return 'source 分支只调 readLuaAt（8 MB / 二进制 / 绝对路径 都由它判）';
+});
+
+await check('★ 相对路径：op=handover source=… 拒绝（以前会按进程当前目录解析 —— 静默读错文件）', async () => {
+  const msg = await refusal(() => simTool.execute({ op: 'handover', source: '背景图片.lua' }));
+  assert(msg !== null, '相对路径竟然被接受了（会按进程当前目录解析到别的文件）');
+  assert(/绝对路径/.test(msg), '报错没点明"要绝对路径"：' + msg);
+  assert(/运行目录|盘符/.test(msg), '没给可行动的下一步：' + msg);
+  return msg.slice(0, 60) + '…';
+});
+
+await check('★ 二进制（含 NUL 字节）：op=handover source=… 拒绝按文本读', async () => {
+  const bin = path.join(tmp, 'handover二进制.lua');
+  fs.writeFileSync(bin, Buffer.concat([Buffer.from('-- 头\nlocal T = 1073741868\n', 'utf8'), Buffer.from([0x00, 0x01, 0xff])]));
+  const msg = await refusal(() => simTool.execute({ op: 'handover', source: bin }));
+  assert(msg !== null, '二进制竟然被当文本读了（会把乱码当成候选交接值）');
+  assert(/二进制|NUL/.test(msg), '报错没点明二进制/NUL：' + msg);
+  return msg.slice(0, 60) + '…';
+});
+
+await check('★ 空候选要**指路**：没认出模板索引 → 说清去 .gil 读（miliastra_map op=clientui）或手填', async () => {
+  const clean = path.join(tmp, '没有交接值.lua');
+  fs.writeFileSync(clean, '-- 这份源码里一个大整数都没有\nlocal N = 3\nprint("hi")\n', 'utf8');
+  const ho = await simTool.execute({ op: 'handover', source: clean });
+  assert(ho.candidates.length === 0, '这份源码本来就没有交接值，却抽出了候选：' + JSON.stringify(ho.candidates));
+  const ns = String(ho.nextStep || '');
+  assert(/miliastra_map op=clientui/.test(ns), '空候选没指路（第二条自动来源是 .gil）：' + ns);
+  assert(/手填/.test(ns), '空候选没说"或手填"：' + ns);
+  return ns.slice(0, 70) + '…';
+});
+
+await check('★ schema：source 的说明把 op=handover / op=bind 两种用法都讲清（绝对路径 + 只读）', () => {
+  const d = simTool.parameters.properties.source.description;
+  assert(/op=handover/.test(d), 'source 的说明没提 op=handover（AI 就不知道 handover 也吃 source）：' + d);
+  assert(/op=bind/.test(d), 'source 的说明没提 op=bind：' + d);
+  assert(/绝对路径/.test(d), 'source 的说明没强调必须是绝对路径');
+  assert(/只读/.test(d), 'source 的说明没点明 op=handover 是只读');
+  return 'source 说明含 op=handover / op=bind / 绝对路径 / 只读';
+});
+
+await check('不传 source 时形状照旧（仍扫活文件）：readFrom=live、没有 readOnly/readMeta', async () => {
+  const ho = await simTool.execute({ op: 'handover' });
+  assert(ho.readFrom === 'live', '不传 source 时应标 readFrom=live：' + JSON.stringify(ho.readFrom));
+  assert(ho.readOnly === undefined, '不传 source 时不该带 readOnly 标记（这条是"老路径"，形状要照旧）');
+  assert(ho.readMeta === undefined, '不传 source 时不该带 readMeta');
+  assert(Array.isArray(ho.files), 'files 清单没了：' + JSON.stringify(ho.fileCount));
+  assert('fileCount' in ho, 'fileCount 这个老字段没了');
+  if (ho.fileCount > 0) assert('currentLevel' in ho, '有活文件却不给 currentLevel');
+  return 'readFrom=live · files=' + ho.files.length + ' · fileCount=' + ho.fileCount + ' · 无 readOnly/readMeta';
+});
+
 /* ------------------------------------------------------------------ 汇总 */
 
 console.log('');
