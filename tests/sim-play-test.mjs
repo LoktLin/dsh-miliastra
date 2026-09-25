@@ -201,7 +201,17 @@ ok('产物缺失时**明确报错并给出补法**（不静默 404）',
   ok('★ `files` 放行了 HTML（lib/**/*.html）—— 否则页面根本不进包，装了也没有试玩页',
     (pkg.files || []).includes('lib/**/*.html'), JSON.stringify(pkg.files));
   ok('`files` 覆盖产物（lib/**/*.js 已含 dist）', (pkg.files || []).includes('lib/**/*.js'));
-  ok('新测试已挂进 `npm test`', /sim-play-test/.test(pkg.scripts.test));
+  /*
+   * `npm test` 现在指向 `tools/test-all.mjs`（一次**跑完全部套件**、不再 `&&` 串联 ——
+   * 一个套件红不该把后面 8 套一起带走）。判据跟着换机制，**意图不变**：
+   *   「npm test 走的是统一入口」**且**「那个入口的套件清单里有本套件」。
+   */
+  const testAll = await import('../tools/test-all.mjs');
+  ok('新测试已挂进 `npm test`',
+    /test-all/.test(pkg.scripts.test || '')
+    && testAll.SUITES.some((s) => s.args.join(' ').includes('tests/sim-play-test.mjs'))
+    && fs.existsSync(path.join(PKG, 'tests', 'sim-play-test.mjs')),
+    JSON.stringify({ test: pkg.scripts.test, suites: testAll.SUITES.length }));
   ok('发版前会校验产物不过期（prepublishOnly 跑 --check）', /--check/.test(pkg.scripts.prepublishOnly || ''));
   ok('esbuild 只在 devDependencies（装着插件的人不需要它）',
     !!pkg.devDependencies.esbuild && !pkg.dependencies.esbuild);

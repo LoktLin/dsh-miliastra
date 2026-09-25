@@ -10,7 +10,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { deploy, inspect, sha256, hasBom, backupFile, listBackups, restore, defaultBackupDir, stampOfName, atomicWriteFile, rollbackTo, fixedBackupPath, isAuxiliaryLuaName, pickLuaFile, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from '../lib/codefile.mjs';
+import { fileURLToPath } from 'node:url';
+import { deploy, inspect, sha256, hasBom, backupFile, listBackups, restore, defaultBackupDir, stampOfName, atomicWriteFile, rollbackTo, fixedBackupPath, isAuxiliaryLuaName, pickLuaFile, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, deployFingerprintName, fingerprintPathByName, DEPLOY_FINGERPRINT_NAME } from '../lib/codefile.mjs';
 // 原子写的**实现**住在 lib/fsx.mjs（codefile 只是转发）；这里直接测实现本身
 import { atomicWriteJson, prettyJson } from '../lib/fsx.mjs';
 
@@ -559,6 +560,82 @@ check('★ fixbom：只去那 3 个字节，且本来没有 BOM 就什么都不�
   assert(fail.ok === false && fail.backupFailed === true, '备份失败没被识别：' + JSON.stringify(fail).slice(0, 160));
   assert(Buffer.compare(fs.readFileSync(live2), pre) === 0, '备份失败却动了活文件');
   return '只去 3 字节（逐字节比对）/ 备份正确 / 警告 .bak 副作用 / 无 BOM 时零改动 / 备份失败即中止';
+});
+
+/* ------------------------------------------- ③ 指纹按文件名索引（跨文件不许串） */
+
+check('★ 部署指纹按**文件名**索引：多活文件目录下不再互相串（跨文件不判 changedSinceDeploy）', () => {
+  const d = path.join(tmp, 'fp-multi');
+  const bd = path.join(d, '_backup');
+  fs.mkdirSync(d, { recursive: true });
+  const a = path.join(d, '背景图片.lua');
+  const b = path.join(d, '测试.lua');
+  fs.writeFileSync(a, '-- 背景图片\nlocal a = 1\n', 'utf8');
+  fs.writeFileSync(b, '-- 测试\nlocal b = 2\n', 'utf8');
+
+  const w = writeDeployFingerprint(a, inspect(a), { backupDir: bd });
+  assert(w.ok, '写指纹失败：' + w.error);
+  // 新的那份**按活文件名**索引；旧的那份仍然照写（兼容既有调用方与上面那条老断言）
+  assert(path.basename(w.pathByName) === deployFingerprintName('背景图片.lua'),
+    '按名索引的指纹文件名不对：' + path.basename(w.pathByName));
+  assert(path.basename(w.path) === DEPLOY_FINGERPRINT_NAME, '旧版单份指纹没保留：' + path.basename(w.path));
+  assert(fs.existsSync(w.pathByName) && fs.existsSync(w.path), '两份指纹没都落盘');
+  assert(fingerprintPathByName(a, { backupDir: bd }) === w.pathByName, '按名取路径的函数与写的不一致');
+  // 文件名要能安全落盘：非法字符换掉，但原名内嵌在记录里
+  const weird = deployFingerprintName('a<b>c:d.lua');
+  assert(!/[<>:]/.test(weird) && /\.json$/.test(weird), '非法字符没被换掉：' + weird);
+
+  // ① 同名 → 按名取到、正常判
+  const own = readDeployFingerprint(a, { backupDir: bd });
+  assert(own.ok && own.source === 'byname' && own.foreign === false, '同名却没按名取到：' + JSON.stringify(own));
+  assert(own.belongsTo === '背景图片.lua', '没报出「指纹属于谁」：' + JSON.stringify(own.belongsTo));
+  const ownDelta = fingerprintDelta(own.record, inspect(a), { liveName: '背景图片.lua' });
+  assert(ownDelta.sameAsDeploy === true && ownDelta.changedSinceDeploy === false, '同名时应当正常判「一致」：' + JSON.stringify(ownDelta));
+
+  // ② 另一份活文件：按名取不到 → 回退旧版单份，而那份属于 背景图片.lua
+  const other = readDeployFingerprint(b, { backupDir: bd });
+  assert(other.ok && other.source === 'legacy' && other.foreign === true,
+    '没标出「指纹属于另一份文件」：' + JSON.stringify(other).slice(0, 200));
+  assert(/另一份活文件/.test(other.note) && /背景图片\.lua/.test(other.note), '说明里没点名是哪个文件：' + other.note);
+  const otherDelta = fingerprintDelta(other.record, inspect(b), { liveName: '测试.lua' });
+  assert(otherDelta.foreignFingerprint === true && otherDelta.belongsTo === '背景图片.lua',
+    '比对回执没标出跨文件：' + JSON.stringify(otherDelta).slice(0, 200));
+  // ★ 这条就是修之前会红的那条：跨文件时**两个哈希不同源**，判「变了 / 没变」都是假结论
+  assert(otherDelta.changedSinceDeploy === null && otherDelta.sameAsDeploy === null,
+    '跨文件竟然判了 changedSinceDeploy：' + JSON.stringify(otherDelta));
+  assert(/不据此判 changedSinceDeploy/.test(otherDelta.note), '没解释「为什么不判」：' + otherDelta.note);
+  // 同一个人工场景：旧版单份指纹**正好属于自己**时，仍然正常判（兼容支不许退化成「永远不判」）
+  try { fs.unlinkSync(w.pathByName); } catch { /* ignore */ }
+  const fb = readDeployFingerprint(a, { backupDir: bd });
+  assert(fb.ok && fb.source === 'legacy' && fb.foreign === false, '回退到自己那份时不该报 foreign：' + JSON.stringify(fb).slice(0, 160));
+  const fbDelta = fingerprintDelta(fb.record, inspect(a), { liveName: '背景图片.lua' });
+  assert(fbDelta.sameAsDeploy === true, '回退到自己那份时应当照旧判「一致」：' + JSON.stringify(fbDelta));
+  return '同名按名取并正常判 / 跨文件回退并标出来 + 不判 changedSinceDeploy / 回退到自己那份仍正常判';
+});
+
+/* ------------------------------------------- ④ 失败清理必须真的把 tmp 删掉 */
+
+check('★ 原子写失败清理**真的生效**（Node v24.9.0 的 rmSync 静默不删 → 改用 unlinkSync）', () => {
+  const d = path.join(tmp, 'atomic-unlink');
+  const asDir = path.join(d, 'target-dir');
+  atomicWriteFile(path.join(asDir, 'x'), '先建出来');   // 建目录用：把「目标」造成一个**目录**，rename 必失败
+  let threw = '';
+  try { atomicWriteFile(asDir, '新内容'); } catch (e) { threw = (e && e.message) || String(e); }
+  assert(threw, '写到一个目录上竟然没报错');
+  const leftovers = fs.readdirSync(d).filter((n) => n.includes('.tmp-'));
+  assert(leftovers.length === 0, '失败后清理**没生效**，盘上留下：' + leftovers.join(', '));
+
+  /*
+   * ★ 上面那条行为断言在**本机 Node（v24.18）上修之前也是绿的** —— 因为 rmSync 的老毛病只出现在
+   *   DSH 打包版 Node v24.9.0（实测：rmSync(tmp,{force:true}) 不报错、正常返回、文件还在）。
+   *   所以这里再加一条**结构断言**：清理必须走 unlinkSync —— 修之前它是红的（那时是 rmSync）。
+   */
+  const fsx = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'fsx.mjs'), 'utf8');
+  // 只看**代码**：注释里会解释「为什么不能用 rmSync(tmp,…)」，把注释算进去这条会假红
+  const fsxCode = fsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert(!/rmSync\s*\(/.test(fsxCode), '失败清理又用回 rmSync 了（Node v24.9.0 上它会静默不删）');
+  assert(/unlinkSync\s*\(\s*tmp/.test(fsxCode), '失败清理没用 unlinkSync（唯一在 v24.9.0 上真的会删的写法）');
+  return '抛错 + tmp 确实被删掉 + 清理走 unlinkSync';
 });
 
 console.log('');

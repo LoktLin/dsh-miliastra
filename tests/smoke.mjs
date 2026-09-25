@@ -428,6 +428,40 @@ for (const [toolName, args] of CASES) {
   const logTool = TOOLS.find((t) => t.name === 'miliastra_log');
   const mapTool = TOOLS.find((t) => t.name === 'miliastra_map');
 
+  /*
+   * ⑤3 `npm test` 必须走**统一入口** `tools/test-all.mjs`（一次跑完全部套件）。
+   *   为什么钉住：原来是 `&&` 串联 —— 第一个套件红就把后面 8 套一起带走，
+   *   只能一个个手跑（同事实测多花一轮）。这条在改之前是红的（那时 scripts.test 是那条长链）。
+   */
+  {
+    // 用 URL 直接定位 package.json（这个块里没有别处那个 pkgDir 变量）
+    const script = (JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts || {}).test || '';
+    if (/test-all\.mjs/.test(script) && !/&&/.test(script)) {
+      console.log('✓ `npm test` 走统一入口 `tools/test-all.mjs`（顺序跑完全部套件，不再 `&&` 串联）');
+      pass += 1;
+    } else {
+      fail += 1;
+      failures.push('[ergonomics] npm test 没走 tools/test-all.mjs（' + script + '）—— 一个套件红会带走后面几套');
+    }
+  }
+
+  /*
+   * ⑤2b `nameHint` 必须在 **schema** 里露出来。
+   *   为什么单列一条：`lib/leveldata.mjs` 早就支持「换个变量名找关卡表」，但**没暴露给 AI** ——
+   *   同事的活文件是 `DATA.LEVELS = {`，工具只回一句「没找到」，他只能自己回去翻代码。
+   *   暴露与否纯看 schema（函数签名看不出），所以在这里钉住。
+   */
+  {
+    const nh = ((codeTool.parameters && codeTool.parameters.properties) || {}).nameHint;
+    if (nh && nh.type === 'string' && /LEVELS/.test(nh.description || '')) {
+      console.log('✓ `miliastra_code` 暴露了 `nameHint`（关卡表变量名）→ `DATA.LEVELS = {` 这类写法不用再猜');
+      pass += 1;
+    } else {
+      fail += 1;
+      failures.push('[ergonomics] miliastra_code 没暴露 nameHint（leveldata 早就支持，漏接线的话 AI 根本不知道能传它）');
+    }
+  }
+
   const lvFull = await codeTool.execute({ op: 'levels' }, {});
   const lvSlim = await codeTool.execute({ op: 'levels', summaryOnly: true }, {});
   const lvOne = await codeTool.execute({ op: 'levels', stage: 3 }, {});

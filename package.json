@@ -85,7 +85,7 @@
   "scripts": {
     "lint": "node tools/lint.mjs",
     "typecheck": "node tools/typecheck.mjs",
-    "test": "node tools/lint.mjs && node tools/typecheck.mjs && node tests/readme-test.mjs && node tests/smoke.mjs && node tests/deploy-test.mjs && node tests/probe-deploy-test.mjs && node tests/lualint-test.mjs && node tests/shot-test.mjs && node tests/sim-test.mjs && node tests/sim-play-test.mjs && node tests/client-render-test.mjs && node --test \"engine/**/*.test.mjs\"",
+    "test": "node tools/test-all.mjs",
     "test:engine": "node --test \"engine/**/*.test.mjs\"",
     "build:sim-play": "node tools/build-sim-play.mjs",
     "prepublishOnly": "node tools/build-sim-play.mjs --check && npm test"

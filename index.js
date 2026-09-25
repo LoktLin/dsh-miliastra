@@ -34,8 +34,8 @@ import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
-import { inspect, deploy as deployFile, pickLuaFile, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
-import { readGil, renderClientUI, extractStrings } from './lib/gil.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME } from './lib/codefile.mjs';
+import { readGil, renderClientUI, extractStrings, compareScriptSnapshot } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
@@ -124,6 +124,9 @@ function scanErrorLog(...dirs) {
   };
 }
 
+/** 取路径最后一段（回执里要报「是哪个活文件」，用的就是它）。 */
+const pathBasenameOf = (p) => String(p || '').split(/[\\/]/).pop();
+
 /**
  * 部署后对账：**地图里嵌的脚本** vs **刚投进去的活文件**。
  *
@@ -144,18 +147,28 @@ function reconcileWithGil(lv, livePath) {
       };
     }
     const cur = inspect(livePath);
-    const match = gil.script.sourceSha256 === cur.sha256;
+    /*
+     * ⚠️ 判据**不是**「拿地图里嵌的哈希和这个文件比」那么简单（2026-09-25 修）：
+     *    一个关卡可以有多个活文件，若地图里嵌的**根本是另一个脚本**，那两个哈希本来就不同源 ——
+     *    这时报「地图里嵌的还是旧版 → 先别急着试玩」是**反向假告警**。
+     *    所以判断逻辑抽到 `compareScriptSnapshot`（纯函数，可单测）：名字对不上就**不比**，如实说清。
+     */
+    const cmp = compareScriptSnapshot({
+      embedded: gil.script,
+      live: { name: pathBasenameOf(livePath), path: livePath, sha256: cur.sha256, size: cur.size },
+    });
     return {
       ok: true, gilPath: lv.gil.path,
-      match,
-      embeddedSha256: gil.script.sourceSha256,
+      match: cmp.match,
+      // ⚠️ 只有 `skipped` 为 null 时 `match` 才有意义（跨脚本时 match=null → **不判**）
+      skipped: cmp.skipped || null,
+      embedded: cmp.embedded,
+      live: cmp.live,
+      embeddedSha256: cmp.embedded ? cmp.embedded.sha256 : null,
       liveSha256: cur.sha256,
-      embeddedBytes: gil.script.sourceBytes,
+      embeddedBytes: cmp.embedded ? cmp.embedded.bytes : null,
       liveBytes: cur.size,
-      conclusion: match
-        ? '地图里嵌的脚本 == 刚部署的活文件 → **可以试玩了**（记得停掉上一局再重开）'
-        : '⚠️ 地图里嵌的**还是旧版**（编辑器未重新加载 / 未存盘）→ **先别急着试玩**：'
-          + '在编辑器里存一次盘，或确认脚本面板已经是新版',
+      conclusion: cmp.conclusion,
     };
   } catch (e) {
     return { ok: false, reason: (e && e.message) || String(e) };
@@ -214,33 +227,76 @@ function resolveLevel(q) {
 }
 
 /**
- * 选一个活文件。
+ * 地图存档里嵌的**脚本名候选**（`file` 优先、缺了用 `name`，再各补一个 `<名>.lua`）。
  *
- * ⚠️ **一个关卡可以有多个 `.lua`**（不同角色 / 不同模块各挂一个客户端脚本）——
- * 所以「哪个是当前文件」必须**显式**，不能靠猜：
- *   · 给了 `name` → 精确匹配；找不到就**抛错并列出全部**，绝不悄悄换一个
- *   · 没给 → 优先名字里带常见关键词的，再退到列表第一个
+ * 这是判断「活文件目录里哪个才是当前文件」的**唯一依据**（以前那条关键字启发式是私货，已删）：
+ * 编辑器认的是地图里记着的挂载名，不是「名字里带没带『测试』」。
+ * 读不到 GIL（没有 .gil / 解析失败 / 没脚本映射）就返回空数组 —— **静默回退 mtime**，不为它报错。
+ *
+ * 按「gil 路径 + mtime」缓存：一次工具调用里可能选好几回文件，不必反复解 86KB 的 protobuf。
+ */
+const mountedNamesCache = new Map();
+function mountedScriptNames(lv) {
+  if (!lv || !lv.gil || !lv.gil.path) return [];
+  const key = lv.gil.path + '@' + (lv.gil.mtimeMs || lv.gil.mtime || '');
+  if (mountedNamesCache.has(key)) return mountedNamesCache.get(key);
+  let names = [];
+  try {
+    const gil = readGil(lv.gil.path);
+    if (gil.ok && gil.script) {
+      const raw = [gil.script.file, gil.script.name].filter((x) => typeof x === 'string' && x.trim());
+      names = raw.map((x) => pathBasenameOf(x));
+      for (const x of raw) if (!/\.lua$/i.test(x)) names.push(pathBasenameOf(x) + '.lua');
+      names = [...new Set(names)];
+    }
+  } catch { names = []; }
+  mountedNamesCache.set(key, names);
+  return names;
+}
+
+/**
+ * 选一个活文件 —— 返回 `{ picked, pickedBy, candidates, mountedName, note }`（**不再只返回文件对象**）。
+ *
+ * ⚠️ **一个关卡可以有多个 `.lua`**（不同角色 / 不同模块各挂一个客户端脚本），所以必须说清「凭什么选它」：
+ *   · 给了 `file` → 精确匹配（`pickedBy: 'explicit'`）；找不到就**抛错并列出全部**，绝不悄悄换一个；
+ *   · 没给 → 先按**地图存档里嵌的脚本名**（`pickedBy: 'gil'`），对不上才退到 **mtime 最新**（`pickedBy: 'mtime'`）。
+ *
+ * ★ 2026-09-25 修掉的那条：这里原来是**关键字启发式**（`/双相|测试|main|levelScript/`，命中即返回）——
+ *   同事的目录里有 `game_01.lua`（真正挂载的）/ `测试.lua`（最旧）/ `背景图片.lua`（刚部署）时，
+ *   它稳定选中 `测试.lua`：`op=inspect` 体检了最旧的那个、`reconcile` 拿它的快照去比别人的文件，
+ *   还给出「地图里嵌的还是旧版，先别急着试玩」这种反向假告警。
+ *   排序/选择现在**只有一份实现**（`lib/codefile.mjs` 的 `rankLuaFiles`），与 `pickLuaFile` 共用。
  * `miliastra_health` 会把**全部**活文件列出来，供调用方挑选。
  */
-const pathBasenameOf = (p) => String(p || '').split(/[\\/]/).pop();
-
 const chooseLua = (lv, name) => {
   if (!lv || !lv.luaFiles.length) return null;
+  const info = rankLuaFiles(lv.luaFiles, { mountedName: mountedScriptNames(lv) });
   if (name) {
     const hit = lv.luaFiles.find((f) => f.name === name);
     if (!hit) {
       throw new Error(`关卡 ${lv.levelId} 下没有活文件 "${name}"。现有：${lv.luaFiles.map((f) => f.name).join('、')}`);
     }
-    return hit;
+    return { ...info, picked: hit, pickedBy: 'explicit', pickedNote: '按显式 file 参数选中（其余候选仅供参考）' };
   }
-  // ⚠️ 兜底「最近改动」时必须**跳过附属文件**（探针源码 / 备份）：
-  //    早期探针部署会把 `_探针_xxx.lua` 写进活文件目录，而它是最新的 mtime，
-  //    于是后续不带 file 的操作全都打到了探针上 —— 等于在错的文件上做备份/部署/还原。
-  const real = lv.luaFiles.filter((f) => !f.auxiliary);
-  return real.find((f) => /双相|测试|main|levelScript/i.test(f.name))
-    || real.slice().sort((a, b) => b.mtimeMs - a.mtimeMs)[0]   // 兜底取**最近改动**的那个，而不是文件名排序第一个
-    || null;
+  return info;
 };
+
+/**
+ * 「这次用的是哪个活文件、凭什么」—— 每个 op 的公开回执都带上它（`pickedBy` / `candidates`）。
+ * 纯展示；**不含 undefined**（`smoke` 与宿主都会拒收含 undefined 的结果）。
+ */
+function pickedFields(pick) {
+  if (!pick) return { pickedBy: null, selectedFile: null, candidates: [] };
+  const out = {
+    pickedBy: pick.pickedBy,
+    selectedFile: pick.picked ? pick.picked.name : null,
+    candidates: pick.candidates || [],
+  };
+  if (pick.mountedName) out.mountedName = pick.mountedName;
+  const note = pick.pickedNote || pick.note;
+  if (note) out.pickedNote = note;
+  return out;
+}
 
 /** 结构对象（不是客户端控件）：容器、布局、各种 HierarchyRoot，以及内置布局控件。 */
 const STRUCTURAL_NAME = /客户端控件容器|布局|HierarchyRoot|小地图|技能区|队伍信息|生命值条|摇杆|退出按钮|语音|选项卡|聊天按钮|网络状态|挣扎按钮|提示队列/;
@@ -446,6 +502,11 @@ const TOOLS = [
             + '**不带每块平台的坐标、不带直方图分箱** —— 先扫一眼再 `stage=N` 钻进去。默认 false（全量）。',
         },
         nearPx: { type: 'number', description: 'op=levels：「近似贴上」的筛选阈值（默认 48px）—— **这是筛选，不是判定**。' },
+        nameHint: {
+          type: 'string',
+          description: 'op=levels：关卡表的**变量名**（默认 `LEVELS`）。`local LEVELS = {` 与 `DATA.LEVELS = {` 两种写法都认；'
+            + '抽不到表时回执里会列出 `nameCandidates`（文件里像关卡表的声明 / 赋值），照着它传即可。',
+        },
       },
       additionalProperties: false,
     },
@@ -454,8 +515,10 @@ const TOOLS = [
       const op = String(args.op || 'inspect');
       const lv = resolveLevel(args.level);
       if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——说明还没在编辑器里挂客户端脚本。`);
-      const target = chooseLua(lv, args.file);
+      const pick = chooseLua(lv, args.file);
+      const target = pick ? pick.picked : null;
       const destPath = target ? target.path : (args.file ? lv.luaDir + '\\' + args.file : null);
+      const picked = pickedFields(pick);
 
       if (op === 'inspect') {
         const info = destPath ? inspect(destPath) : null;
@@ -465,10 +528,21 @@ const TOOLS = [
           ok: true,
           op,
           level: { brand: lv.brand, levelId: lv.levelId, accountId: lv.accountId },
+          ...picked,
           luaDir: lv.luaDir,
           files: lv.luaFiles.map((f) => ({ name: f.name, size: f.size, mtime: f.mtime, ...(f.auxiliary ? { auxiliary: true } : {}) })),
           inspected: info,
-          deploy: fp ? { recordPath: fp.path, ...fingerprintDelta(fp.record || null, info) } : null,
+          // ③ 点明「本次比的是哪个文件 / 指纹属于哪个文件」：指纹现在**按文件名索引**，
+          //    回退到旧版单份指纹且它属于别的文件时，`fingerprintDelta` 会给出 foreignFingerprint 并且**不判**
+          //    changedSinceDeploy（跨文件的两个哈希本来就没有可比性）
+          deploy: fp ? {
+            recordPath: fp.path,
+            fingerprintSource: fp.source || null,
+            fingerprintBelongsTo: fp.belongsTo || null,
+            comparedFile: info ? pathBasenameOf(info.path) : null,
+            ...(fp.foreign ? { fingerprintWarning: fp.note } : {}),
+            ...fingerprintDelta(fp.record || null, info, { liveName: info ? pathBasenameOf(info.path) : null }),
+          } : null,
           // 「.gia 里很干净」不等于「脚本没出事」—— 循环调用/挂载失败只写这个文件
           errorLog: scanErrorLog(lv.luaDir, lv.levelDir),
         };
@@ -482,6 +556,7 @@ const TOOLS = [
         const head = Number.isFinite(args.head) && args.head >= 0 ? args.head : 80;
         return {
           ok: true, op, path: destPath, info,
+          ...picked,
           lineCount: lines.length,
           text: head === 0 ? text : lines.slice(0, head).join('\n'),
           truncated: head !== 0 && lines.length > head,
@@ -491,7 +566,7 @@ const TOOLS = [
         if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const r = listBackups(destPath, { backupDir: args.backupDir });
         return {
-          ok: true, op, dest: destPath, backupDir: r.dir,
+          ok: true, op, dest: destPath, ...picked, backupDir: r.dir,
           fixedBackup: r.fixedPath,
           fixedExists: r.entries.some((e) => e.fixed),
           count: r.entries.length,
@@ -508,7 +583,7 @@ const TOOLS = [
         if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const r = backupFile(destPath, { backupDir: args.backupDir });
         return {
-          ok: r.ok, op, dest: destPath, ...r,
+          ok: r.ok, op, dest: destPath, ...picked, ...r,
           restoreWith: restoreCommand(null, destPath),
           note: r.ok ? '已写两份：固定名 `' + pathBasenameOf(r.fixed || '') + '`（还原默认用它）+ 一份带本地时间戳的历史。' : null,
         };
@@ -518,7 +593,7 @@ const TOOLS = [
         // backup 可不传 = 用固定名那份（<原名>.bak）。这是「固定统一备份名」的用处：还原有确定目标。
         const r = restoreFile(args.backup || null, destPath, { backupDir: args.backupDir });
         return {
-          ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
+          ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
           error: r.error || (r.errors || [])[0] || null,
           restoreWith: restoreCommand(null, destPath),
           usedFixedBackup: r.usedFixedBackup === true,
@@ -546,9 +621,17 @@ const TOOLS = [
           rec = reconcileWithGil(lv, destPath);
         }
         return {
-          ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
+          ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
           lintSummary: r.lint ? (r.lint.ok ? '结构正常' : '发现问题') : '（未校验）',
-          deployFingerprint: fp ? { ok: fp.ok, path: fp.path, sha256: (fp.record || {}).sha256 || null, atLocal: (fp.record || {}).atLocal || null } : null,
+          deployFingerprint: fp ? {
+            ok: fp.ok,
+            // ⚠️ `path` 故意仍是**旧版单份**那份（`.miliastra-deploy.json`）—— 既有回执与断言按它写的，
+            //    不动它；这次真正写进去、之后 **op=inspect 会去读**的是 `pathByName`（按活文件名索引）。
+            path: fp.path,
+            pathByName: fp.pathByName || fp.path,
+            sha256: (fp.record || {}).sha256 || null,
+            atLocal: (fp.record || {}).atLocal || null,
+          } : null,
           reconcile: rec,
           restoreWith: r.fixedBackup
             ? restoreCommand(null, destPath)
@@ -556,7 +639,13 @@ const TOOLS = [
           nextStep: r.ok
             ? (rec && rec.match === true
               ? '停掉当前试玩 → 重新试玩一局，然后 miliastra_log 取回结果'
-              : '先在编辑器里存盘（地图里嵌的还不是这一版）→ 再重新试玩一局')
+              : (rec && rec.skipped
+                // ② 跨脚本时**不给**「先别急着试玩」这种结论：两个不同脚本的哈希本来就不同源，
+                //    该做的是先弄清「哪个才是你正在改的」
+                ? '地图里嵌的是 ' + ((rec.embedded && (rec.embedded.file || rec.embedded.name)) || '另一个脚本')
+                  + '，与本次的 ' + pathBasenameOf(destPath) + ' 对不上 → 先用 miliastra_health 看清这个关卡下有哪些活文件，'
+                  + '确认哪个才是你正在改的（也可以直接传 file 指定）'
+                : '先在编辑器里存盘（地图里嵌的还不是这一版）→ 再重新试玩一局'))
             : null,
         };
       }
@@ -564,7 +653,7 @@ const TOOLS = [
         if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const r = stripBomFile(destPath, { backupDir: args.backupDir });
         return {
-          ok: r.ok, op, level: { levelId: lv.levelId }, ...r,
+          ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
           error: r.error || null,
           restoreWith: r.restoreWith || restoreCommand(null, destPath),
         };
@@ -572,13 +661,20 @@ const TOOLS = [
       if (op === 'levels') {
         if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
         const src = fsMod.readFileSync(destPath, 'utf8');
-        const ex = extractLevelTable(src);
+        const nameHint = args.nameHint ? String(args.nameHint) : 'LEVELS';
+        const ex = extractLevelTable(src, { nameHint });
         if (!ex.ok) {
+          // ★ 抽不到表时**列出候选**：把文件里像关卡表的声明 / 赋值（`local LEVELS` / `DATA.LEVELS` / …）
+          //   摆出来。只回一句「没找到」等于让人回去翻 20KB 的代码找变量名。
+          const nameCandidates = ex.nameCandidates || [];
           return {
-            ok: false, op, file: destPath,
+            ok: false, op, file: destPath, ...picked,
             error: ex.error, line: ex.line || null, lineText: ex.lineText || null,
             searchedFor: ex.searchedFor || null, constantsFound: (ex.constants || []).length,
-            hint: ex.hint || null,
+            nameCandidates,
+            hint: ex.hint || (nameCandidates.length
+              ? '关卡表多半用了别的名字 —— 把上面 nameCandidates 里的某一个传给 nameHint 再试一次'
+              : '活文件里没有任何像关卡表的声明 / 赋值（`local X = {` 或 `A.X = {`）'),
           };
         }
         const cards = describeLevels(ex.levels, {
@@ -587,7 +683,9 @@ const TOOLS = [
         });
         const summaryOnly = args.summaryOnly === true;
         return {
-          ok: true, op, file: destPath,
+          ok: true, op, file: destPath, ...picked,
+          matchedName: ex.matched ? ex.matched.name : null,
+          nameHint,
           levelCount: ex.levels.length,
           stageFilter: args.stage == null || args.stage === '' ? null : String(args.stage),
           summaryOnly,
@@ -709,24 +807,28 @@ const TOOLS = [
       }
       if (op === 'script') {
         const cur = args.level || !args.path ? resolveLevel(args.level) : null;
-        // 一个关卡可能有多个活文件 —— 比的是**指定/默认的那一个**，返回里带上它叫什么
-        const live = cur ? chooseLua(cur, args.file) : null;
+        // 一个关卡可能有多个活文件 —— 比的是**指定/默认的那一个**，返回里带上「选了谁、凭什么」
+        const pick = cur ? chooseLua(cur, args.file) : null;
+        const live = pick ? pick.picked : null;
         let liveInfo = null;
         if (live) {
           const i = inspect(live.path);
           liveInfo = { name: live.name, path: live.path, size: i.size, sha256: i.sha256, mtime: i.mtime };
         }
-        const match = !!(gil.script && liveInfo && gil.script.sourceSha256 === liveInfo.sha256);
+        // ② 同名才比哈希：名字对不上就是**另一个脚本**，原来那种 `match: true` 只是「两个不相干的文件正好同内容」
+        //    式的假安心（实测同事遇到过：报 match，其实与他正在改的文件无关）
+        const cmp = compareScriptSnapshot({
+          embedded: gil.script,
+          live: liveInfo ? { name: liveInfo.name, path: liveInfo.path, sha256: liveInfo.sha256, size: liveInfo.size } : null,
+        });
         return {
           ok: true, op, path: gilPath,
-          embedded: gil.script ? { name: gil.script.name, file: gil.script.file, bytes: gil.script.sourceBytes, sha256: gil.script.sourceSha256 } : null,
+          ...pickedFields(pick),
+          embedded: cmp.embedded,
           live: liveInfo,
-          match,
-          note: gil.script
-            ? (match
-              ? '地图里嵌的脚本与本地活文件哈希一致 —— 但**地图可能是上次存盘时的快照**，改完活文件记得在编辑器里存盘才会同步。'
-              : '地图里嵌的脚本与本地活文件**不一致**：要么刚改了活文件没存盘，要么编辑器里有未保存改动。')
-            : '地图里没有脚本映射记录。',
+          match: cmp.match,
+          skipped: cmp.skipped || null,
+          note: cmp.conclusion,
         };
       }
       throw new Error('未知 op：' + op);
@@ -1350,7 +1452,7 @@ const TOOLS = [
         const lv = resolveLevel(args.level);
         if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——先在编辑器里挂一个客户端脚本。`);
         const chosen = chooseLua(lv, args.file);
-        const dest = chosen ? chosen.path : lv.luaDir + '\\' + (lv.levelId + '_probe.lua');
+        const dest = chosen && chosen.picked ? chosen.picked.path : lv.luaDir + '\\' + (lv.levelId + '_probe.lua');
         const now = new Date();
         const stamp = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0')
           + '-' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0');

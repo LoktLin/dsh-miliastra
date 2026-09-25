@@ -93,11 +93,24 @@ check('if 被 until 关（类型错配）', () => {
   return lintSummary(r);
 });
 
-console.log('\n— 组 3：真实文件回归 —');
+console.log('\n— 组 3：真实文件回归（样本目录不在就**跳过**，不算失败） —');
 
+/*
+ * ⚠️ 这一组依赖工作区里的 `code/`（真实 .lua 备份样本）—— 那是**本机工作区**的目录，插件包里没有它。
+ *    实测（2026-09-25 同事反馈）：他的插件 checkout 在
+ *    `C:\Users\Administrator\dsh-plugins\dsh-miliastra`，`../../code` 不存在 →
+ *    旧版直接判「找不到 <目录>」**失败**，他那里 31/1，我这里是 32/0：
+ *    **「环境缺失」被当成了「代码坏了」**（和 smoke 开头那条纪律相反）。
+ *
+ * 现在：目录不存在 / 目录里没有 .lua → 打印「跳过：没找到 <绝对路径>（真实 .lua 回归样本）」，
+ * 既**不算失败**，也**不静默通过**（跳过是明说的，断言总数会因此少一条）。
+ */
 const codeDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'code');
+let skipped = 0;
+const skip = (why) => { skipped += 1; console.log('⏭ 跳过：' + why); };
+
 if (!fs.existsSync(codeDir)) {
-  check('真实 Lua 目录存在', () => { throw new Error('找不到 ' + codeDir); });
+  skip('没找到 ' + codeDir + '（真实 .lua 回归样本）—— 这一组依赖本机工作区的 code/，插件包里没有它');
 } else {
   const files = [];
   const walk = (p) => {
@@ -106,19 +119,22 @@ if (!fs.existsSync(codeDir)) {
     else if (p.endsWith('.lua')) files.push(p);
   };
   walk(codeDir);
-  assert(files.length > 0, 'code/ 下没找到 .lua');
-  let badFiles = 0;
-  for (const f of files.sort()) {
-    const txt = fs.readFileSync(f, 'utf8');
-    const r = lintLua(txt);
-    if (!r.ok) { badFiles += 1; failures.push(path.basename(f) + ': ' + lintSummary(r)); }
+  if (!files.length) {
+    skip('没找到 —— ' + codeDir + ' 下没有任何 .lua（真实 .lua 回归样本）');
+  } else {
+    let badFiles = 0;
+    for (const f of files.sort()) {
+      const txt = fs.readFileSync(f, 'utf8');
+      const r = lintLua(txt);
+      if (!r.ok) { badFiles += 1; failures.push(path.basename(f) + ': ' + lintSummary(r)); }
+    }
+    check(`真实文件全部结构正常（${files.length} 个）`, () => {
+      assert(badFiles === 0, badFiles + ' 个文件被误判：' + failures.slice(-badFiles).join(' | '));
+      return files.length + ' 个文件（含 ' + Math.max(...files.map((f) => fs.readFileSync(f, 'utf8').split('\n').length)) + ' 行的大文件）';
+    });
   }
-  check(`真实文件全部结构正常（${files.length} 个）`, () => {
-    assert(badFiles === 0, badFiles + ' 个文件被误判：' + failures.slice(-badFiles).join(' | '));
-    return files.length + ' 个文件（含 ' + Math.max(...files.map((f) => fs.readFileSync(f, 'utf8').split('\n').length)) + ' 行的大文件）';
-  });
 }
 
-console.log(`\n通过 ${pass} 项，失败 ${fail} 项`);
+console.log(`\n通过 ${pass} 项，失败 ${fail} 项` + (skipped ? `（另有 ${skipped} 组跳过：环境里没有样本目录，非失败）` : ''));
 if (fail) { console.log('\n失败明细：'); for (const f of failures.slice(0, 12)) console.log('  · ' + f); }
 process.exitCode = fail ? 1 : 0;
