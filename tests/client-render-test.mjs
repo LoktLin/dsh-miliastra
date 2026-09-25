@@ -873,16 +873,17 @@ check('inline 视图里没有关闭按钮（视图不该有"关掉自己"这回�
   return '无 ×';
 });
 
-check('「模拟器」视图能真渲染（不是占位）：8 个动作 + 诚实空态', () => {
+check('「模拟器」视图能真渲染（不是占位）：传输/导出/重置动作 + 诚实空态', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorView, {}));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('模拟器'), '缺标题');
-  for (const label of ['刷新', '编辑器画面', '开始试玩', '单步', '刷新画面', '停止', '导出 GIA', '重置工程']) {
+  for (const label of ['刷新', '开始试玩', '单步', '停止', '导出 GIA', '重置工程']) {
     assert(text.includes(label), '缺按钮：' + label);
   }
-  assert(text.includes('还没有画面'), '没给「还没取到画面」的诚实提示（空着让人猜）');
+  // 取图入口已按作者要求删除（画面去右列那个试玩页看）→ 空态落在**日志**上，不再是「还没有画面」
+  assert(text.includes('还没有日志'), '没给「还没有日志」的诚实提示（空着让人猜）');
   assert(html.includes('dsh-miliastra-inline'), '模拟器视图没走全宽 inline 布局');
-  return '8 个动作 + 空态提示 + 全宽布局';
+  return '6 个动作 + 日志空态 + 全宽布局';
 });
 
 check('浮层面板 = 三个独立页面（初级功能 / 高级功能 / 模拟器），**没有「全部」**', () => {
@@ -953,18 +954,21 @@ check('画布点击坐标换算（纯函数）：左下原点、y 翻转、退�
  * ① 切设备会**重建整个运行时**（画布一变，16:9 舞台与 AI 记下的操作坐标都要重算）；
  * ② 试玩页原来那份**手写**的设备清单里有引擎不存在的预设（`pc-4-3` / `phone-16-9` / `phone-4-3`）
  *    → 选中就报 `unknown canvas preset`（作者截图里那条红条）。
- * ⚠️ 能力没丢：AI 仍可用 `miliastra_sim op=play device|view` 与 `playerCount`。
- * 这条断言是**反向**的：谁要是把开关加回来，先看这段注释。
+ * 2026-09-25 作者又说：「画面和截取画面功能很鸡肋不要了 GUI 部分直接删除」→ **连帧**（它只服务于画面）也删了。
+ * ⚠️ 能力没丢：AI 仍可用 `miliastra_sim op=play device|view`、`playerCount`、`op=shot` / `op=frames`。
+ * 这条断言是**反向**的：谁要是把开关 / 取图入口加回来，先看这段注释。
  */
-check('模拟器面板：连帧 + 按键保留，**设备/人数/视角的切换已去掉**（固定 PC 16:9 单人）', () => {
+check('模拟器面板：按键与传输控制保留，**设备/人数/视角 + 连帧/截图按钮都已去掉**（固定 PC 16:9 单人）', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
   const text = html.replace(/<[^>]+>/g, ' ');
-  assert(/连帧/.test(text), '缺连帧开关');
   assert(text.includes('按键：') && text.includes('发送键'), '缺按键行（按键不是"切换"，要留）');
+  for (const label of ['开始试玩', '单步', '停止']) {
+    assert(text.includes(label), '缺传输控制（非取图功能，要留）：' + label);
+  }
   assert(!text.includes('设备：') && !text.includes('人数：') && !text.includes('视角：'),
     '还留着设备/人数/视角下拉 —— 作者要求去掉（它们会重建运行时、打歪画布尺寸）');
   assert(/画布\/人数\/视角固定/.test(text), '去掉开关后没写清"现在是固定的什么"');
-  return '连帧/按键保留；设备·人数·视角已固定';
+  return '按键 + 传输控制保留；设备·人数·视角已固定';
 });
 
 check('模拟器是**面板内的第三个页面**（不再只是提示去会话区）', () => {
@@ -972,7 +976,7 @@ check('模拟器是**面板内的第三个页面**（不再只是提示去会话
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'sim' })));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('开始试玩') && text.includes('导出 GIA'), '模拟器页没渲染出动作按钮');
-  assert(text.includes('还没有画面'), '模拟器页缺空态提示');
+  assert(text.includes('还没有日志'), '模拟器页缺空态提示');
   assert(/dsh-miliastra-simbody/.test(html), '没有 simbody 容器（正文没与 conversation.view 复用同一个组件）');
   assert(!/dsh-miliastra-bodyfill/.test(html), '模拟器页不该再套卡片网格（它自己就是两栏）');
   return '面板内第三个页面可渲染';
@@ -980,6 +984,7 @@ check('模拟器是**面板内的第三个页面**（不再只是提示去会话
 
 /*
  * 2026-09-24 作者要求：「模拟器那个 tab 就是 1:2，其中 2 的部分就是放 /miliastra/play（AI 能操作、人也能看到）」。
+ * 2026-09-25 作者又要求：「绝对路径的入口放做在左边最顶上」+「画面和截取画面功能很鸡肋不要了 GUI 部分直接删除」。
  * 这类"布局要求"最容易在后续改动里被无声改回去（面板不报错、只是又变回旧样子），所以钉成断言。
  */
 check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是嵌入的**试玩页** `/miliastra/play`', () => {
@@ -1005,17 +1010,24 @@ check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是�
   assert(/dsh-miliastra-playframe/.test(html), 'iframe 没有样式类（会渲染成一条细缝）');
   assert(/src="\/miliastra\/play"/.test(html), 'iframe 的 src 不是 /miliastra/play');
   assert(/title="千星模拟器试玩页/.test(html), 'iframe 没有 title（无障碍与排障都要）');
-  // ③ 顺序：左（画面/操作/验收单/工程）在 iframe 之前 ⇒ iframe 落在右边那 2 份里
+  // ③ 顺序：左列（读本地 .lua / 日志 / 操作 / 时间线 / 验收单 / 工程）在 iframe 之前 ⇒ iframe 落在右边那 2 份里
   assert(html.indexOf('dsh-miliastra-playside') >= 0
     && html.indexOf('dsh-miliastra-playside') < html.indexOf('dsh-miliastra-playframe'),
   'iframe 没排在左列之后（会跑到 1 的那一半去）');
-  // ④ 左列几块都在；**顺序 = "最常看的在最上面"**（作者实测「画面在左下角」就是被工程卡挤下去的）
-  for (const label of ['① 画面与日志', '② 试玩操作', '验收单', '④ 工程与控件树 / 工程适配', '工程适配', '操作时间线']) {
+  // ④ 左列几块都在；**顺序 = "最常看的在最上面"**（作者实测「画面在左下角」就是被工程卡挤下去的）。
+  //    2026-09-25 起第一位是作者点名的「读本地 .lua（绝对路径）」——它原来塞在 ④ 里、要先展开折叠卡才看得见。
+  for (const label of ['读本地 .lua（绝对路径）', '① 试玩日志', '② 试玩操作', '操作时间线', '验收单',
+    '④ 工程与控件树 / 工程适配', '工程适配']) {
     assert(text.includes(label), '左列缺：' + label);
   }
-  const idx = ['① 画面与日志', '② 试玩操作', '验收单', '④ 工程与控件树'].map((s) => text.indexOf(s));
+  const order = ['读本地 .lua（绝对路径）', '① 试玩日志', '② 试玩操作', '操作时间线', '验收单', '④ 工程与控件树'];
+  const idx = order.map((s) => text.indexOf(s));
   assert(idx.every((n) => n >= 0) && idx.slice().sort((a, b) => a - b).join(',') === idx.join(','),
-    '左列顺序不对（画面必须排第一）：' + idx.join(' / '));
+    '左列顺序不对（「读本地 .lua（绝对路径）」必须排第一）：' + idx.join(' / '));
+  // 「最顶上」= 真的排在左列第 1 张卡（在左列容器里、且在日志卡之前）——作者原话「放做在左边最顶上」
+  assert(html.indexOf('读本地 .lua（绝对路径）') > html.indexOf('dsh-miliastra-playside')
+    && html.indexOf('读本地 .lua（绝对路径）') < html.indexOf('① 试玩日志'),
+  '「读本地 .lua（绝对路径）」没排在左列最上面');
   // ⑤ 传输控制与验收单按钮都在（它们驱动的是**同一个**会话）
   for (const label of ['开始试玩', '单步', '停止', '读清单', '跑这一组', '扫描活文件', '搭进模拟器']) {
     assert(html.includes(label), '缺控件/按钮：' + label);
@@ -1027,19 +1039,22 @@ check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是�
   assert(/dsh-miliastra-playframe\{[^}]*flex:11auto[^}]*min-height:240px/.test(css), 'iframe 没跟着右列高度自适应');
   // ⑦ 工程那块默认折叠（不然一长就把上面两块挤走）
   assert(/<details[^>]*dsh-miliastra-sec/.test(html), '「工程与控件树」没做成可折叠的 <details>');
-  return '1:2 + iframe(/miliastra/play) + 左列顺序(画面最先) + 左列内滚 + 工程折叠 + 窄屏兜底';
+  return '1:2 + iframe(/miliastra/play) + 左列顺序(读本地 .lua 最先) + 左列内滚 + 工程折叠 + 窄屏兜底';
 });
 
 /*
  * 2026-09-25 作者要求：「现在不能直接看 我希望编辑器面板增加一个输入 lua 的绝对路径读取的功能」；
  * 追问后他选的是「两个都要」：**先看**（元信息 + 正文预览 + 候选交接值），**再一键搭进模拟器**。
+ * 同一天他又要求：「绝对路径的入口放做在左边最顶上」——它原来是 ④ 工程适配卡里的一块，
+ * 现在是**左列第 1 张独立小卡**（下一张卡就是 ① 试玩日志）。
  *
- * 这条断言管三件事（都是"不报错但会骗人"的那种）：
+ * 这条断言管四件事（都是"不报错但会骗人"的那种）：
  *   ① 输入框与两个按钮真的渲染出来了；
- *   ② 请求体里的 `source` 是**粘贴的那个路径**（串成沙箱活文件路径就会「看起来读了、读的是另一个文件」）；
- *   ③ 新文案里不许有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）。
+ *   ② 它**排在左列最上面**；
+ *   ③ 请求体里的 `source` 是**粘贴的那个路径**（串成沙箱活文件路径就会「看起来读了、读的是另一个文件」）；
+ *   ④ 新文案里不许有 Markdown 记号（面板不渲染 Markdown，`**` 会原样显示给人看）。
  */
-check('★ 「任意本地 .lua（绝对路径）」入口：输入框 + 读取 + 用它搭进模拟器，且 source 就是粘贴的路径', () => {
+check('★ 「读本地 .lua（绝对路径）」入口（左列最上面那张独立小卡）：输入框 + 读取 + 用它搭进模拟器，且 source 就是粘贴的路径', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ');
 
@@ -1082,18 +1097,57 @@ check('★ 「任意本地 .lua（绝对路径）」入口：输入框 + 读取 
   assert(/externalLuaBindArgs\(p, templates, bindContainer\)/.test(src), '「用它搭进模拟器」没把粘贴的路径交给 bind');
   assert(/var p = extPath\.trim\(\)/.test(src), '按钮没有从输入框取值（extPath）');
 
-  // ⑦ 新文案里不许有 Markdown 记号（只查**新增这一块**，避免碰到别处的历史文案）
-  const a = flat.indexOf('任意本地 .lua（绝对路径）');
-  const b = flat.indexOf('从这台机器上的沙箱活文件里挑一份');
-  assert(a >= 0 && b > a, '「绝对路径」那一块没渲染出来（或顺序变了）');
+  // ⑦ 新文案里不许有 Markdown 记号（只查**这一块**，避免碰到别处的历史文案）。
+  //    2026-09-25 起这块提成了左列最上面的独立卡，所以切片的**右边界改成下一张卡的标题**
+  //    （原来靠卡片内部那句"或者，从这台机器上的沙箱活文件里挑一份"分界，现在那句搬去了 ④）
+  const a = flat.indexOf('读本地 .lua（绝对路径）');
+  const b = flat.indexOf('① 试玩日志');
+  assert(a >= 0 && b > a, '「绝对路径」那一块没渲染出来（或它没排在 ① 试玩日志 之前）');
   const block = flat.slice(a, b);
   const stars = block.match(/\*\*[^*]{1,40}\*\*/g);
   assert(!stars, '新入口文案里有 Markdown 记号（会原样显示）：' + (stars || []).join(' | '));
   const ticks = block.match(/`[^`\n]{1,40}`/g) || [];
   assert(ticks.length === 0, '新入口文案里有反引号（会原样显示）：' + ticks.join(' | '));
 
-  return '输入框 + 读取 + 用它搭进模拟器；两个请求体的 source 都是粘贴的路径；新文案无 Markdown 记号';
+  // ⑧ 位置（作者原话「放做在左边最顶上」）：它必须排在 ① 试玩日志 之前，旧卡片名也不许回来
+  assert(flat.indexOf('读本地 .lua（绝对路径）') >= 0
+    && flat.indexOf('读本地 .lua（绝对路径）') < flat.indexOf('① 试玩日志'),
+  '「读本地 .lua（绝对路径）」没排在左列最上面');
+  assert(!/① 画面与日志/.test(flat) && !/② 试玩操作（高级/.test(flat), '旧的卡片名/结构又回来了');
+
+  return '输入框 + 读取 + 用它搭进模拟器（排在左列最上面）；两个请求体的 source 都是粘贴的路径；新文案无 Markdown 记号';
 });
+
+/*
+ * ★ 反向绊线（2026-09-25 作者要求）：「画面和截取画面功能很鸡肋不要了 GUI 部分直接删除」。
+ * 模拟器面板里**不许再出现**这些取图入口的文案 —— 谁把它们爬回来，先看这段。
+ * ⚠️ 删的只是**面板 GUI**：AI 侧一个字没动（miliastra_shot 的 capture/burst/list/clean/targets、
+ *    miliastra_sim 的 op=shot / op=frames 全部保留）。
+ * ⚠️ 侧边栏那张「游戏截图」卡（存放目录 / 张数 / 不会自动删 / 清理）**故意保留** ——
+ *    它是"磁盘是用户的、清理要人显式点"这条纪律的人侧入口，与模拟器面板的画面是两回事。
+ */
+check('★ 反向绊线：模拟器面板里**不再有**取图/连帧入口（编辑器画面 / 刷新画面 / 连帧 / 还没有画面）', () => {
+  const sim = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
+  const simText = sim.replace(/<[^>]+>/g, ' ');
+  for (const nope of ['编辑器画面', '刷新画面', '连帧', '还没有画面', '截取游戏画面']) {
+    assert(!simText.includes(nope), '模拟器面板里又出现了取图入口：' + nope);
+  }
+  // 浮层面板全量文案里也不许有（模拟器页 + 高级诊断展开态各渲染一遍）
+  for (const props of [
+    { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'sim' },
+    openAdv(),
+  ]) {
+    const t = renderToStaticMarkup(React.createElement(clientExports.__testPanel, props)).replace(/<[^>]+>/g, ' ');
+    for (const nope of ['编辑器画面', '刷新画面', '连帧']) {
+      assert(!t.includes(nope), '面板里又出现了取图入口：' + nope);
+    }
+  }
+  // 但必须写清「画面去哪里看」（不能让人以为功能没了）——左列 ② 那句指向右列试玩页
+  assert(/画面[^）]{0,30}试玩页/.test(simText), '没告诉人"画面去右边那个试玩页看"');
+  assert(/新窗口/.test(simText), '没说「新窗口 ↗」可以放大看');
+  return '编辑器画面 / 刷新画面 / 连帧 / 还没有画面 都不在面板里；且写清了画面去右列试玩页看';
+});
+
 check('操作时间线的一行：说清"什么时候、做了什么"（AI 照着就能写成 steps[]）', () => {
   const f = clientExports.__testHistLine;
   assert(typeof f === 'function', '缺少 __testHistLine（时间线格式化无法单独回归）');
