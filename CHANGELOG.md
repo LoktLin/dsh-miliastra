@@ -14,7 +14,50 @@
 
 > 下一个版本的东西写这里。
 
+---
+
+## [0.4.0] - 2026-09-26
+
+### 新增
+- **`miliastra_code op=lint-ui`**：把**平台级 UI 门禁**做成 op —— ① 画在哪 = 点哪算（同名自动配；异名靠 `pairs` 点名，工具不猜语义）
+  ② 坐标 / 尺寸是 **8 的倍数** ③ 字号只许 **`64/52/28/22`** ④ **`h ≥ max(字号×1.4, 字号+16)`**
+  （★ 真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，不裁切 / 不缩小 / 不报错、`visible` 仍为 `true`；**模拟器不模拟这个截断**）。
+  回执只报数字与位置（`{file,line,name,expected,actual,delta}` + `passed` / `counts` / `usedConfig` / `passedMeans`）。
+  ⚠️ **口径必须显式**：默认扫**全部名字**（平台口径）；要复现工作区那份基线门禁（只覆盖覆盖层名字）传
+  `uiConfig.nameFilter:"^(ov|pk|cx|mx)"` + `pairs` —— 两种口径结论不同是**设计如此**。
+- **`miliastra_code op=rects`**：跨脚本**矩形对账** —— 矩形清单（`文件:行号` + 名字 + 数值）+ 同名/数值近似配对与**逐字段 `delta`** +
+  公式条目与驱动表**原文**；**只报数字不判决**，循环建出来的控件**不代换**（公式与表原文摆出来，工具不猜）。
+- **`miliastra_health op=sha`**：**三方 SHA 对照** —— 活文件 / `code/` 本地镜像（`mirror:<绝对路径>`，不传就只两列）/ `.gil` 嵌入快照，
+  附结论（`该部署了` / `该存盘了` / `三方一致` / `比不了`）。把 `deploy → 存盘 → 试玩` 这条最容易白跑一轮的流程做成一眼可判。
+- **控件类 `op=patch` 的目标支持 `path`**（按**名字 / 名字路径**找控件，`"容器节点/文本框"` 或直接单名）：
+  命中唯一才用；**命中多个、或一个都没命中 → 报错并列出候选**（名字路径 + id），**不替你猜**；
+  `id` 与 `path` 同时给时 `id` 优先，回执用 `resolvedBy` 披露。（脚本类 op 的 `path` 语义一字未动。）
+- **`deploy` / `inspect` 的「已知坑」warning**（`warnings[]` 里元素为对象，**不阻断**）：`sanitize(` 落在混合集合 ⇒ 复合模板实例可能整卡不显示；
+  构建期 / 构建循环里实例化**带子控件**的模板 ⇒ 若整卡不显示，试试挪到**渲染第一帧**。带 `file:line` + 一句可执行改法 + 文档链。
+- **官方口径的显示元数据**：`locale/zh.json` + `locale/en.json`（`meta.title` / `meta.description`）+ 顶层 `icon`（`icon.svg`），
+  面板卡片与「设置 → 插件」清单按它显示（**不需要激活插件**）。
+- **`miliastra_playtest op=arm`**（武装后台截图）：一次调用完成「等新局开跑 → 按秒点抓拍 → 落盘」，这一局一结束就停。
+- **`miliastra_sim op=bind` 支持一次挂多个脚本**（`scripts:[{path, source|sourceFrom}]`）。
+
 ### 变更
+- **`op=deploy` 不再按"最近改动"猜目标活文件**（旧行为会把 A 脚本的内容**静默写进** B 活文件）：
+  显式 `file` > `source` basename 命中同名活文件 > 目录里只有一个非附属活文件（选中但标 `basenameMismatch:true` + warning）
+  > **报错并列出全部候选**；回执新增 `destBasenameMatchesSource`，不匹配时 `warning` 放回执**第一个键**。
+  （只读 op 的「GIL 挂载名 > mtime」保持不变 —— 它们不写盘，且已用 `pickedBy` 披露。）
+- **`health {brief:true}` 的 `luaFiles` 改为 `[{name, bytes}]`**：`bytes===0` 带 `empty:true` 并点名（"空脚本/未写入"）；
+  不在 `.gil` 挂载集合里带 `mounted:false`；挂载表读不到就 `mountKnown:false`（**一个都不标**）。整个回执仍 **< 1 KB**。
+- **`op=patch` 全族加字段白名单**：未知字段**报错点名**（不再静默吞）；`add` 接受 `text`（建完紧接一次 `set`，回执 `textApplied`）；
+  `set` 传了 `field` → 「是不是想传 `key`？」+ 按控件类型给出可设 key 清单。
+- **`op=verify` 的 `expect` 白名单 + `absent:true` 真正生效**：`kind` / 字段不认识 = **参数错**（不再是"第 N 条断言没过"）；
+  `absent` 覆盖 `log` / `control` / `var` / `signal` / `tree`，并加语法糖 `kind:"controlAbsent"`。
+- **存盘快照口径推广**：`map op=script` 与 `health op=sha` 新增 `belongsTo`（含本地时间 + `epochSec`）/ `isCurrent` / `currentnessNote`；
+  **缺证据时 `isCurrent:null` 并明说"判断不了"**，绝不静默给旧数据。（判据是时间戳比对，非内容比对。）
+- **`deploy` 进一个 0 字节活文件时回执加 `firstWrite:true`** + `destBeforeBytes:0`（"这是该活文件的首次写入"）。
+- **`op=tags` 按 `[...]` 前缀聚合**（此前本工程日志全归"(无标签)"）；**`op=cases`** 的 manual 项名字缺省取 `note` 前 20 字。
+- **`op=shot`** 回执列**候选窗口**（标题 / 尺寸 / 是否最小化）并标出选中那个；`suspect` 只报**判得出来**的（进程不符 / target=game 而标题像编辑器 /
+  全黑 / 单色 / 屏抓不在前台），并明说"**画面内容本工具不识别**"。
+- **schema 体积**：把最长的 description 下沉到 `docs/`（**31.8 KB → 28.0 KB**，32 KB 棘轮内留出约 4 KB 余量）；四条 AI 调用体验不变量不变。
+- **文档**：`docs/模拟器与视图.md`（GUI 入口收敛 + Z 序边界）、`docs/功能详解.md`（UI 门禁 / 已知坑 / 存盘快照口径）、`docs/工具参考.md` 重新生成。
 - **GUI 只留一处入口**（作者要求，2026-09-26）：撤掉会话区顶部的 `初级功能 / 高级功能 / 模拟器` 三个 tab
   —— 不再注册官方槽位 `conversation.view`。GUI = 侧边栏左下角「千星奇域」→ 浮层面板，
   三页切换留在**面板内部**那条三等分页面条上（`panelTab`）。

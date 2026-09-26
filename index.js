@@ -24,7 +24,7 @@ export const name = 'dsh-miliastra';
 export const inject = [];
 
 const PREFIX = '/miliastra';
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 /*
  * 工具说明的抬头。
  * ⚠️ 它会被拼进**每一个**工具的 description，而 schema 体积是**每个会话都在花的钱**

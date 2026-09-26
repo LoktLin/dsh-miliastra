@@ -3,7 +3,7 @@
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具 ——
 > 让 AI Agent 自己定位活文件、读地图存档、跑探针、取运行时日志、看画面，不用你手动复制粘贴。
 
-**版本 `0.3.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
+**版本 `0.4.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 🎯 **目标是让 AI 更好用。** 这个插件是**一个 AI 写给其它 AI 用的**：不是"替人省点击"，
@@ -53,7 +53,7 @@ miliastra_health {}
 **方式一：npm（推荐）**
 
 ```powershell
-dsh plugin --profile web add dsh-miliastra@0.3.0
+dsh plugin --profile web add dsh-miliastra@0.4.0
 ```
 
 装完**重启 `dsh web`**（插件在启动时加载）。包页：<https://www.npmjs.com/package/dsh-miliastra>
