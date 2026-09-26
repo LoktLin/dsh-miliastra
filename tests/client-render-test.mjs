@@ -158,7 +158,8 @@ check('apply(stubCtx) 走槽位路线并交出组件 + cleanup', () => {
   const ctx = {
     effect(fn) { const d = fn(); return typeof d === 'function' ? d : () => {}; },
     slots: {
-      // 0.1.0 起 apply 会注入两个槽位：sidebar.footer.action（入口）+ conversation.view（三个 tab）
+      // 2026-09-26 起 apply **只注入一个槽位**：sidebar.footer.action（左下角入口）。
+      // 曾经的 conversation.view（会话区顶部三个 tab）已按作者要求撤掉 —— 见下面的反向断言。
       inject(name, cb) { injectedSlots.push(name); return cb(); },
       register(spec, Component) {
         const slot = spec && spec.name;
@@ -174,22 +175,18 @@ check('apply(stubCtx) 走槽位路线并交出组件 + cleanup', () => {
   assert(registeredSpec.id === 'dsh-miliastra', 'list 型槽位必须带 id');
   assert(typeof cleanup === 'function', 'apply 必须返回 cleanup');
   assert(injectedSlots.includes('sidebar.footer.action'), '没有注入侧边栏入口槽位');
-  assert(injectedSlots.includes('conversation.view'), '没有注入会话区 tab 槽位');
 
-  // 会话区三个 tab（初级功能 / 高级功能 / 模拟器）
+  /*
+   * ★ 2026-09-26（作者要求）：**不许**再注册会话区顶部 tab —— 插件的 GUI 只有一处入口：
+   *   侧边栏左下角「千星奇域」→ 浮层面板（面板内部自带三页切换）。
+   * 这里是**反向绊线**：谁把 `conversation.view` 加回来，这条就红。
+   */
+  assert(!injectedSlots.includes('conversation.view'), '又不许注册会话区顶部 tab 了（作者要求撤掉）');
   const views = registeredBySlot['conversation.view'] || [];
-  assert(views.length === 3, 'conversation.view 应注册 3 个 tab，实际 ' + views.length);
-  const tabs = clientExports.__testViewTabs;
-  assert(Array.isArray(tabs) && tabs.length === 3, '__testViewTabs 缺失或不是 3 项');
-  for (const t of tabs) {
-    const hit = views.find((v) => v.spec && v.spec.id === t.id);
-    assert(hit, '缺少 tab：' + t.id);
-    const label = typeof hit.spec.label === 'function' ? hit.spec.label() : hit.spec.label;
-    assert(label === t.label, 'tab 文案不对：' + label + ' vs ' + t.label);
-    assert(hit.spec.order === t.order, 'tab order 不对：' + t.id);
-    assert(typeof hit.Component === 'function', 'tab 没有组件：' + t.id);
-  }
-  return registeredSpec.name + '#' + registeredSpec.id + '  + tabs=' + views.map((v) => (typeof v.spec.label === 'function' ? v.spec.label() : v.spec.label)).join('/');
+  assert(views.length === 0, '不该有 conversation.view 注册，实际 ' + views.length + ' 个');
+  assert(clientExports.__testViewTabs === undefined, '__testViewTabs 还在 —— VIEW_TABS 应已随注册一起删掉');
+  assert(Object.keys(registeredBySlot).length === 1, '只该注册 sidebar.footer.action 一个槽位，实际：' + Object.keys(registeredBySlot).join(','));
+  return registeredSpec.name + '#' + registeredSpec.id + '（唯一槽位；顶部 tab 已撤）';
 });
 
 check('样式已注入 <style data-plugin="dsh-miliastra">，且带 id 便于回收', () => {
@@ -834,21 +831,22 @@ check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
   return '已重挂';
 });
 
-// ---------- ⑤ 0.1.0：会话区三个 tab（初级功能 / 高级功能 / 模拟器）----------
+// ---------- ⑤ 2026-09-26：顶部 tab 撤掉后，切换**只能**靠浮层内部那三页 ----------
 
-check('三个 tab 的注册计划是纯数据（id / 文案 / 顺序写坏 = tab 静默消失）', () => {
-  const tabs = clientExports.__testViewTabs;
-  assert(Array.isArray(tabs) && tabs.length === 3, 'tab 计划不是 3 项');
-  const labels = tabs.map((t) => t.label).join('/');
-  assert(labels === '初级功能/高级功能/模拟器', 'tab 文案不对：' + labels);
-  const ids = tabs.map((t) => t.id);
-  assert(new Set(ids).size === 3, 'tab id 有重复');
-  assert(ids.every((id) => id.indexOf('dsh-miliastra-') === 0), 'tab id 前缀不对：' + ids.join(','));
-  assert(tabs.map((t) => t.order).join(',') === '30,31,32', 'tab 顺序不对');
-  return labels + '  ids=' + ids.join(',');
+check('★ 顶部 tab 已撤：切换只剩浮层内部三页（初级功能 / 高级功能 / 模拟器）', () => {
+  assert(clientExports.__testViewTabs === undefined, '__testViewTabs 还在 —— VIEW_TABS 应已随注册一起删掉');
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'basic',
+    open: true, setOpen: () => {}, rootRef: { current: null },
+  }));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  for (const label of ['初级功能', '高级功能', '模拟器']) {
+    assert(text.includes(label), '浮层里缺页面按钮：' + label + '（撤掉顶部 tab 后它是唯一入口）');
+  }
+  assert(/dsh-miliastra-viewtabs/.test(html), '缺页面切换条容器（三等分那条）');
+  return '三页按钮 + 切换条都在浮层里';
 });
 
-check('「初级功能」视图：SSR 真渲染，只出 ① 关卡 + ② 代码', () => {
+check('（历史 inline 布局，生产已无入口）「初级功能」只出 ① 关卡 + ② 代码', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'basic' }));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('① 关卡'), '缺 ① 关卡');

@@ -14,6 +14,14 @@
 
 > 下一个版本的东西写这里。
 
+### 变更
+- **GUI 只留一处入口**（作者要求，2026-09-26）：撤掉会话区顶部的 `初级功能 / 高级功能 / 模拟器` 三个 tab
+  —— 不再注册官方槽位 `conversation.view`。GUI = 侧边栏左下角「千星奇域」→ 浮层面板，
+  三页切换留在**面板内部**那条三等分页面条上（`panelTab`）。
+  连带删除 `VIEW_TABS` / `registerView` / `exports.__testViewTabs`；
+  反向绊线进 `tests/client-render-test.mjs`（只注入 `sidebar.footer.action`、`conversation.view` 注册数为 0）。
+  ⚠️ `inline`（全宽视图）分支因此**已无生产入口**，暂由本地渲染测试占用，待下一次清理。
+
 ---
 
 ## [0.3.0] - 2026-09-25
