@@ -178,7 +178,14 @@ function writeTransform(project, node, nextRt) {
   node.transformByCanvas = maps.transformByCanvas
 }
 
-const DIRECT_FIELDS = new Set([
+/*
+ * `set` 能写的**直属字段**全集。
+ *
+ * ⚠️ 导出它是**为了 Host 侧给出人话报错**（`lib/sim.mjs` 的 `op=patch` 参数校验：传了 `field` 时
+ * 要「列出该控件可设的 key」）。**上游没有这个导出** —— 这是本仓库唯一的加法改动，
+ * 语义一字未变（仍然是「不按 kind 过滤」的全集；按 kind 过滤由调用方与节点自身的字段求交集得到）。
+ */
+export const DIRECT_FIELDS = new Set([
   'name', 'active', 'visible', 'canControllerFocus',
   'isolateNavigation', 'disableKeyEventPassthrough', 'disableCursorEventPassthrough', 'showCursor',
   'fontSize', 'adaptiveFontSize', 'minimumFontSize', 'fontColor', 'bgColor',

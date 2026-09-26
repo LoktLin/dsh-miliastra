@@ -48,6 +48,7 @@ export const SUITES = [
   { name: 'client-render-test（客户端控件渲染）', args: ['tests/client-render-test.mjs'] },
   { name: 'feedback2-test（第二批反馈修复 ①~⑧）', args: ['tests/feedback2-test.mjs'] },
   { name: 'feedback3-test（第三批：A1/A2/B1~B4/C1/D1）', args: ['tests/feedback3-test.mjs'] },
+  { name: 'feedback4-test（第四批：P0-1/P1/P2/N-1~3 + 保持项）', args: ['tests/feedback4-test.mjs'] },
   { name: 'engine（`node --test` 上游单测）', args: ['--test', 'engine/**/*.test.mjs'] },
 ];
 

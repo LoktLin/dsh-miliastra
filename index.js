@@ -25,7 +25,13 @@ export const inject = [];
 
 const PREFIX = '/miliastra';
 const VERSION = '0.3.0';
-const TITLE = 'Miliastra Wonderland 工具链';
+/*
+ * 工具说明的抬头。
+ * ⚠️ 它会被拼进**每一个**工具的 description，而 schema 体积是**每个会话都在花的钱**
+ *（smoke 里有 32KB 棘轮）—— 所以这里用短名；完整品牌名仍在系统提示段（renderPromptSection）
+ * 与面板（lib/client.js）里，AI 不会因此认不出这是哪套工具。
+ */
+const TITLE = '千星奇域';
 const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
@@ -34,7 +40,8 @@ import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
-import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt } from './lib/codefile.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt, pickLiveFile, compareLiveSources, normalizeLiveName } from './lib/codefile.mjs';
+import { scanRects, compareRects, expandDriverRefs } from './lib/rects.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState } from './lib/gia.mjs';
 import {
@@ -49,7 +56,7 @@ import { atomicWriteFile } from './lib/fsx.mjs';
 import { simOp, disposeSimAll, simRuntimeInfo } from './lib/sim.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
-  shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture,
+  shotFileName, nextFreeName, sanitizeLabel, humanSize, judgeCapture, markSelectedCandidate,
   thumbPathFor, resolveShotFile, ensureThumbnail,
   planBurst, burstSummary, BURST_FLOOR_MS, BURST_MAX_COUNT, frameInRun,
 } from './lib/shot.mjs';
@@ -341,6 +348,84 @@ function gilScriptInfo(lv) {
   return info;
 }
 
+/**
+ * `miliastra_health op=sha`（N-2）：**三方 SHA 对照** —— 活文件 / 本地镜像 / `.gil` 嵌入快照。
+ *
+ * 为什么值得单开一步：`deploy` 只写本地活文件，游戏跑的是**编辑器存盘时嵌进 `.gil` 的那份快照** ——
+ * 「部署了但没存盘」是最容易白跑一轮的失败（作者 2026-09-26 手工核过三处 SHA 才想清）。
+ * 这里只做**比对与一句话结论**，不替谁决定该用哪一版；镜像目录由调用方给（插件不假设工作区布局）。
+ */
+function healthSha({ mirror = null } = {}) {
+  const levels = scanLevels();
+  const cur = pickCurrent(levels);
+  if (!cur) {
+    return { ok: false, op: 'sha', error: '没扫到关卡 —— 先跑 miliastra_health（不带 op）看清这台机器上有什么。' };
+  }
+  const pick = chooseLua(cur, null);
+  const livePath = pick && pick.picked ? pick.picked.path : null;
+  const live = livePath ? inspect(livePath) : null;
+  const liveName = livePath ? pathBasenameOf(livePath) : null;
+
+  const gi = gilScriptInfo(cur);
+  const all = Array.isArray(gi.mappings) ? gi.mappings : [];
+  const chosen = pickScriptMapping(all, liveName);
+  const emb = chosen.mapping || (all.length ? all[0] : null);
+  const embedded = emb
+    ? { name: emb.name, file: emb.file, sha256: emb.sha256, bytes: emb.bytes, mappingId: emb.mappingId, mounted: emb.mounted, matchedBy: chosen.matchedBy }
+    : null;
+
+  // 镜像：按**活文件同名**匹配（忽略大小写与 .lua）；目录不存在/没有同名文件都如实说，不假装一致
+  let mirrorInfo = null;
+  let mirrorNote = null;
+  const mirrorDir = mirror ? pathMod.resolve(String(mirror)) : null;
+  if (mirrorDir) {
+    if (!fsMod.existsSync(mirrorDir) || !fsMod.statSync(mirrorDir).isDirectory()) {
+      mirrorNote = 'mirror 目录不存在或不是目录：' + mirrorDir + '（这一列是空的，不是"不一致"）';
+    } else {
+      let names = [];
+      try { names = fsMod.readdirSync(mirrorDir).filter((n) => /\.lua$/i.test(n) && !/_备份\.lua$/i.test(n) && !/\.bak$/i.test(n)); } catch (e) { mirrorNote = '读不动 mirror 目录：' + ((e && e.message) || e); }
+      const hit = liveName ? names.find((n) => normalizeLiveName(n) === normalizeLiveName(liveName)) : null;
+      if (hit) {
+        const info = inspect(pathMod.join(mirrorDir, hit));
+        mirrorInfo = { name: hit, path: info.path, sha256: info.sha256, bytes: info.size, mtime: info.mtime };
+      } else if (!mirrorNote) {
+        mirrorNote = liveName
+          ? '镜像目录里没有与活文件同名的 .lua（找的是 ' + liveName + '）—— 现有 ' + names.length + ' 个：'
+            + (names.slice(0, 8).join('、') || '（一个都没有）')
+          : '没有活文件可比对（先在编辑器里挂一个客户端脚本）';
+      }
+    }
+  }
+
+  const cmp = compareLiveSources({
+    live: live ? { name: liveName, sha256: live.sha256, bytes: live.size } : null,
+    mirror: mirrorInfo,
+    embedded: embedded ? { name: embedded.name, file: embedded.file, sha256: embedded.sha256, bytes: embedded.bytes } : null,
+    embeddedCount: all.length,
+  });
+  return {
+    ok: true, op: 'sha',
+    level: { brand: cur.brand, levelId: cur.levelId, accountId: cur.accountId },
+    luaDir: cur.luaDir,
+    gilPath: cur.gil ? cur.gil.path : null,
+    livePath,
+    pickedBy: pick ? pick.pickedBy : null,
+    mirrorDir,
+    mirrorNote,
+    embeddedPickedBy: embedded ? embedded.matchedBy : null,
+    rows: cmp.rows,
+    verdict: cmp.verdict,
+    conclusion: cmp.conclusion,
+    caveats: cmp.caveats,
+    nextStep: cmp.verdict === '该存盘了'
+      ? '在编辑器里**存一次盘**（把活文件吃进地图），再回来看这一条；试玩跑的永远是嵌进 .gil 的那份。'
+      : (cmp.verdict === '三方一致'
+        ? '三处一致 —— 可以（stop → 重新）试玩了；跑完用 miliastra_log 取结果。'
+        : null),
+    note: '只报三处的哈希与一句话结论，不判「哪一版才是你要的」。镜像目录由你给（`mirror`）—— 不给就只出两列。',
+  };
+}
+
 /** 挑活文件用的名字候选（**全部映射**，宁多勿漏）。 */
 function mountedScriptNames(lv) {
   return gilScriptInfo(lv).allNames;
@@ -462,6 +547,117 @@ export function clientUiHint({ levelId = null, likelyTemplates = [] } = {}) {
   return parts.join('');
 }
 
+/* ---------------------------------------------- op=rects：矩形提取与配对（N-1） */
+
+/** 扫工程目录时要跳过的活文件（历史产物 / 备份 / 探针源码 —— 收进来只会造出假配对）。 */
+const RECT_SKIP_FILE = /(^_)|(_备份\.lua$)|(\.bak$)|(\.engine\.lua$)|(\.save\.json$)/i;
+/** 一次扫多少个 `.lua`（超过就如实报 `truncated`，不静默截断）。 */
+const RECT_MAX_FILES = 60;
+/** 回执里最多列多少条矩形（`summaryOnly` 时更多信息被折叠）。 */
+const RECT_MAX_LIST = 400;
+
+/** 递归收集目录里的 `.lua`（跳过 `_*` / `.*` 目录；返回跳过了什么，别静默）。 */
+export function collectLuaFilesForRects(root, { maxFiles = RECT_MAX_FILES } = {}) {
+  const files = [];
+  const skipped = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = fsMod.readdirSync(dir, { withFileTypes: true }); } catch (e) {
+      skipped.push({ path: dir, reason: '读不动：' + ((e && e.message) || e) });
+      return;
+    }
+    for (const ent of entries) {
+      const full = pathMod.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (/^[_.]/.test(ent.name) || ent.name === 'node_modules') { skipped.push({ path: full, reason: '目录（历史/隐藏/依赖）' }); continue; }
+        walk(full);
+        continue;
+      }
+      if (!/\.lua$/i.test(ent.name)) continue;
+      if (RECT_SKIP_FILE.test(ent.name)) { skipped.push({ path: full, reason: '历史产物/备份/探针源码（收进来会造出假配对）' }); continue; }
+      if (files.length >= maxFiles) { skipped.push({ path: full, reason: '超过一次最多扫 ' + maxFiles + ' 个 .lua' }); continue; }
+      files.push(full);
+    }
+  };
+  walk(root);
+  return { files, skipped };
+}
+
+/**
+ * `miliastra_code op=rects` 的实现（**只报数字不判决**）。
+ *
+ * @param {{dir:string, scope:'dir'|'level', args:any, level?:any}} input
+ */
+function runRectsOp({ dir, scope, args, level = null }) {
+  if (!dir || !fsMod.existsSync(dir) || !fsMod.statSync(dir).isDirectory()) {
+    throw new Error('op=rects 要一个**存在的目录**（工程目录的绝对路径用 dir=…，省略 dir 就用当前关卡的活文件目录）。收到：' + JSON.stringify(dir));
+  }
+  const scan = collectLuaFilesForRects(dir);
+  const all = [];
+  const driverTables = [];
+  const fileRows = [];
+  for (const f of scan.files) {
+    let text;
+    try { text = fsMod.readFileSync(f, 'utf8'); } catch (e) {
+      scan.skipped.push({ path: f, reason: '读不动：' + ((e && e.message) || e) });
+      continue;
+    }
+    const r = scanRects(text, pathBasenameOf(f));
+    for (const x of r.rects) all.push({ ...x, path: f });
+    for (const t of r.driverTables) driverTables.push({ ...t, path: f });
+    fileRows.push({ file: pathBasenameOf(f), path: f, bytes: Buffer.byteLength(text, 'utf8'), lines: text.split(/\r?\n/).length, rects: r.rects.length, driverTables: r.driverTables.length });
+  }
+  const pairs = Array.isArray(args.pairs) ? args.pairs : null;
+  const nearPx = clampNum(args.nearPx, 4, 0, 400);
+  const cmp = compareRects(all, { nearPx, pairs });
+  const driverRefs = expandDriverRefs(all, driverTables);
+  const summaryOnly = args.summaryOnly === true;
+  // 每条都带 `文件:行号`（人的第一诉求：「改哪一行」）—— 这里把行号拼成可直接照抄的串
+  const withWhere = (r) => ({ where: r.file + ':' + r.line, ...r });
+  return {
+    ok: true, op: 'rects',
+    dir, scope,
+    level: level ? { levelId: level.levelId } : null,
+    fileCount: fileRows.length,
+    files: fileRows,
+    skipped: scan.skipped,
+    skippedCount: scan.skipped.length,
+    nearPx,
+    summaryOnly,
+    counts: cmp.counts,
+    // ① 全部矩形（`summaryOnly` 只给计数 + 前几张，省上下文；差异列表不受影响）
+    rects: summaryOnly ? undefined : all.slice(0, RECT_MAX_LIST).map(withWhere),
+    rectsOmitted: summaryOnly ? all.length : Math.max(0, all.length - RECT_MAX_LIST),
+    // ② 配对与差异
+    exact: cmp.exact.map((g) => ({ ...g, entries: g.entries.map(withWhere) })),
+    near: cmp.near.map((g) => ({ a: withWhere(g.a), b: withWhere(g.b), delta: g.delta, maxDelta: g.maxDelta })),
+    nearTotal: cmp.nearTotal, nearTruncated: cmp.nearTruncated === true,
+    sameName: cmp.sameName.map((g) => ({ ...g, entries: g.entries.map(withWhere) })),
+    // ③ 人点名的对照（作者那份脚本的 `ovB1 ↔ T_START` 就是这种：名字不同、其实是同一个控件）
+    pairsChecked: cmp.pairsChecked.map((p) => ({
+      ...p,
+      a: p.a ? withWhere(p.a) : p.a,
+      b: p.b ? withWhere(p.b) : p.b,
+    })),
+    // ④ 「循环建出来的控件」：公式 + 驱动表**原文**都摆出来，公式由你代（工具不猜）
+    formulaOnly: cmp.formulaOnly.map(withWhere),
+    driverTables,
+    driverRefs,
+    disclaimer: '**只报数字，不判对错**：本工具不判「哪个矩形才是对的」（那取决于玩法），'
+      + '只把「同一份数字写在几处、差多少」摆出来。`nearPx=' + nearPx + '` 是**筛选阈值**，不是判定。'
+      + '⚠️ 名字不同但其实是同一个控件的（如 `ovB1` ↔ `T_START`）**本工具不会自动配** —— 那是语义，得用 `pairs` 点名。',
+    caveats: [
+      '`formula:true` 的矩形**算不出数值**（槽位是表达式）—— 循环建出来的控件就在这一类：'
+        + '把 `driverRefs[].rows` 代进 `driverRefs[].slots` 得到每行矩形（公式由你/AI 代，工具不猜）。',
+      '注释掉的代码、字符串里的 `add(...)` 不参与（先剥 Lua 注释）。',
+      '同文件内多处相同**不算**「两份数字要对齐」的证据（`exact` 只收**跨文件**的）。',
+      scan.skipped.length ? '跳过了 ' + scan.skipped.length + ' 个文件/目录（见 `skipped[]`：历史产物、备份、探针源码、隐藏目录）—— 要看它们就把目录缩到那个子目录再跑。' : null,
+    ].filter(Boolean),
+    hint: '差异看 `near`（逐字段差 `delta`）与 `pairsChecked`（人点名的对照）；'
+      + '要省上下文传 `summaryOnly:true`（去掉全量矩形清单，计数与差异列表都还在）。',
+  };
+}
+
 /* ---------------------------------------------------------------- 工具定义 */
 
 /* ---------------------------------------------- 系统提示段的数据源（0.0.10）
@@ -524,16 +720,22 @@ const TOOLS = [
       + '返回：扫到的客户端安装（正式服/Beta）、所有关卡、当前判定为「正在开发」的关卡、'
       + '活文件（沙箱 .lua）清单与大小、地图存档 .gil、运行时日志目录与日志文件数。'
       + '编辑器 UI 操作（建模板/挂脚本）没有自动化通道——本工具只做文件层体检，替代不了人点编辑器。'
-      + '\n\n**典型调用**：`{}`（当前关卡速览）｜`{"all":true}`（全部关卡）',
+      + '\n★ `op:"sha"` **三方 SHA 对照**：活文件（沙箱里那份）/ 本地镜像（`mirror`=目录绝对路径；不传就只出两列）/ `.gil` **嵌入快照**（编辑器存盘时嵌进地图的那份，**试玩真正跑的是它**）—— 三列哈希 + 一句结论（`该部署了` / `该存盘了` / `三方一致`），把 `deploy → 编辑器存盘 → 试玩` 这条最容易白跑一轮的流程做成一眼可判。对象是**当前关卡**。'
+      + '\n\n**典型调用**：`{}`（当前关卡速览）｜`{"op":"sha","mirror":"D:\\\\code\\\\侦探1"}`（三方 SHA 对照）｜`{"all":true}`（全部关卡）',
     parameters: {
       type: 'object',
       properties: {
+        op: { type: 'string', enum: ['scan', 'sha'], description: '默认 scan（环境体检）。op=sha = **三方 SHA 对照**（活文件 / mirror 镜像 / .gil 嵌入快照 + 一句结论）。' },
+        mirror: {
+          type: 'string',
+          description: 'op=sha：本地镜像**目录的绝对路径**（如 `code/` 那一份）—— 按活文件同名匹配（忽略大小写与 `.lua`）。'
+            + '不传就只比「活文件 vs .gil」两列（插件**不假设**你的工作区布局）。',
+        },
         all: { type: 'boolean', description: 'true=返回全部关卡清单（默认只返回最近 12 个）。' },
         brief: {
           type: 'boolean',
-          description: '**只回「我在哪张图 / 活文件是哪个 / 日志在哪」（总长 < 1KB）** —— 默认回执约 9.7KB、'
-            + 'all:true 约 25KB，而这是「任何操作前先调」的工具，多数时候只要这一小撮。'
-            + '回 current（关卡 id/品牌/账号）+ 活文件**名字**数组 + 进程状态 + 日志目录。'
+          description: '**只回「我在哪张图 / 活文件是哪个 / 日志在哪」（< 1KB）** —— 默认回执约 9.7KB、all:true 约 25KB，'
+            + '而这是「任何操作前先调」的工具，多数时候只要这一小撮。'
             + '⚠️ **与 all / summaryOnly 同时给时 brief 优先**（默认行为一个字不改）。',
         },
       },
@@ -543,6 +745,8 @@ const TOOLS = [
     async execute(args = {}) {
       const levels = scanLevels();
       const cur = pickCurrent(levels);
+      // ★ op=sha：三方 SHA 对照（N-2）—— 用**当前关卡**，与其余 op 同一口径
+      if (String(args.op || 'scan') === 'sha') return healthSha({ mirror: args.mirror });
       /*
        * ★ brief 档：只回「在哪张图 / 活文件是哪个 / 日志在哪」+ 进程状态。
        *   实测的痛点是体积（默认 9708 B / all:true 24966 B），不是信息不够 ——
@@ -631,18 +835,17 @@ const TOOLS = [
       + '· **部署指纹** —— `op=deploy` 成功后会在备份目录写一份 `.miliastra-deploy.json`（记下这一版的 SHA/字节/行数/来源）。'
       + '之后 `op=inspect` 会比对：活文件与上次部署**不一致**就直说「多半是编辑器把脚本面板里的内存版存回了磁盘」'
       + '（实测会发生），并给出字节差/行数差 —— 而不是让你以为跑的还是刚投进去那版。'
-      + '· **`op=fixbom`** —— 活文件带 UTF-8 BOM 时**只去掉那 3 个字节**（原神实测会打印 '
-      + '"Read text file with BOM header may cause Lua error"）。BOM 不是本工具加的，'
-      + '实测来自**新建关卡时编辑器自己写的文件**。安全顺序与部署同源：本来没有 BOM 就**什么都不做** → '
-      + '备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM + 仍是合法 UTF-8）→ 不过**自动回滚**。'
-      + '\n★ **部署不会热加载**：改完脚本要 **stop → `op=deploy` → 重新试玩**；想确认某局跑的是哪版代码，看 `.gia` 里脚本自己 `print` 出来的版本行。\n★ **多脚本工程**：`mount` 读**全部脚本映射**并只按**已挂载集合**判（`mount.source` 说明用的是哪一份）；取不到才 `known:false`，不瞎报 false。逐条对账用 `miliastra_map op=script` 的 `mappings[]`。\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
+      + '· **`op=fixbom`** —— 活文件带 UTF-8 BOM 时**只去掉那 3 个字节**（原神实测会打印 "Read text file with BOM header may cause Lua error"）；'
+      + 'BOM 不是本工具加的，实测来自**新建关卡时编辑器自己写的文件**。顺序与部署同源：本来没有就**什么都不做** → 备份失败即中止 → 原子写 → 校验（只差 3 字节 + 无 BOM）→ 不过**自动回滚**。'
+      + '\n★ **部署不会热加载**：改完脚本要 **stop → `op=deploy` → 重新试玩**；想确认某局跑的是哪版代码，看 `.gia` 里脚本自己 `print` 出来的版本行。\n★ **多脚本工程**：`mount` 读**全部脚本映射**并只按**已挂载集合**判（`mount.source` 说明用的是哪一份）；取不到才 `known:false`，不瞎报 false。逐条对账用 `miliastra_map op=script` 的 `mappings[]`。\n★ **`op=deploy` 选目标活文件只用名字，不按「最近改动」猜**（2026-09-26 实测：多脚本工程里只给 `source` 时按 mtime 挑，把 `交互 input.lua` 写进了 `表现 view.lua`）：目标 = 显式 `file` > `source` 的**同名**活文件（忽略大小写与 `.lua`）> 目录里**只有 1 个**活文件（允许，但回执带 `basenameMismatch:true` + 首行 `warning`）> **拒绝写盘并列出全部候选**。回执恒带 `dest` 与 `destBasenameMatchesSource`。\n★ **`op=rects`：矩形提取 + 跨文件配对（只报数字不判决）** —— 「画在哪 = 点哪算」的机械核对：画面在 `表现 view.lua`、热区在 `交互 input.lua`，同一份数字写两处时用它对账。它给 `文件:行号` + 名字 + 数值，跨文件把**同名**与**数值近似**（每个字段都在 `nearPx` 内）的配成对并给逐字段 `delta`；名字不同的（`ovB1` ↔ `T_START`）要你用 `pairs` **点名**（工具不猜语义）；循环建出来的控件（`add(MENU_BTNS[mi][1],"img",620,y,360,72)`）算不出数，回执给公式槽位 + `driverRefs` 的**驱动表原文**，公式由你代。输入：`dir`（工程目录绝对路径）或省略=当前关卡活文件目录。\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
       + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua —— 不在沙箱里也行）｜'
-      + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua"}`（投代码）｜'
+      + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua","file":"双相.lua"}`（投代码；**多脚本工程必须带 `file`**）｜'
+      + '`{"op":"rects","dir":"D:\\\\code\\\\侦探1","pairs":[["ovB1","T_START"]]}`（矩形对账）｜'
       + '`{"op":"levels","summaryOnly":true}`（先扫全部关卡几何）→ `{"op":"levels","stage":3}`（再钻第 3 关）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels'], description: '默认 inspect。⚠️ op=read 给了 source（绝对路径）就只读读那个文件，不读沙箱活文件。' },
+        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects'], description: '默认 inspect。⚠️ op=read 给了 source（绝对路径）就只读读那个文件，不读沙箱活文件；op=rects 给了 dir 就扫那个工程目录。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
@@ -662,8 +865,7 @@ const TOOLS = [
         },
         backupDir: {
           type: 'string',
-          description: '备份目录。默认就是活文件旁边的 `_backup\\`（写在这里是为了让备份和真身待在一起）。'
-            + '可用环境变量 MILIASTRA_BACKUP_DIR 改到别处，但那会削弱「备份就在旁边」这一点，一般不要动。',
+          description: '备份目录。默认 = 活文件旁边的 `_backup\\`（让备份和真身待在一起）；环境变量 MILIASTRA_BACKUP_DIR 可改到别处（会削弱这一点，一般别动）。',
         },
         noBackup: {
           type: 'boolean',
@@ -679,20 +881,32 @@ const TOOLS = [
         head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。活文件与 source（绝对路径）两条路都听它。' },
         stage: {
           type: 'string',
-          description: 'op=levels：**玩法里的第几关**（表里的序号，或名字片段）；省略=全部关卡。'
-            + '⚠️ 别和 `level` 混：`level` = **地图关卡 ID**（如 1073741833，哪张图），'
-            + '`stage` = **游戏里的第几关**（如 3）—— 前者选文件，后者选表里的一段。',
+          description: 'op=levels：**玩法里的第几关**（表里的序号或名字片段）；省略=全部关卡。⚠️ 别和 `level` 混：`level` = **地图关卡 ID**（哪张图，如 1073741833），`stage` = **游戏里的第几关**（如 3）。',
         },
         summaryOnly: {
           type: 'boolean',
           description: 'op=levels：只给**每关一行的数字摘要**（计数 + 重叠/净空/相交的处数），'
             + '**不带每块平台的坐标、不带直方图分箱** —— 先扫一眼再 `stage=N` 钻进去。默认 false（全量）。',
         },
-        nearPx: { type: 'number', description: 'op=levels：「近似贴上」的筛选阈值（默认 48px）—— **这是筛选，不是判定**。' },
+        nearPx: {
+          type: 'number',
+          description: '近似阈值（**筛选，不是判定**）。op=levels：「近似贴上」的阈值，默认 48px；op=rects：「数值近似」的逐字段容差，默认 4px（差异原样给在 `delta` 里）。',
+        },
         nameHint: {
           type: 'string',
           description: 'op=levels：关卡表的**变量名**（默认 `LEVELS`）。`local LEVELS = {` 与 `DATA.LEVELS = {` 两种写法都认；'
             + '抽不到表时回执里会列出 `nameCandidates`（文件里像关卡表的声明 / 赋值），照着它传即可。',
+        },
+        dir: {
+          type: 'string',
+          description: 'op=rects：要扫的**工程目录绝对路径**（递归找 `.lua`，跳过 `_*`/`.*` 目录与备份/历史产物，跳过了什么回执里 `skipped[]` 会说）。'
+            + '省略 = 扫**当前关卡的活文件目录**。',
+        },
+        pairs: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'op=rects：**人点名的**名字对照，如 `[["ovB1","T_START"],{"a":"btnSet","b":"BTN_SET"}]` —— '
+            + '热区在 input、画面在 view，两边**名字往往不同**，工具不猜语义；点了名它就把逐字段 `delta` 给你。',
         },
       },
       additionalProperties: false,
@@ -722,12 +936,20 @@ const TOOLS = [
             : '只读读取失败（什么都没写）。按 nextSteps 处理即可。',
         };
       }
+      /*
+       * ★ op=rects + dir（**绝对路径**）：扫任意工程目录 —— 与 op=read source 同理，
+       *   「这台机器上正在开发哪张图」和「要扫哪个目录」没有关系，别让关卡解析先跑。
+       */
+      if (op === 'rects' && typeof args.dir === 'string' && args.dir.trim()) {
+        return runRectsOp({ dir: pathMod.resolve(args.dir.trim()), scope: 'dir', args });
+      }
       const lv = resolveLevel(args.level);
       if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——说明还没在编辑器里挂客户端脚本。`);
       const pick = chooseLua(lv, args.file);
       const target = pick ? pick.picked : null;
-      const destPath = target ? target.path : (args.file ? lv.luaDir + '\\' + args.file : null);
-      const picked = pickedFields(pick);
+      // ⚠️ 写盘 op（deploy）会**重新**用 pickLiveFile 定目标（见下面那一段）；其余 op 用这里的 A1 口径
+      let destPath = target ? target.path : (args.file ? lv.luaDir + '\\' + args.file : null);
+      let picked = pickedFields(pick);
 
       if (op === 'inspect') {
         const info = destPath ? inspect(destPath) : null;
@@ -820,7 +1042,21 @@ const TOOLS = [
       }
       if (op === 'deploy') {
         if (!args.source) throw new Error('op=deploy 需要 source（要投进去的本地文件绝对路径）。');
-        if (!destPath) throw new Error('没找到目标活文件路径（关卡里还没有 .lua？先用 miliastra_health 看）。');
+        /*
+         * ★ P0-1（2026-09-26）：**写盘路径只认名字**，不按「最近改动」猜。
+         *
+         * 旧行为：不带 `file` 时目标走 A1 的「GIL 挂载名 > mtime」—— 多脚本工程里那只手
+         * 实测把 `交互 input.lua` 的内容写进了 `表现 view.lua`（活文件是唯一副本，等于毁数据）。
+         * 现在由 `pickLiveFile` 唯一决定：显式 file > source 的 basename 命中 > 只有一个活文件（标 basenameMismatch）
+         * > 抛错列出全部候选。只读 op（inspect/read/backups…）**保持 A1 口径不变**。
+         */
+        const wpick = pickLiveFile({
+          levelId: lv.levelId, liveFiles: lv.luaFiles, source: args.source, file: args.file,
+        });
+        destPath = wpick.picked.path;
+        picked = pickedFields({ ...wpick, pickedNote: wpick.note });
+        picked.destBasenameMatchesSource = wpick.destBasenameMatchesSource;
+        if (wpick.basenameMismatch) picked.basenameMismatch = true;
         const r = deployFile(args.source, destPath, {
           backupDir: args.backupDir,
           noBackup: args.noBackup === true,
@@ -847,8 +1083,15 @@ const TOOLS = [
           mountKnown: gi.mountKnown === true,
           mountSource: gi.mountSource,
         });
+        /*
+         * ★ P0-1：`destBasenameMatchesSource` 为 false 时，把 warning 放在回执**最前面**。
+         *   为什么放最前：AI 是自上而下读 JSON 的，而这条是「你这次可能写到了另一个文件」——
+         *   放在末尾的 warnings[] 里，实测就是没人看（上一次静默写错文件正是这么发生的）。
+         */
+        const mismatchWarning = wpick.warning || null;
         return {
-          ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
+          ...(mismatchWarning ? { warning: mismatchWarning } : {}),
+          ok: r.ok, op, level: { levelId: lv.levelId }, dest: destPath, ...picked, ...r,
           mount: ms,
           lintSummary: r.lint ? (r.lint.ok ? '结构正常' : '发现问题') : '（未校验）',
           deployFingerprint: fp ? {
@@ -866,6 +1109,9 @@ const TOOLS = [
             : (r.backup ? restoreCommand(r.backup, destPath) : null),
           nextStep: r.ok ? deployNextStep(ms, rec, destPath) : null,
         };
+      }
+      if (op === 'rects') {
+        return runRectsOp({ dir: lv.luaDir, scope: 'level', args, level: lv });
       }
       if (op === 'fixbom') {
         if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
@@ -944,8 +1190,7 @@ const TOOLS = [
         file: { type: 'string', description: 'op=script：用哪个活文件比对（一个关卡可能有多个 .lua；省略=自动选；给了名字但不存在会报错并列出全部）。' },
         summaryOnly: {
           type: 'boolean',
-          description: 'op=clientui：省掉 `records`（每条控件一行）与 `rendered`（谱系文字），只留计数与「可能能动态创建的模板」。'
-            + '**先看有没有模板，再决定要不要逐条看**时用。默认 false（全量）。',
+          description: 'op=clientui：省掉 `records`（每条控件一行）与 `rendered`（谱系文字），只留计数与「可能能动态创建的模板」—— 先看有没有模板，再决定要不要逐条看。默认 false。',
         },
         path: { type: 'string', description: '直接指定 .gil 绝对路径（跳过自动定位）。' },
         limit: { type: 'number', description: 'op=strings：最多返回多少条（默认 200）。' },
@@ -1117,7 +1362,7 @@ const TOOLS = [
       TITLE + '：读客户端运行时日志 `.gia`。**这是运行时取证（Lua 里 print 出来的东西）的唯一入口**，'
       + '比让人手动复制粘贴可靠得多。'
       + 'op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；'
-      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（方括号开头的那种）；'
+      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总出现过的标签（正文**开头**的 `[...]` 前缀，如 `[侦探1/view]`；没有前缀才归 `(无标签)`）；'
       + '**op=runs 按「局」切分** —— 一个 `.gia` 里可能装多局（实测 `21-24-16_155` 装了两段完整生命周期），'
       + 'op=runs 给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / 错误样式 / **命中的词**）**并和上一局做 diff**，'
       + '省掉「把 30 多条倒过来再分清哪段属于哪局」这一步。'
@@ -1129,7 +1374,7 @@ const TOOLS = [
       + '只如实回「最近一局是什么时候写的」；是不是刚玩过，你自己看一眼就知道。'
       + '\n\n**典型调用**：`{"op":"runs"}`（这一局/这几局发生了什么，含局间 diff）｜'
       + '`{"op":"metrics"}`（死亡位置分布与集中区，**不用改脚本**）｜'
-      + '`{"op":"tail","tag":"yuan-code","limit":30}`（按标签读正文）｜`{"op":"tail","run":1790171162}`（只看那一局）',
+      + '`{"op":"tail","tag":"miliastra-code","limit":30}`（按标签读正文）｜`{"op":"tail","run":1790171162}`（只看那一局）',
     parameters: {
       type: 'object',
       properties: {
@@ -1140,8 +1385,7 @@ const TOOLS = [
         pattern: { type: 'string', description: '正文正则过滤。' },
         run: {
           type: 'string',
-          description: 'op=tail/grep/tags：**只看某一局**。给 epoch 秒（如 1790170177）或 instance 片段。'
-            + 'op=runs 的 epochSec 与 miliastra_playtest 报的是同一个值。',
+          description: 'op=tail/grep/tags：**只看某一局**。给 epoch 秒（如 1790170177）或 instance 片段；与 miliastra_playtest 报的 epochSec 同源。',
         },
         limit: { type: 'number', description: 'op=tail/grep：最多返回多少条（默认 120，**超限时留最新的那些**）；op=runs/metrics：最多返回几局/几条时间线（默认 10 / 40）；op=sessions：几个文件（默认 40）。' },
         last: {
@@ -1261,14 +1505,26 @@ const TOOLS = [
       }
 
       if (op === 'tags') {
+        /*
+         * ★ P2-4（2026-09-26）：按 **`[...]` 前缀**聚合。
+         *   旧实现只认「正文里任意位置 + 只含 ASCII 字母数字下划线连字符」的 `[xx]`，
+         *   于是本工程那种 `[侦探1/view] 初始化…`（含中文与 `/`）**永远归到 `(无标签)`**，
+         *   106 条日志挤成一行 —— AI 只能退回 `op=grep tag="[侦探1/view]"`（能用，但多一步）。
+         *   现在：正文**开头**的 `[...]`（1~40 字，任何字符）就是标签；真的没有前缀才归 `(无标签)`。
+         */
         const counter = new Map();
+        const prefixRe = /^\s*\[([^\]\r\n]{1,40})\]/;
         for (const r of pool) {
-          const m = /\[([A-Za-z0-9_\-]{1,24})\]/.exec(r.message);
-          const k = m ? m[1] : '(无标签)';
+          const m = prefixRe.exec(String(r.message || ''));
+          const k = m ? m[1].trim() : '(无标签)';
           counter.set(k, (counter.get(k) || 0) + 1);
         }
         const tags = [...counter.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count);
-        return { ok: true, op, file, recordCount: gia.recordCount, ...staleFields, tags };
+        return {
+          ok: true, op, file, recordCount: gia.recordCount, ...staleFields, tags,
+          tagRule: '标签 = 正文**开头**的 `[...]` 前缀（如 `[侦探1/view]`；1~40 字）；没有前缀才归 `(无标签)`。'
+            + '要按别的口径读正文用 `op=grep tag=<子串>`。',
+        };
       }
       const limit = Number.isFinite(args.limit) ? args.limit : 120;
       /*
@@ -1435,16 +1691,12 @@ const TOOLS = [
     name: 'miliastra_shot',
     description:
       TITLE + '：截图 —— 把「现在画面上是什么」变成一张 PNG。'
-      + '运行时日志（miliastra_log）能回答「代码跑了没、print 了什么」，回答不了「画面对不对」'
-      + '（控件到底挂上去了没、位置歪没歪、颜色对不对）；这一环靠它。'
-      + 'op=capture（默认）立刻截一张，目标 `target=game`（原神客户端，默认）/ `editor`（千星沙箱），'
-      + '也可以用 `process` 指定任意进程名；op=list 看截到哪去了、有多少张、占多大；'
-      + 'op=clean 清理，**默认只报告不删**。'
-      + '**截图存在插件的数据目录**（默认 `~/.dsh/miliastra/shots`，`MILIASTRA_DATA_DIR` 可整体覆盖）——'
-      + '既不放游戏存档目录（那是米哈游的地盘），也不放包目录（插件升级会整个替换掉它）。'
-      + '**不会自动删**：清理要显式给条件（`all` 或 `olderThanDays`），真删还要 `confirm:true`。'
-      + '回执恒带 `pid / process / title` —— 明确告诉你**截到的到底是哪个窗口**'
-      + '（第一版抓错了程序，光看 `ok:true` 根本发现不了）。'
+      + '运行时日志（miliastra_log）能回答「代码跑了没、print 了什么」，回答不了「画面对不对」（控件挂上了没、位置歪没歪、颜色对不对）；这一环靠它。'
+      + 'op=capture（默认）立刻截一张，目标 `target=game`（原神客户端，默认）/ `editor`（千星沙箱），也可用 `process` 指定任意进程名；op=list 看截到哪去了、有多少张、占多大；op=clean 清理，**默认只报告不删**。'
+      + '**截图存在插件的数据目录**（默认 `~/.dsh/miliastra/shots`，`MILIASTRA_DATA_DIR` 可整体覆盖）——既不放在游戏存档目录（那是米哈游的地盘），也不放在包目录（插件升级会整个替换掉它）。'
+      + '**不会自动删**：清理要显式给条件（`all` / `olderThanDays`），真删还要 `confirm:true`。'
+      + '回执恒带 `pid / process / title` + **候选窗口清单**（同进程多窗口时逐条给标题/尺寸/是否最小化，并标出选中哪个）—— **截到的到底是哪个窗口**必须看得见（第一版抓错了程序，光看 `ok:true` 发现不了）。'
+      + '`suspect` 只在**判得出来**时给：进程名对不上 / `target=game` 而标题像编辑器 / 全黑 / 单色 / 屏抓却不在前台 —— **画面内容本工具不识别**，图对不对最终要看图。'
       + '\n★ **连拍每张约 2.6~3.5 秒**（回执的 `measuredIntervalMs` 是实测值，`burstMs` 给再小也无效）。'
       + '**短局（< 20 秒）别用「等 8 秒再连拍 4 张」**（4 张会全落局外）：用 '
       + '`op=burst awaitPlaytest:true startAfterSec:<小值> untilGone:true`（命中就开拍、局一结束就停，逐张标 `inRun`），'
@@ -1482,26 +1734,23 @@ const TOOLS = [
         count: { type: 'number', description: 'op=burst：连拍几张（默认 5，上限 20）。' },
         burstMs: {
           type: 'number',
-          description: 'op=burst：两张之间**额外等待**的毫秒（默认 800；小于 800 会被夹到 800 并标 `clamped`）。'
-            + '⚠️ **这不是「每 N 毫秒一张」**：单张自身还要 ~2.6 秒（本机实测），'
-            + '所以真实帧距 ≈ burstMs + 2600ms，回执里用 **`measuredIntervalMs`** 如实报出。',
+          description: 'op=burst：两张之间的**额外等待**毫秒（默认 800；小于 800 夹到 800 并标 `clamped`）。⚠️ **不是「每 N 毫秒一张」**：单张自身约 2.6 秒，真实帧距看回执的 **`measuredIntervalMs`**。',
         },
         awaitPlaytest: {
           type: 'boolean',
-          description: 'op=burst：**默认 false（立刻开拍）**。传 true 就变成「等试玩开跑 → 再等 afterSec 秒 → 连拍」——'
-            + '这条链**一次调用就能完成**（判据与 miliastra_playtest op=wait 是同一份）。',
+          description: 'op=burst：**默认 false（立刻开拍）**；传 true = 「等试玩开跑 → 再等 afterSec 秒 → 连拍」**一次调用完成**（判据与 `miliastra_playtest op=wait` 同一份）。',
         },
-        afterSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：命中开跑后再等 N 秒才开拍（默认 0，上限 120）。⚠️ 短局别给大值，改用 `startAfterSec` + `untilGone`。' },
+        afterSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：命中开跑后等 N 秒才开拍（默认 0，上限 120）。⚠️ 短局别给大值，改用 startAfterSec + untilGone。' },
         startAfterSec: {
           type: 'number',
-          description: 'op=burst（0.3.1 新增）：命中开跑后等 N 秒**立刻开拍**（默认 = `afterSec`，不传时行为一字不改）——短局给小值，配 `untilGone:true`。',
+          description: 'op=burst：命中开跑后等 N 秒**立刻开拍**（默认 = afterSec，不传时行为一字不改）—— 短局给小值，配 `untilGone:true`。',
         },
         untilGone: {
           type: 'boolean',
           description: 'op=burst（0.3.1 新增）：**拍到这一局结束就自动停**（默认 false），剩余张数不再拍。',
         },
         timeoutSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：等开跑最多多少秒（默认 90，上限 300）。' },
-        backSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：回扫窗口秒数（默认 0）。⚠️ 回扫命中的局**可能已经结束** —— 那些图会逐张标 `inRun:false`。' },
+        backSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：回扫窗口秒数（默认 0）。⚠️ 回扫命中的局**可能已结束** —— 那些图逐张标 `inRun:false`。' },
       },
       additionalProperties: false,
     },
@@ -1764,7 +2013,9 @@ const TOOLS = [
         };
       }
 
-      const judge = judgeCapture(r);
+      const judge = judgeCapture(r, { target: targetKey, requestedProcess: processName });
+      // 候选窗口逐条标出「哪个被选中了」（多窗口时"选错窗口"才看得见；P2-2 ①）
+      const cands = markSelectedCandidate(r.candidates, { pid: r.pid, title: r.title, width: r.width, height: r.height });
       let size = null;
       try { size = fsMod.statSync(r.path).size; } catch { /* 图没落盘也照报，size 可能为 null */ }
       const s = listShots(dir);
@@ -1775,7 +2026,8 @@ const TOOLS = [
         path: r.path, file: name, dir,
         width: r.width, height: r.height, mode: r.mode, front: r.front,
         blackRatio: r.blackRatio, uniformRatio: r.uniformRatio,
-        candidates: r.candidates || null,
+        candidates: cands.length ? cands : null,
+        candidateCount: cands.length,
         size, sizeText: size === null ? null : humanSize(size),
         thumb: r.thumbPath ? pathBasenameOf(r.thumbPath) : null,
         // 面板直接用这两个 URL 显示预览 / 原图（路由只允许读截图目录内的 .png）
@@ -1828,16 +2080,12 @@ const TOOLS = [
         template: {
           type: 'string',
           enum: PROBE_TEMPLATE_CHOICES,
-          description: '模板名。怕选错先 op=list 看每个模板的大白话说明：'
-            + PROBE_TEMPLATE_CHOICES.map((t) => `${t}=${(PROBE_INFO[t] || {}).label || ''}（${(PROBE_INFO[t] || {}).oneLine || ''}）`).join('；')
-            + '。⚠️ `custom` 必须再给 `lua`（正文），其余模板都不用。',
+          description: '模板名（清单与每个模板的大白话说明见工具说明；怕选错先 op=list）。⚠️ `custom` 必须再给 `lua`（正文），其余模板都不用。',
         },
         lua: {
           type: 'string',
-          description: '**只有 template:"custom" 用**：探针正文，一段**完整 Lua**（建议定义 `function run()` —— '
-            + '探针会在试玩起来后第 3 帧调它一次；也能自己在 OnStart/OnUpdate 里输出）。'
-            + '正文里只做两件事：print + 只读 API —— **探针不会写地图 / 写存档**。'
-            + '不通过结构校验（缺 end / 括号不配平 / 字符串没闭合）会被**拒绝渲染**并指出哪里不合法。',
+          description: '**只有 template:"custom" 用**：探针正文，一段**完整 Lua**（建议定义 `function run()` —— 探针会在试玩起来后第 3 帧调它；也能自己在 OnStart/OnUpdate 里输出）。'
+            + '正文里只做两件事：print + 只读 API（**不写地图 / 不写存档**）。缺 end / 括号不配平 / 字符串没闭合会被**拒绝渲染**并指出哪里不合法。',
         },
         tag: { type: 'string', description: '日志标签（默认 PROBE）。collect 时用它过滤。' },
         level: { type: 'string', description: '关卡；省略=当前关卡。' },
@@ -1947,89 +2195,37 @@ const TOOLS = [
     name: 'miliastra_sim',
     description:
       '内置**千星模拟器**（引擎吸收自 miliastra-beyond-simulator，GPL-3.0-only）：在游戏之外搭界面、跑 levelScript、出画面 PNG。'
-      + '\n**定位：真机试玩之前的「预测试」** —— 在游戏外先用**同一套 Lua 与控件语义**把「可自动判定」的问题拦掉'
-      + '（脚本跑没跑 / 控件建没建·建了几个 / 变量与信号对不对 / 布局歪不歪 / 动画动不动）；'
-      + '拦不下官方素材、真机渲染、联机、性能与手感 —— 所以**模拟器通过 ≠ 真机通过**，真机那一步仍要人点试玩。'
-      + '\n三档共用**同一份工程与同一个会话**：①静态预览（`state`/`controls`/`shot`）②交互试玩（`play`、面板、浏览器页 `/miliastra/play`，时间**真在走**）'
-      + '③确定性判定（`verify`/`cases`/`fromHistory`/`frames`，**冻结时钟**、按时间点重放、可复现）。'
-      + '\n★ **AI 自测逻辑主用 `op=verify`**：一次调用 = 跑一段操作 + 到点断言 + 给判定（引擎开一个全新会话**确定性重放**，可重复）。'
-      + '\n  · `steps[]` 每步可带 `at`（模拟秒；省略 = 上一步 + `after`，默认 0.1s）：'
-      + '`key:"KeyboardCraftspersonKey3Down"` / `click:{x,y}`（**左下原点**）/ `clickName:"按钮名"` / '
-      + '**`drag:{from:[x,y],to:[x,y],steps?,gap?}`**（自动展开成 down→move…→up —— **测拖拽/滑动就用它**）/ `pointer:{type,x,y}`（手排裸指针事件）/ '
-      + '`setVar:{entityType,name,value}` / `sendSignal:{name,params,target}` / `view:2` / `pause` / `resume`；'
-      + '\n  · `expect[]` 断言数组（`at` 省略 = 最后一个事件之后 0.1s ⇒ 查最终状态），kind 七种：'
-      + '`log{contains,level?,source?}` / `control{id?|name?,field,equals}` / `var{entityType,name,equals}` / '
-      + '`signal{name,direction?,values?}` / `tree{name,exists}` / **`count{name?,controlKind?,equals|atLeast}`（**建了几个** —— 列表项/连击星这类动态 UI 只能用它数）** / '
-      + '`lua{source}`（Lua 查询脚本，可用 query.var / query.control / query.logContains / query.logs / query.serverLogContains / query.signals）；'
-      + '\n  · 回 `passed` / `failedAt` / `results[]`（每条 ok·actual·expected）/ `snapshot.logs`；**没过时给一句 `hint`** 指出第几条、期望 vs 实际。'
-      + '\n  · **没过会顺带取证**：`shot`（失败点附近的一帧 PNG，用 read_image 看）+ `runtime.controlNames`（**运行时**控件名清单 —— 编辑器工程树里没有的就是脚本动态创建的）；不要就传 `shotOnFail:false`。'
-      + '\n  · **一组用例一次跑**：`cases:[{name,steps,expect},…]` —— 每个用例各开一个全新会话确定性重放（互不影响，可当回归套件）；默认跑完全部，`stopOnFail:true` 则第一个不过就停。'
-      + '\n  · **`fromHistory:true`：把「刚跑过那一局」直接变成回归用例** —— 人在浏览器试玩页（`GET /miliastra/play`，WebGL 真能玩的那页）里玩的也算，AI **不用手抄 events**；'
-      + '人报「刚才这么点就错了」时，就问清预期（2~3 个具体选项）再 `fromHistory` 重放。⚠️ 回放会重开会话，那一局就此结束。'
-      + '`keepRunning:true` 保留会话以便接着 `op=play` 交互（默认判定完就停；失败取证会把会话置于暂停）。'
-      + '\n★ **交接值从哪来？先 `op=handover`** —— 它列出这台机器上的**活文件**（并标出"当前正在开发的那张图"），'
-      + '也可以带 `source`（**任意本地 .lua 的绝对路径，只读**）直接读那一份（读完零改动；>8 MB / 二进制 / 相对路径一律拒绝）；'
-      + '再把源码里的**候选交接值**摆出来（`local NAME = <9 位以上整数>` 与表字段 `NAME = <大整数>` 两种写法都认，'
-      + '含变量名与 `kind` 提示）+ 给一份 `suggestedTemplates`。'
-      + '为什么值得单开一步：交接值**抄错一位** → 脚本静默什么都不建（不报错）；从源码抽真值比让人抄一遍可靠。'
-      + '但 `kindHint` **只是提示**（看变量名猜的），拿不准就在 `op=bind` 里传 `kind:"auto"`（谁让控件数增长就用谁）。'
-      + '\n★ **guid / containerId 优先自动拿，拿不到才问创作者（仍然不许编）**：'
-      + '① `op=handover`（可带 `source` 读任意本地 .lua）从源码抽 → ② `miliastra_map op=clientui` 从 `.gil` 读模板索引 → '
-      + '③ 两个都拿不到才让创作者给。'
-      + '\n★ **把真机工程搬进模拟器用 `op=bind`**（一条命令替掉手写探针）：给 `source`（真机活文件 .lua 绝对路径）+ '
-      + '`templates:[{guid,kind,name?}]` + `containerId`（上面那三个来源拿到的交接值；只记录/交叉核对）→ '
-      + '它把模板（guid 就用交接值）与脚本（挂载名用文件名，`scriptName` 可改）搭好，默认顺手起一次会话并回 `run.logs`（脚本跑没跑）与 '
-      + '`run.controlCount`（控件建没建·建了几个）。默认 `fresh:true` 先清空出厂橱窗控件（只留你的工程）；`run:false` 只搭不跑；`saveAs` 存成工作区存档。'
-      + '\n  · **`kind` 猜错是静默的**（控件类型不对时脚本设属性直接报错中止，什么都不建）→ 拿不准就传 `kind:"auto"`：'
-      + '按 **image → textbox → container** 逐个起会话，**谁让控件数增长就用谁**，回执给 `kindTried[]` / `kindWinner`；'
-      + '不给 auto 而控件数又没涨，回执会自动附一条 `kindHint`（点破「可能是 kind 不对」）。'
-      + '\n  · `mount` 回的是**真实层级**（`parent` / `ancestors` / `isClientUI`）：真机上客户端脚本就是挂在'
-      + '`客户端控件容器(server-container) → 容器节点(container)` 的那个容器节点上；`assetType` 只是**控件模板资源**的名字，'
-      + '**不代表"挂在服务端"**（回执里另有 `assetTypeNote` 说明）。'
-      + '它还会交叉核对交接值（`handover.missing/extra`：源码里出现、你没交的 10 位以上整数 = 可能还缺模板）—— 这是启发式，不是判决。'
-      + '⚠️ **Host 是启动快照**：每次重启 `dsh web`，模拟器内存里的工程都回到**出厂默认**'
-      + '（`op=state` 的 `factoryDefault:true` 会如实说）。成功 bind 会记一份**配方**（`last-bind.json`），'
-      + '重启后 `{"op":"bind","last":true}` 一键重搭上次那份。'
-      + '\n★ **验收单用 `op=cases`**（人/AI 读同一份，存在模拟器工作区的 `cases.json`）：'
-      + '`action=add set=<名字> expect=[…]` 存一条自动用例（加 `fromHistory:true` 就把**刚跑过那一局**的操作变成用例，AI 不用手抄 events）；'
-      + '`manual:true, note:"人要看什么"` 存**人工项**；`action=run set=<名字>` 确定性重放全部自动项并列出 `manual[]` 等人打勾'
-      + '（`autoPassed` **不等于**验收通过）；`action=list/show/remove` 看/删（remove 默认 dryRun，要 `confirm:true`）。'
-      + '`op=verify caseSet=<名字>` 也能直接跑清单里那一组。'
-      + '\n其它 op：`controls` **控件清单（最省 token，写断言前先看这个）**——只回 `{id,name,kind,depth}` + `names`（可直接抄进 expect）+ 类型直方图；'
-      + '`runtime:true` 看**运行中**会话的控件（脚本动态建出来的），需先 start；'
-      + '**`runtime:true geom:true`** 再带上**世界坐标 / 源尺寸 / 文字** —— "屏幕上有哪些东西、能点哪儿"一次说完'
-      + '（比自己 dump 75 KB 的树+场景省一个数量级）；'
-      + '`state` 看工程/控件树/属性（要几何与父级才用它）；'
-      + '`patch` 改工程（add/set/remove/setCanvas/addScript…，数据写带 expectedRevision）；'
-      + '`play` 手动试玩（start/step/pointer/key/click/pause/resume/device/view/serverGet/serverSet/serverSend/history/saveCase/runCase/stop；start 可带 canvasId 与 playerCount=1–8）；'
-      + '`keys` 从**你的脚本源码**里扫出它真正在听的按键名（**两路都扫**：`KeyEventType.X` 与**裸字符串**写法 '
-      + '`bindHold("KeyboardMoveRightKeyDown", …)`，后者是实测真脚本的写法、旧实现漏检过；回执 `found[].via` 标明来源，'
-      + '`string-literal` 是启发式、算候选；扫不出会告诉你**试发**哪个候选键，而不是让你猜）；'
-      + '`shot` 出 PNG（target=ui 编辑器视图 / target=play 试玩画面；`reuse:true` 连帧固定名覆盖写）；'
-      + '`export` 导出（format=`gia`/`gia-combined`/`json`/`save`/`scripts`，落进模拟器工作区的 `exports/`）；`import` 把文件导回（`file`=绝对路径）；'
-      + '`load` 列/读模拟器工作区存档；`save` 存进该工作区；`reset` 清空工程。'
-      + '\n  · **动画 / 动效类问题用 `op=frames`**（别只断言某个静态值）：`frames:[0,0.5,1]` → 每个时间点一张 PNG + **帧间像素差数字**'
-      + '（`changedPixels` / `changedRatio` / 变化区域 `bbox`）+ 字段级的 `changedControls`（**哪个控件的哪个字段**变了，如 `matrix.tx: 800 → 850`）。'
-      + '内部是「暂停 + 单步」推进，所以**可复现**（同一调用两次得到同一组数字）。'
-      + '\n  · **人想自己上手玩**：`GET /miliastra/play` 是浏览器试玩页（PixiJS WebGL 真能玩，与面板/与 AI **共用同一个会话与同一份工程**）；'
-      + '玩完**不关会话就能让 AI 接手**（`fromHistory`）。面板「模拟器」页里也有入口。'
-      + '\n★ **AI 自己"玩"的量级（2026-09-24 实测）**：发一次输入 ≈ **5ms**（`key`/`pointer`/`click` 都是纯注入、不回快照），'
-      + '读一次 `get{view:true}` ≈ **200ms**，出一张 PNG 是秒级 ⇒ **发得快、看得慢**。所以：'
-      + '① 回合制闭环（`pause` + 逐步 `step` + 读场景再决定）完全可控；'
-      + '② 想在"实时档"打一段就在**一次调用里跑循环**（本地往返 5ms 级、跑满 30fps），但**循环里你看不见**，'
-      + '要把判断写成循环内的条件分支，事后用 `history` 快照/PNG 取证；'
-      + '③ "**逐帧看画面再反应"做不到**（不是没实现，是带宽上限：我的眼睛是 ≈5Hz 的离散采样）。'
-      + '\n★ **画面上的字不用截屏就能读**：**`op=hud`** 只回 `textbox.text`（HUD / 分数 / 关卡 + 世界坐标），短；'
-      + '拿它当闭环条件（例：读到「分数 3」才停手）。底层就是 `get{view:true}` 场景里 `textbox` 节点的 `text`，'
-      + '但**别为了读两行字去 dump 整个场景**（那一次 ≈200ms、几十 KB —— 这是实测踩过的浪费）。'
-      + '\n★ **记不住 `play` 的请求形状就别翻源码**：`op=keys` 的回执带 **`press`** —— `key` / `pointer` / `click` / `step` / `hud` '
-      + '**可直接照抄的请求体**（指针坐标**左下原点**）；`op=keys` 传 `all:true` 给**全量 164 个键名**（默认只有 10 条 presets）。'
-      + '⚠️ **按了 `…Down` 就要配对发 `…Up`**，否则等于一直按住这个键（实测：只发 Down 会把角色一路推到掉出边界重生）。'
-      + '\n⚠️ `frame` **不是秒表**：连续注入按键会顺带推帧（实测静置 30fps、注入期间 41.7/s），要计时用 `time`。'
-      + '\n⚠️ 用户 Lua 跑在**可终止的 Worker** 里（默认 8 秒超时后 terminate）；'
-      + '工作区固定在插件数据目录的 `simulator/`，不碰游戏存档、地图与活文件。'
-      + '\n★ **PNG 里有脚本建的客户端控件**（0.3.1 实测；旧免责句「不含客户端控件层」是错的）：脚本 `InstantiateClientUIControl` 建的控件（含挂在客户端模板上的脚本再建的子控件）**都会画进图**；只有客户端控件模板工程**自己那棵树**不在（它是实例化来源，不是场景根）。但它仍是**离线渲染**（官方素材/动效/联机不覆盖）⇒ 最终视觉验收要看真机。'
-      + '\n★ **`op=patch` 脚本字段**：`addScript` 要 `source` 或 `sourceFrom`（.lua 绝对路径），**都不给会明确拒绝**（旧版会静默写空脚本）；`removeScript`/`updateScript` 支持 `path`。**`op=bind` 可一次挂多个**：`scripts:[{path, source|sourceFrom}]`。\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
+      + '\n**定位：真机试玩之前的「预测试」**：在游戏外先用**同一套 Lua 与控件语义**把可自动判定的问题拦掉（脚本跑没跑 / 控件建没建·建了几个 / 变量与信号 / 布局 / 动画）；'
+      + '拦不下官方素材、真机渲染、联机、手感 ⇒ **模拟器通过 ≠ 真机通过**，真机那一步仍要人点试玩。'
+      + '\n三档共用同一份工程与同一个会话：①静态预览（`state`/`controls`/`shot`）②交互试玩（`play`/浏览器页 `/miliastra/play`，时间真在走）③确定性判定（`verify`/`cases`/`fromHistory`/`frames`，冻结时钟、可复现）。'
+      + '\n★ **AI 自测逻辑主用 `op=verify`**：一次调用 = 操作 + 断言 + 判定（引擎开全新会话**确定性重放**，可重复）。'
+      + '\n  · `steps[]`（形状见 `steps` 参数）：`key` / `click:{x,y}`（**左下原点**）/ `clickName` / **`drag`**（拖拽/滑动）/ `pointer` / `setVar` / `sendSignal` / `view` / `pause` / `resume`；'
+      + '\n  · `expect[]`（形状与字段见 `expect` 参数）kind 八种：`log` / `control` / `var` / `signal` / `tree` / `count`（**建了几个** —— 动态 UI 只能用它数）/ `controlAbsent`（不该存在）/ `lua`；'
+      + '`absent:true` 可加在 log/control/var/signal/tree 上 = 「**不该**存在」（旧版静默忽略它 ⇒ 断言"莫名失败"）；断言字段写错会当**参数错**报出来，不是断言没过。'
+      + '\n  · `lua` 断言的契约（实测过）：**返回值被忽略** —— 脚本跑完不报错就算过，`return false` 也算过；要判"不成立就失败"得自己 `assert(false, "…")` / `error("…")`。'
+      + '\n  · 回 `passed` / `failedAt` / `results[]`（ok·actual·expected）/ `snapshot.logs`；没过给 `hint`（第几条、期望 vs 实际）+ 失败点取证 `shot`（一帧 PNG）+ `runtime.controlNames`（**运行时**控件名 —— 工程树里没有的就是脚本动态建的）；不要取证传 `shotOnFail:false`。'
+      + '\n  · **一组用例一次跑**：`cases:[…]` 各自开新会话重放（可当回归套件）；默认跑完全部，`stopOnFail:true` 第一个不过就停。'
+      + '\n  · **`fromHistory:true` 把「刚跑过那一局」变成用例**（人在浏览器试玩页里玩的也算，AI 不用手抄 events）。⚠️ 回放会重开会话；`keepRunning:true` 保留会话接着 `op=play` 交互。'
+      + '\n★ **交接值从哪来：先 `op=handover`** —— 列出这台机器上的**活文件**（标出"当前正在开发的那张图"）与候选交接值（`local NAME = <9 位以上整数>` / 表字段都认，含 `kind` 提示）+ `suggestedTemplates`；'
+      + '也可带 `source`（**任意本地 .lua 绝对路径，只读**：>8 MB / 二进制 / 相对路径一律拒绝，读完零改动）直接读那一份。交接值**抄错一位 → 脚本静默什么都不建**；`kindHint` 看变量名猜的，拿不准在 `op=bind` 传 `kind:"auto"`。'
+      + '\n★ **guid / containerId 优先自动拿，拿不到才问创作者（仍然不许编）**：① `op=handover` 从源码抽 → ② `miliastra_map op=clientui` 从 `.gil` 读模板索引 → ③ 两个都拿不到才让人给。'
+      + '\n★ **把真机工程搬进模拟器用 `op=bind`**：`source`（活文件 .lua 绝对路径）+ `templates:[{guid,kind,name?}]` + `containerId`（只记录/交叉核对）→ 搭好模板与脚本，默认起一次会话并回 `run.logs`（跑没跑）与 `run.controlCount`（建了几个）；`fresh:true`（默认）清空出厂橱窗控件，`run:false` 只搭不跑。'
+      + '\n  · **`kind` 猜错是静默的** ⇒ 拿不准传 `kind:"auto"`（按 image → textbox → container 逐个起会话，谁让控件数增长就用谁，回执 `kindTried[]`/`kindWinner`）；控件数没涨会自动附 `kindHint` 点破。'
+      + '\n  · `mount` 回**真实层级**（`parent`/`isClientUI`）：真机客户端脚本挂在 `客户端控件容器(server-container) → 容器节点(container)`；`assetType` 只是**控件模板资源**的名字，**不代表"挂在服务端"**。'
+      + '\n  · ⚠️ **Host 是启动快照**：重启 `dsh web` 后内存里的工程回到**出厂默认**（`op=state.factoryDefault:true` 会说）；成功 bind 记一份配方（`last-bind.json`），`{"op":"bind","last":true}` 一键重搭。'
+      + '\n★ **验收单用 `op=cases`**（存在工作区 `cases.json`）：`action=add set=<名字> expect=[…]` 存自动用例（加 `fromHistory:true` 就把刚跑过那一局的操作变成用例）；`manual:true, note:"人要看什么"` 存**人工项**（`name` 缺省取 `note` 前 20 字）；`action=run set=<名字>` 重放自动项并列出 `manual[]` 等人打勾（`autoPassed` **不等于**验收通过）；`list/show/remove` 看/删。`op=verify caseSet=<名字>` 也能直接跑那一组。'
+      + '\n其它 op：`controls`（**写断言前先看它**：`{id,name,kind,depth}`+`names`+类型直方图，最省 token；`runtime:true` 看运行中会话里脚本动态建出来的；再带 `geom:true` 给世界坐标/源尺寸/文字）｜`state` 工程树｜`patch`（见文末白名单）｜'
+      + '`play` 手动试玩（动作名见 `action` 参数；**`click` 给 `args.x/y` = 按坐标点（等价 `pointer{type:"click"}`），给 `args.name` = 按控件名点，都不给直接报错指路**）｜'
+      + '`keys` 从**你的脚本源码**扫按键名（**两路**：`KeyEventType.X` 与**裸字符串** `bindHold("KeyboardMoveRightKeyDown", …)`，后者实测真脚本就这样写、旧实现漏检；`found[].via` 标来源，`string-literal` 是启发式）｜`shot` 出 PNG｜`export`/`import`/`load`/`save`/`reset`。'
+      + '\n  · **动画/动效类用 `op=frames`**（别只断言静态值）：`frames:[0,0.5,1]` → 每点一张 PNG + 帧间像素差（`changedPixels`/`changedRatio`/`bbox`）+ 字段级 `changedControls`（哪个控件的哪个字段变了，如 `matrix.tx: 800 → 850`）；内部「暂停+单步」⇒ **可复现**。'
+      + '\n  · **人想自己上手玩**：`GET /miliastra/play`（PixiJS WebGL 真能玩，与面板/AI 共用同一个会话与工程）；玩完不关会话就能 `fromHistory` 交给 AI。'
+      + '\n★ **AI 自己"玩"的量级**：发一次输入 ≈ **5ms**（`key`/`pointer`/`click` 纯注入、不回快照），读一次 `get{view:true}` ≈ **200ms**，出一张 PNG 秒级 ⇒ 发得快、看得慢。① 回合制闭环（`pause`+逐步 `step`+读场景）完全可控；② 实时档打一段要在**一次调用里跑循环**，但**循环里你看不见**，判断写成循环内分支、事后用 `history`/PNG 取证；③ **逐帧看画面再反应做不到**（眼睛是 ≈5Hz 离散采样）。'
+      + '\n★ **画面上的字不用截屏就能读**：**`op=hud`** 只回 `textbox.text`（HUD/分数/关卡+世界坐标），拿它当闭环条件（读到「分数 3」才停手）；别为两行字 dump 整个场景（那次 ≈200ms、几十 KB）。'
+      + '\n★ **记不住 `play` 的请求形状就别翻源码**：`op=keys` 回执带 **`press`**（`key`/`pointer`/`click`/`step`/`hud` 可直接照抄的请求体，指针**左下原点**）；传 `all:true` 给**全量 164 个键名**（默认 10 条 presets）。⚠️ **按了 `…Down` 就要配对发 `…Up`**，否则等于**一直按住**这个键（实测把角色一路推到掉出边界重生）。'
+      + '\n⚠️ `frame` **不是秒表**：连续注入按键会顺带推帧（静置 30fps、注入期间 41.7/s），要计时用 `time`。⚠️ 用户 Lua 跑在**可终止的 Worker**（默认 8 秒超时 terminate）；工作区固定在插件数据目录的 `simulator/`，不碰存档、地图与活文件。'
+      + '\n★ **PNG 里有脚本建的客户端控件**（旧免责句「不含客户端控件层」是错的）：`InstantiateClientUIControl` 建的控件（含客户端模板上的脚本再建的子控件）**都会画进图**；只有客户端控件模板工程**自己那棵树**不在（它是实例化来源，不是场景根）。仍是**离线渲染** ⇒ 最终视觉验收看真机。'
+      + '\n★ **Z 序（谁压谁）**：模拟器**按 sibling 顺序画**（工程树越靠前 = 越上层；Lua 的 `SetAsLastSibling()` 才是提到最上、`SetAsFirstSibling()` 反而沉底，与官方一致）。⚠️ `op=patch add` 是**追加** ⇒ 新控件落在**最底层**（真机脚本 `InstantiateClientUIControl` 则是**后建的在上**，两条都有回归钉住）—— 用 patch 搭覆盖层要显式调层序。**不覆盖**：跨父级只按父级顺序整体叠、官方素材自身层序、真机渲染管线 ⇒ 仍建议真机看一眼。'
+      + '\n★ **`op=patch` 每个 op 有字段白名单，传错名会报错点名（旧版静默忽略）**：`add` 支持 `text`（`{"op":"add","kind":"textbox","name":"t","text":"…"}` —— 建的时候就带上；旧版 `text` 被吞、inspector 里永远是空串）；`set` 要 `{op,id,key,value}`（传了 `field` 会提示你是不是想传 `key`，并列出**该控件可设的 key**）；`remove`/`setCanvas`/`addScript`/`updateScript`/`removeScript` 各自的字段也校验；`addScript` 要 `source` 或 `sourceFrom`（.lua 绝对路径，**都不给会明确拒绝**，不写空脚本），`removeScript`/`updateScript` 支持 `path`。**`op=bind` 可一次挂多个**：`scripts:[{path, source|sourceFrom}]`。\n\n**典型调用**：把真机工程搬进来：`{"op":"bind","source":"D:\\\\…\\\\external_lua_file\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image","name":"图片模板"},{"guid":1073741867,"kind":"textbox","name":"文本框模板"}],"containerId":1073741866}`；'
       + '控件类型拿不准：`{"op":"bind","source":"…\\\\双相.lua","templates":[{"guid":1073741867,"kind":"auto"}]}`；'
       + '自测一条规则：`{"op":"verify","steps":[{"key":"KeyboardCraftspersonKey3Down"}],"expect":[{"kind":"log","contains":"GOT_KEY_3"}]}`；'
       + '写断言前先看有什么控件：`{"op":"controls","namedOnly":true}`；'
@@ -2039,69 +2235,67 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测逻辑用 verify**；交接值用 handover；把真机工程搬进来用 bind；验收单用 cases；动画用 frames；**读画面上的字用 hud**（比 dump 场景省得多）；写断言前想省 token 看控件用 controls。' },
+        op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。**AI 自测用 verify**；交接值 handover；真机工程 bind；验收单 cases；动画 frames；**读画面上的字用 hud**（比 dump 场景省得多）；写断言前看控件用 controls。' },
         /*
          * ⚠️ 这个 `all` **同时服务两个 op** —— 写成两个键会**静默覆盖**（JS 对象字面量后者胜），
          * 于是其中一个说明永远不会到达 AI（2026-09-24 被 ESLint 的 `no-dupe-keys` 抓到，见 `tools/lint.mjs`）。
          */
-        all: { type: 'boolean', description: 'op=keys：给**全量键名**（`Enum.KeyEventType` 164 项，≈3KB；默认只回 10 条 presets）——不知道有哪些键可按时传它，别去翻枚举文档。op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
-        steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?, after?, key?|click?{x,y}|clickName?|drag?{from,to,steps,gap}|pointer?{type,x,y}|setVar?{entityType,name,value}|sendSignal?{name,params,target}|view?|pause?|resume?}。', items: { type: 'object', additionalProperties: true } },
-        expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, ...}，kind = log{contains}/control{id|name,field,equals}/var{entityType,name,equals}/signal{name,direction,values}/tree{name,exists}/count{name|controlKind,equals|atLeast}/lua{source}。⚠️ `tree` 只能按 name 找（没名字的控件用 control{id}）；要问「建了几个」用 `count`。', items: { type: 'object', additionalProperties: true } },
-        cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放，一次调用跑一组回归）；op=cases action=add 用它一次存多条（同样 {name, steps, expect} 或 {manual:true, note}）。', items: { type: 'object', additionalProperties: true } },
-        fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**的事件当用例（人在浏览器试玩页 /miliastra/play 里玩的也算），AI 不用手抄 events。需要会话还活着；回放会重开会话。' },
-        frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，最多 12 个），如 [0,0.5,1]：每个点出一张 PNG，并给帧间像素差与字段级变化。', items: { type: 'number' } },
+        all: { type: 'boolean', description: 'op=keys：给**全量键名**（`Enum.KeyEventType` 164 项，≈3KB；默认 10 条 presets）——不知道有哪些键可按时传它。op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
+        steps: { type: 'array', description: 'op=verify 的操作序列；每步 {at?(模拟秒；省略=上一步+after，默认 0.1s), after?, key, click{x,y}(**左下原点**), clickName, drag{from,to,steps?,gap?}(拖拽/滑动), pointer{type,x,y}, setVar, sendSignal, view, pause, resume}。', items: { type: 'object' } },
+        expect: { type: 'array', description: 'op=verify 的断言数组；每项 {kind, at?, …}，kind 八种：log{contains,level?,source?}/control{id?|name?,field,equals}/var{entityType,name,equals}/signal{name,direction?,values?}/tree{name,exists}/count{name?,controlKind?,equals|atLeast}/controlAbsent{id?|name?}/lua{source}。`absent:true`（加在 log/control/var/signal/tree 上）= **不该存在**。lua 断言**只看报不报错**（返回值被忽略），可用 query.var/control/logContains/logs/serverLogContains/signals。⚠️ `tree` 只按 name 找；问「建了几个」用 `count`；未知字段会当**参数错**报出来。', items: { type: 'object' } },
+        cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}（各自独立重放）；op=cases action=add 用它一次存多条（{name,steps,expect} 或 {manual:true, note}）。', items: { type: 'object' } },
+        fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**的事件当用例（浏览器试玩页里玩的也算），AI 不用手抄 events。需要会话活着；回放会重开会话。' },
+        frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，最多 12 个），如 [0,0.5,1]：每点一张 PNG + 帧间像素差 + 字段级变化。', items: { type: 'number' } },
         diff: { type: 'boolean', description: 'op=frames：是否比帧间像素差（默认 true）。false = 只出帧、不解码。' },
         threshold: { type: 'number', description: 'op=frames：像素算「变了」的每通道差值阈值，默认 8。' },
-        shotOnFail: { type: 'boolean', description: 'op=verify：判定没过时自动存一帧失败点 PNG 并回 `shot`（默认 true，传 false 关掉）。' },
-        stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个用例没过就停（默认 false = 跑完全部，回归语义）。' },
-        keepRunning: { type: 'boolean', description: 'op=verify：判定后不停止会话（默认停），便于接着 op=play 交互；失败取证会把会话暂停，续玩先 op=play action=resume。' },
+        shotOnFail: { type: 'boolean', description: 'op=verify：没过时自动存一帧失败点 PNG 并回 `shot`（默认 true）。' },
+        stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个没过就停（默认 false = 跑完全部，回归语义）。' },
+        keepRunning: { type: 'boolean', description: 'op=verify：判定后不停会话（默认停），便于接着 op=play；失败取证会把会话暂停，续玩先 action=resume。' },
         dt: { type: 'number', description: 'op=verify：重放的每步时长（秒）。省略用引擎默认。' },
         runtime: { type: 'boolean', description: 'op=controls：看**运行中**会话的控件树（脚本动态创建的），需先 op=play start；省略=看编辑器工程树。' },
-        geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带上**世界坐标 `x/y` + 源尺寸 `w/h` + `text`**（"能点哪儿/哪行字"）—— 坐标左下原点，可直接喂 pointer/click。默认不带（省 token）。' },
+        geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带**世界坐标 `x/y` + 源尺寸 `w/h` + `text`**（"能点哪儿/哪行字"，坐标左下原点，可直接喂 pointer/click）。默认不带。' },
         namedOnly: { type: 'boolean', description: 'op=controls：只列有名字的控件（只有它们能按 name 断言）。' },
         nameContains: { type: 'string', description: 'op=controls：按名字子串过滤（Host 侧过滤，中文可用）。' },
-        kind: { type: 'string', description: 'op=controls：按类型过滤（container / server-container / textbox / button / image …）。'
-          + '⚠️ op=bind 的模板类型**不在这个参数上**，在 `templates[].kind` 里 —— 那里还支持 `"auto"`（拿不准控件类型时用）。' },
+        kind: { type: 'string', description: 'op=controls：按类型过滤（container / textbox / button / image …）。⚠️ op=bind 的模板类型**不在这个参数上**，在 `templates[].kind`（那里支持 `"auto"`）。' },
         maxDepth: { type: 'number', description: 'op=controls：只列到第几层（0=根）。' },
         limit: { type: 'number', description: 'op=controls：最多回多少条，默认 200（回执里 `omitted` 说明截掉了多少）。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
         treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树，默认 200。' },
-        patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题"}；数据写要带 expectedRevision。脚本类：addScript{controlId,controlAsset,path,source|sourceFrom}（**缺源码会被明确拒绝**）、updateScript{id|path,…}、removeScript{id|path}。', additionalProperties: true },
-        action: { type: 'string', description: 'op=play 的动作：start / device / view / get / step / pointer / key / click / pause / resume / stop / serverGet / serverSet / serverSend。' },
-        args: { type: 'object', description: 'op=play 的参数，如 {"x":640,"y":360} / {"dt":0.033} / {"type":"click","x":640,"y":360}。', additionalProperties: true },
-        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 的取景：ui=编辑器视图（静态），play=试玩画面（需先 op=play action=start）。' },
+        patch: { type: 'object', description: 'op=patch 的编辑操作，如 {"op":"add","parentId":"n1","kind":"textbox","name":"标题","text":"…"}（`add` 收 `text`）；数据写要带 expectedRevision。`set` 要 {op,id,key,value}。脚本类：addScript{controlId,controlAsset,path,source|sourceFrom}（**缺源码明确拒绝**）、updateScript{id|path,…}、removeScript{id|path}。每个 op **只认自己的字段**，传错名会报错点名。' },
+        action: { type: 'string', description: 'op=play 的动作：start/device/view/get/step/pointer/key/click/pause/resume/stop/serverGet/serverSet/serverSend。**click 给 args.x/y = 按坐标点（等价 pointer{type:"click"}）；给 args.name = 按控件名点；都不给报错指路。**' },
+        args: { type: 'object', description: 'op=play 的参数，如 {"x":640,"y":360} / {"dt":0.033} / {"type":"click","x":640,"y":360}。' },
+        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 取景：ui=编辑器视图（静态），play=试玩画面（需先 start）。' },
         label: { type: 'string', description: 'op=shot 的文件名标签（便于事后认图）。' },
-        reuse: { type: 'boolean', description: 'op=shot 连帧用：固定名（sim-play-live.png）覆盖写，磁盘只留一张当前帧；URL 带时间戳绕开缓存。不传=每张都新建文件（适合留证据）。' },
-        format: { type: 'string', description: 'op=export / op=import 的格式：gia（当前界面）/ gia-combined（服务端与客户端并排）/ json / save / scripts / lua。默认 gia。' },
+        reuse: { type: 'boolean', description: 'op=shot 连帧用：固定名（sim-play-live.png）覆盖写，只留当前帧；URL 带时间戳绕缓存。不传 = 每张新建文件。' },
+        format: { type: 'string', description: 'op=export / op=import 的格式：gia（默认）/ gia-combined / json / save / scripts / lua。' },
         assetType: { type: 'string', description: 'op=export 的资产类型过滤（如 server-control-template / client-control-template）。' },
         file: { type: 'string', description: 'op=import 要导入的文件绝对路径。' },
         archive: { type: 'string', description: 'op=load 的存档相对路径；省略=列出工作区里的存档。' },
         path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
-        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**。op=handover 用它**只读**读那一份文件并抽候选交接值（>8 MB / 二进制 / 相对路径一律拒绝，读完零改动）；op=bind 用它当要搬进模拟器的脚本（通常给真机**活文件** .lua；路径随账号/换图变化，别写死）。op=bind 也可以不传它、改用 `script:{path,source}` 直接给源码，或用 `scripts:[…]` 一次给多份。' },
+        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**。handover 用它**只读**读那一份并抽候选交接值（>8 MB / 二进制 / 相对路径拒绝，读完零改动）；bind 用它当要搬进来的脚本（通常给真机**活文件** .lua，路径随账号/换图变化、别写死）。bind 也可改用 `script:{path,source}` 给源码，或 `scripts:[…]` 一次给多份。' },
         scripts: {
           type: 'array',
-          items: { type: 'object', additionalProperties: true },
-          description: 'op=bind：**一次挂多个脚本** `[{path, source|sourceFrom}, …]` —— `path` = 挂载名（默认用文件名）；'
-            + '`source` / `sourceFrom` 与 `op=patch addScript` 同义。给了它就不看顶层 `source`。',
+          items: { type: 'object' },
+          description: 'op=bind：**一次挂多个脚本** `[{path, source|sourceFrom}, …]`；`path` = 挂载名（默认文件名），`source`/`sourceFrom` 与 `addScript` 同义；给了它就不看顶层 `source`。',
         },
-        templates: { type: 'array', description: 'op=bind：**控件模板清单** `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（脚本 `InstantiateClientUIControl` 用的就是它）—— **优先自动拿，不许编**：① `op=handover`（可带 `source`）从源码抽 → ② `miliastra_map op=clientui` 从 `.gil` 读 → ③ 两个都拿不到才问创作者；`kind` = image/textbox/button/container…，**或 `"auto"`**（= 不猜：按 image → textbox → container 逐个起会话，谁让控件数增长就用谁，回执给 `kindTried[]` / `kindWinner`）；缺值会直接报错。', items: { type: 'object', additionalProperties: true } },
-        containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里自己硬编码了），只记进回执并和源码交叉核对（`handover.containerIdInSource`）。' },
-        scriptName: { type: 'string', description: 'op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（双相的 checkMount 要求就是「双相.lua」），名字不对它会自己退出。' },
-        mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件上（id 或名字；缺省=服务端容器节点）。' },
-        fresh: { type: 'boolean', description: 'op=bind：默认 true = 先把两个资产重置成出厂工程、清掉已有脚本，再按交接值重建（同一份参数 → 同一份工程）。false = 追加。' },
-        last: { type: 'boolean', description: 'op=bind：用**上次那份配方**重搭（**重启 `dsh web` 后内存里的工程会回到出厂默认** —— 这条就是"一键回来"）。配方在成功 bind 时自动记进模拟器工作区的 last-bind.json；回执里 `recipe` 是它的路径。' },
-        keepFactory: { type: 'boolean', description: 'op=bind：保留出厂橱窗控件（默认 false 会清掉 —— 它们和你的工程无关，留着会混进渲染与控件清单）。' },
-        run: { type: 'boolean', description: 'op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs`（脚本跑没跑）与 `run.controlCount`（控件建没建）。false = 只搭不跑。' },
-        settleSec: { type: 'number', description: 'op=bind：起完会话先让时钟走几秒再读（默认 0.5，上限 3）。脚本的构建多发生在进入 RUNNING 之后，停在 frame 0 读会把「建了 31 个控件」读成 1。' },
-        saveAs: { type: 'string', description: 'op=bind：把这份工程存进模拟器工作区（缺省名 bind-<脚本名>.save.json）。' },
-        script: { type: 'object', description: 'op=bind：直接用源码代替读文件，`{path:\'双相.lua\', source:\'…\'}`。', additionalProperties: true },
-        caseSet: { type: 'string', description: 'op=verify：直接跑 `op=cases` 里存着的那一组（人/AI 同一份验收单）；人工项不代跑，只列在 `manual[]` 里。' },
+        templates: { type: 'array', description: 'op=bind：控件模板清单 `[{guid,kind,name?}]`。`guid` = 真机「界面控件组库→客户端控件模板」里那条模板的索引（`InstantiateClientUIControl` 用的就是它）—— 优先自动拿、**不许编**（handover 抽 / `miliastra_map op=clientui` 读 / 都没有才问人）；`kind` = image/textbox/button/container… 或 `"auto"`；缺值直接报错。', items: { type: 'object' } },
+        containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。模拟器不靠它跑（脚本里已硬编码），只记进回执并与源码交叉核对（`handover.containerIdInSource`）。' },
+        scriptName: { type: 'string', description: 'op=bind：挂载名（= 脚本 `script.path`，缺省用文件名含 .lua）。⚠️ 有些脚本用 `script.path` 自查挂载名（要求就是「双相.lua」），名字不对它会自己退出。' },
+        mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件（id 或名字；缺省=服务端容器节点）。' },
+        fresh: { type: 'boolean', description: 'op=bind：默认 true = 先把资产重置成出厂工程、清掉已有脚本再按交接值重建（同一份参数 → 同一份工程）；false = 追加。' },
+        last: { type: 'boolean', description: 'op=bind：用**上次那份配方**重搭（重启 `dsh web` 后工程会回到出厂默认 —— 这就是"一键回来"）。配方在成功 bind 时记进工作区 last-bind.json。' },
+        keepFactory: { type: 'boolean', description: 'op=bind：保留出厂橱窗控件（默认 false 清掉 —— 它们和你的工程无关，留着会混进渲染与控件清单）。' },
+        run: { type: 'boolean', description: 'op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs` 与 `run.controlCount`；false = 只搭不跑。' },
+        settleSec: { type: 'number', description: 'op=bind：起完会话先让时钟走几秒再读（默认 0.5，上限 3）。脚本构建多发生在进 RUNNING 之后，停在 frame 0 会把「建了 31 个控件」读成 1。' },
+        saveAs: { type: 'string', description: 'op=bind：把工程存进工作区（缺省名 bind-<脚本名>.save.json）。' },
+        script: { type: 'object', description: 'op=bind：直接用源码代替读文件：`{path:"双相.lua", source:"…"}`。' },
+        caseSet: { type: 'string', description: 'op=verify：直接跑 `op=cases` 里存的那一组（人/AI 同一份验收单）；人工项不代跑，只列在 `manual[]`。' },
         set: { type: 'string', description: 'op=cases：用例集的名字（建议「玩法-关卡」，如 双相-第1关）。' },
-        case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组，同样要 confirm:true）。' },
-        confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true 才真删（不传只回 dryRun 计划）。' },
-        manual: { type: 'boolean', description: '存用例时用来标**人工项**（配合 note）——工具不代跑也不代判，只在 run 的 `manual[]` 里等人打勾（如「真机上小人看得见」）。' },
+        case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组，仍要 confirm:true）。' },
+        confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true 才真删（不传只回 dryRun）。' },
+        manual: { type: 'boolean', description: '存用例时标**人工项**（配合 note）——工具不代跑也不代判，只在 run 的 `manual[]` 里等人打勾。' },
         note: { type: 'string', description: '用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。' },
-        name: { type: 'string', description: 'op=bind：存档名（等价于面板上的重命名）；op=cases：set 的别名。' },
+        name: { type: 'string', description: 'op=bind：存档名；op=cases：set 的别名（manual 项缺省取 note 前 20 字）。' },
       },
       additionalProperties: false,
     },

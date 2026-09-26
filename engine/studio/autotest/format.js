@@ -62,6 +62,16 @@ function normalizeAssert(raw, index) {
   if (!ASSERT_KINDS.has(kind)) throw new Error(`unsupported assert kind: ${kind || '(empty)'}`)
   const row = { kind }
   if (raw.at !== undefined) row.at = finiteNumber(raw.at, 'assert.at')
+  /*
+   * ★ `absent:true`（2026-09-26，本仓库加法改动）：这一条断言「**不该存在**」。
+   *   以前这里**只搬运认得的字段** ⇒ 未知字段被静默丢掉，`absent` 永远到不了判定器，
+   *   于是 `{"kind":"log","contains":"首错","absent":true}` 变成「必须有这条日志」——
+   *   断言"莫名失败"，人/AI 会去查一个不存在的逻辑问题（实测踩到）。
+   *   所以：① 把 `absent` 搬过去；② `absent` 为真时**不再要求那些"用来比值的字段"**
+   *   （不该存在的东西没有值可比），但仍然要求「比什么」（name / contains / entityType…）。
+   */
+  const absent = raw.absent === true
+  if (absent) row.absent = true
   if (kind === 'log') {
     row.contains = String(raw.contains || raw.check || raw.text || '')
     row.source = raw.source === 'server' ? 'server' : 'client'
@@ -70,15 +80,17 @@ function normalizeAssert(raw, index) {
   } else if (kind === 'control') {
     row.id = raw.id ? String(raw.id) : ''
     row.name = raw.name ? String(raw.name) : ''
+    if (!row.id && !row.name) throw new Error('control assert requires id or name')
+    if (absent) return row
     row.field = String(raw.field || '')
     if (!row.field) throw new Error('control assert requires field')
-    if (!row.id && !row.name) throw new Error('control assert requires id or name')
     if (!Object.prototype.hasOwnProperty.call(raw, 'equals')) throw new Error('control assert requires equals')
     row.equals = cloneJson(raw.equals)
   } else if (kind === 'var') {
     row.entityType = String(raw.entityType || '')
     row.name = String(raw.name || '')
     if (!row.entityType || !row.name) throw new Error('var assert requires entityType and name')
+    if (absent) return row
     if (!Object.prototype.hasOwnProperty.call(raw, 'equals')) throw new Error('var assert requires equals')
     row.equals = cloneJson(raw.equals)
   } else if (kind === 'signal') {

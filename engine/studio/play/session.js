@@ -615,8 +615,17 @@ export function findPlayControl(session, name) {
 }
 
 export function injectPlayClick(session, name) {
-  remember(session, { kind: 'click', payload: { name: String(name) } })
-  const c = findPlayControl(session, name)
+  /*
+   * ⚠️ 名字是空 / `undefined` 时**什么都不做，也不记 history**（2026-09-26 加法改动）。
+   *    旧行为是照样记一条 `{kind:"click", payload:{name:"undefined"}}` —— 一条"点了但没点任何东西"的
+   *    **假记录**：脚本侧一次回调都没触发，而 history 看着像点过了（AI 会据此去改脚本，实测白烧一轮）。
+   *    工具层（`lib/sim.mjs` 的 `op=play action=click`）已经会拒绝这种调用，这里再加一道，
+   *    免得别的入口（浏览器试玩页 / 引擎自测）再把它写进 history。
+   */
+  const wanted = name === undefined || name === null ? '' : String(name).trim()
+  if (!wanted || wanted === 'undefined' || wanted === 'null') return
+  remember(session, { kind: 'click', payload: { name: wanted } })
+  const c = findPlayControl(session, wanted)
   if (c && acceptsPlayPointer(c) && (c.kind === 'button' || c.kind === 'cursor')) {
     c.SimulateCursorClick()
   }

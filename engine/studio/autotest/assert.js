@@ -83,6 +83,20 @@ function makeQuery(snap) {
 }
 
 function evalJsonAssert(assert, snap) {
+  /*
+   * ★ `absent:true`（2026-09-26，本仓库加法改动）：把这一条断言的结论**反过来** ——
+   *   「这个日志/控件/变量/信号/控件名**不该存在**」。
+   *   为什么必须实现：`{"kind":"log","contains":"首错","absent":true}` 以前会被**静默忽略**，
+   *   于是断言"莫名失败"，人/AI 会去查一个不存在的逻辑问题（实测踩到）。
+   *   实现方式：原判定 `ok:true`（= 它**存在**）时改成失败，反之亦然；`actual` 原样保留（事实不变）。
+   */
+  const wrap = (result) => {
+    if (!assert.absent) return result;
+    const exists = result.ok === true;
+    return exists
+      ? { ok: false, actual: result.actual, expected: '不应存在（absent:true）', absent: true, message: 'assert.absent: 它**存在**，但断言要求它不存在' }
+      : { ok: true, actual: result.actual, expected: '不应存在（absent:true）', absent: true };
+  };
   if (assert.kind === 'log') {
     const logs = assert.source === 'server'
       ? (snap.server?.logs || snap.serverLogs || [])
@@ -91,40 +105,50 @@ function evalJsonAssert(assert, snap) {
       if (assert.level && row.level !== assert.level) return false
       return String(row.text || '').includes(assert.contains)
     })
-    return hit
+    return wrap(hit
       ? { ok: true, actual: assert.contains }
-      : { ok: false, actual: logs.map((row) => row.text).slice(-8), expected: assert.contains }
+      : { ok: false, actual: logs.map((row) => row.text).slice(-8), expected: assert.contains })
   }
   if (assert.kind === 'control') {
     const control = findControl(snap.tree, assert)
     if (!control) {
-      return { ok: false, actual: null, expected: assert.equals, message: `control not found: ${assert.id || assert.name}` }
+      return wrap({ ok: false, actual: null, expected: assert.equals, message: `control not found: ${assert.id || assert.name}` })
+    }
+    // 「这个控件不该存在」——存在即失败；`actual` 报出**到底存在什么**（id/name/kind），一眼能定位
+    if (assert.absent === true) {
+      return { ok: false, actual: { id: control.id, name: control.name, kind: control.kind }, expected: '不应存在（absent:true）', absent: true, message: 'assert.absent: 这个控件**存在**' }
     }
     const actual = readField(control, assert.field)
-    return same(actual, assert.equals)
+    return wrap(same(actual, assert.equals)
       ? { ok: true, actual }
-      : { ok: false, actual, expected: assert.equals }
+      : { ok: false, actual, expected: assert.equals })
   }
   if (assert.kind === 'var') {
     const bag = snap.server?.vars?.[assert.entityType]
     const missing = !bag || !Object.prototype.hasOwnProperty.call(bag, assert.name)
     const actual = missing ? null : bag[assert.name].value
-    return same(actual, assert.equals)
+    return wrap(same(actual, assert.equals)
       ? { ok: true, actual }
-      : { ok: false, actual, expected: assert.equals }
+      : { ok: false, actual, expected: assert.equals })
   }
   if (assert.kind === 'signal') {
     const list = assert.direction === 'outbound' ? (snap.server?.outbound || []) : (snap.server?.inbound || [])
     const hit = list.find((row) => row.name === assert.name && (assert.values === undefined || same(row.values, assert.values)))
-    return hit
+    return wrap(hit
       ? { ok: true, actual: hit.values }
-      : { ok: false, actual: list.map((row) => ({ name: row.name, values: row.values })), expected: { name: assert.name, values: assert.values ?? null } }
+      : { ok: false, actual: list.map((row) => ({ name: row.name, values: row.values })), expected: { name: assert.name, values: assert.values ?? null } })
   }
   if (assert.kind === 'tree') {
     const exists = Boolean(findControl(snap.tree, { name: assert.name }))
-    return exists === assert.exists
+    // `absent:true` 时 `exists` 可以不传（"不该存在"本身就是期望）
+    if (assert.absent === true && assert.exists === undefined) {
+      return exists
+        ? { ok: false, actual: exists, expected: '不应存在（absent:true）', absent: true }
+        : { ok: true, actual: exists, expected: '不应存在（absent:true）', absent: true }
+    }
+    return wrap(exists === assert.exists
       ? { ok: true, actual: exists }
-      : { ok: false, actual: exists, expected: assert.exists }
+      : { ok: false, actual: exists, expected: assert.exists })
   }
   if (assert.kind === 'count') {
     const actual = countControls(snap.tree, assert)
