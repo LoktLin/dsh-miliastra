@@ -320,16 +320,20 @@ const healthLow = fakeLevel({
 });
 process.env.MILIASTRA_LOCALLOW = healthLow.root;
 
-await check('⑤ brief:true → 总长 < 1KB，且含「活文件名数组」', async () => {
+await check('⑤ brief:true → 总长 < 1KB，且含「活文件清单（name+bytes）」', async () => {
   const r = await health.execute({ brief: true }, {});
   const b = bytesOf(r);
   assert(r.brief === true && r.ok === true, 'brief 没生效：' + JSON.stringify(r).slice(0, 200));
   assert(b < 1024, 'brief 回执 ' + b + ' B，超过 1KB');
   assert(r.current && r.current.levelId === '1073741902' && r.current.brand === '原神' && r.current.accountId === '201170108',
     'current 缺关卡 id/品牌/账号：' + JSON.stringify(r.current));
-  assert(Array.isArray(r.luaFiles) && r.luaFiles.join(',') === 'game_01.lua,备用.lua',
-    '活文件名数组不对：' + JSON.stringify(r.luaFiles));
-  assert(r.luaFiles.every((x) => typeof x === 'string'), '活文件应当是**名字**数组，不是每个文件的全字段：' + JSON.stringify(r.luaFiles));
+  assert(Array.isArray(r.luaFiles) && r.luaFiles.map((x) => x && x.name).join(',') === 'game_01.lua,备用.lua',
+    '活文件清单不对：' + JSON.stringify(r.luaFiles));
+  // ★ P1-4（2026-09-26）：形状从「名字数组」改成 **`[{name, bytes}]`** —— 「0 字节脚本」必须一眼看出来。
+  //   旧断言 `every(x => typeof x === 'string')` 正是 P1-4 要改掉的那一条：这里**跟着改形状**（不是放宽，
+  //   而是把检查条件从「是字符串」换成「有 name + 有 bytes」，字节数还必须是夹具里的真实值 5）。
+  assert(r.luaFiles.every((x) => x && typeof x.name === 'string' && x.bytes === 5),
+    '活文件应当是 {name, bytes}（P1-4）：' + JSON.stringify(r.luaFiles));
   assert(typeof r.logDir === 'string' && r.logDir.includes('Beyond_Debug_Log'), '没给日志目录：' + r.logDir);
   assert(r.proc && typeof r.proc.editor === 'boolean' && typeof r.proc.game === 'boolean', '没给进程状态：' + JSON.stringify(r.proc));
   return b + ' B（默认档 ' + bytesOf(await health.execute({}, {})) + ' B）';
