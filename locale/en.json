@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Miliastra Wonderland Toolkit",
+    "description": "File-level tooling for Genshin Impact's Miliastra Wonderland UGC: locate and safely deploy live Lua files, read .gil map saves, mine .gia runtime logs, take screenshots, run probe templates and a built-in simulator, plus a sidebar panel."
+  }
+}
