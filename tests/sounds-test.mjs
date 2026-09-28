@@ -11,6 +11,13 @@
  *
  * ⚠️ 纪律：这里只断言"数字与口径"，不判"该用哪条音效"（那是作者的事）。
  *
+ * ★ 2026-09-28 起的**回执体积策略**（作者点名）也钉在这里：
+ *   · 带 `q` 的调用 = **过滤调用** ⇒ 省掉 7 行分类表与 `catalog` 段（改回 `categoriesOmitted:7` /
+ *     `catalogOmitted:true`）；`withMeta:true` 或**没传 `q`**（发现调用）才给。
+ *   · **没传 `q` 不再报错** ⇒ 变成发现调用：给分类表、回 `browse:true`、**0 条音效**（两头都钉住）。
+ *   · 0 命中的 `hint` 按 **(token 数 × 纯不纯拉丁字母)** 分流，首要建议放最前面 —— 旧版永远只念
+ *     "不支持拼音"那段长话，而实测最常撞的是「多关键词是 AND」。
+ *
  * 用法：node tests/sounds-test.mjs
  */
 import fs from 'node:fs';
@@ -164,7 +171,10 @@ ok('★ limit 夹紧：1000 → 100（MAX_LIMIT）', (() => {
 ok('limit 夹紧：负数 → 1', searchSounds({ q: '攻击', limit: -5 }).limit === 1);
 ok('limit 非数字 → 报错点名（不是静默用默认值）', errOf(() => searchSounds({ q: '攻击', limit: 'abc' })) !== null);
 ok('truncated=false 的条件：命中数 ≤ limit', searchSounds({ q: 'vibration', limit: 10 }).truncated === false);
-ok('q 为空 → 报错（不返回全表）', errOf(() => searchSounds({ q: '' })) !== null);
+ok('q 为空 → **发现调用**（不报错、也不回 1997 条音效：只回分类表）', (() => {
+  const r = searchSounds({ q: '' });
+  return r.browse === true && r.total === 0 && r.items.length === 0 && r.categories.length === 7;
+})());
 ok('★ category 给错 → 报错并列出合法 id（1 / 2 / … / 7）', (() => {
   const m = errOf(() => searchSounds({ q: '攻击', category: 9 }));
   return m !== null && /1 \/ 2/.test(m) && /7/.test(m);
@@ -174,17 +184,48 @@ ok('★ 超长 q（300 字）不崩、给 0 命中', (() => {
   const r = searchSounds({ q: '环'.repeat(300) });
   return r.total === 0 && Array.isArray(r.items) && r.items.length === 0;
 })());
-ok('summaryOnly 去掉 items，但 total / truncated / categories 一个不少', (() => {
+ok('summaryOnly 去掉 items，但 total / truncated 一个不少（分类表按体积策略照省）', (() => {
   const r = searchSounds({ q: '攻击', summaryOnly: true });
-  return !('items' in r) && r.itemsOmitted === 20 && r.total > 0 && typeof r.truncated === 'boolean' && r.categories.length === 7;
+  return !('items' in r) && r.itemsOmitted === 20 && r.total > 0 && typeof r.truncated === 'boolean'
+    && r.categories === undefined && r.categoriesOmitted === 7 && r.catalogOmitted === true;
 })());
 ok('items 每条字段齐（id/name/nameEn/category/durationMs/score/matchKind/lang）', (() => {
   const it = searchSounds({ q: '宝箱', limit: 1 }).items[0];
   return ['id', 'name', 'nameEn', 'category', 'durationMs', 'score', 'matchKind', 'lang']
     .every((k) => Object.prototype.hasOwnProperty.call(it, k));
 })());
-ok('★ 0 命中时 hint 明说"不支持拼音"（免得 AI 在死路上多试几轮）',
-  /拼音/.test(searchSounds({ q: 'zzzzzzzz' }).hint || ''));
+/*
+ * ★ ④ `hint` 按 **(token 数 × 纯不纯拉丁字母)** 分流 —— **首要建议放最前面**（作者 2026-09-28 点名）。
+ *   **修之前为什么红**：旧版 0 命中的 `hint` **只有一句**（永远念"不支持拼音"那段长话）——
+ *   而最该说的「多关键词是 AND，去掉一个词再试」压根没提；`{"q":"攻击 命中"}` 实测就是这么撞的 0 命中。
+ */
+ok('★ ④ hint 分流 · 多关键词：首要就说「多关键词是 AND」+ 点名去掉哪个词（拿第一个词举例）', (() => {
+  const r = searchSounds({ q: '攻击 命中' });
+  return r.total === 0 && /AND/.test(r.hint) && r.hint.indexOf('AND') < r.hint.indexOf('英文名')
+    && r.hint.includes('「攻击」') && !/拼音/.test(r.hint);
+})(), String(searchSounds({ q: '攻击 命中' }).hint));
+ok('★ ④ hint 分流 · 单词中文：说「换更短的词 / 英文名 / category / sound-get 按 id 取」，**不念拼音那条**', (() => {
+  const r = searchSounds({ q: '麒麟' });
+  return r.total === 0 && /更短的词/.test(r.hint) && /英文名/.test(r.hint) && /category/.test(r.hint)
+    && /sound-get/.test(r.hint) && !/拼音/.test(r.hint);
+})(), String(searchSounds({ q: '麒麟' }).hint));
+ok('★ ④ hint 分流 · 单词纯拉丁：**只有这一支**保留「不支持拼音/首字母」，且放最前面', (() => {
+  const r = searchSounds({ q: 'zzzzzzzz' });
+  return r.total === 0 && /拼音/.test(r.hint) && /bx/.test(r.hint)
+    && r.hint.indexOf('拼音') < r.hint.indexOf('中文名');
+})(), String(searchSounds({ q: 'zzzzzzzz' }).hint));
+ok('★ ④ 三条 hint **互不相同**（不是换个措辞的同一句），且都以「0 命中」开头', (() => {
+  const a = searchSounds({ q: '攻击 命中' }).hint;
+  const b = searchSounds({ q: '麒麟' }).hint;
+  const c = searchSounds({ q: 'zzzzzzzz' }).hint;
+  return a !== b && b !== c && a !== c && [a, b, c].every((h) => h.startsWith('0 命中'));
+})());
+ok('★ ④ 有命中时**不给** hint（别每次念一遍），weak 路径仍保留原有提示',
+  !searchSounds({ q: '宝箱', limit: 3 }).hint && /拼音/.test(searchSounds({ q: 'bx', limit: 3 }).hint || ''));
+ok('★ 0 命中时 hint 按分支说人话（纯拉丁那支才念"不支持拼音"）',
+  /拼音/.test(searchSounds({ q: 'zzzzzzzz' }).hint || '')
+  && !/拼音/.test(searchSounds({ q: '麒麟' }).hint || '')
+  && !/拼音/.test(searchSounds({ q: '攻击 命中' }).hint || ''));
 ok('★ 最弱档是子序列/编辑距离时挂 weak:true + hint（"这批是凑的"）', (() => {
   const weak = searchSounds({ q: 'bx', limit: 3 });
   const solid = searchSounds({ q: '宝箱', limit: 3 });
@@ -215,13 +256,15 @@ ok('★ 真数据：一次全表搜索在 2 秒内（AI 不能等）', (() => {
   searchSounds({ q: 'attack', limit: 5 });
   return Date.now() - t0 < 2000;
 })(), '实测 ' + (() => { const t = Date.now(); searchSounds({ q: 'attack', limit: 5 }); return Date.now() - t; })() + 'ms');
-ok('回执 categories 是 7 行 {id,name,count}', (() => {
-  const cats = searchSounds({ q: '宝箱', limit: 1 }).categories;
+ok('回执 categories 是 7 行 {id,name,count}（`withMeta:true` 要**完整表**时给）', (() => {
+  const cats = searchSounds({ q: '宝箱', limit: 1, withMeta: true }).categories;
   return cats.length === 7 && cats.every((c) => Number.isInteger(c.id) && typeof c.name === 'string' && Number.isInteger(c.count));
 })());
-ok('回执 catalog 段声明了"离线镜像快照"与时长单位', (() => {
-  const c = searchSounds({ q: '宝箱', limit: 1 }).catalog;
-  return c.mirror === true && c.durationUnit === 's' && c.soundCount === 1997 && /镜像/.test(String(c.note));
+ok('回执 catalog 段声明了"离线镜像快照"与时长单位（`withMeta:true` / 无 `q` 的发现调用时给）', (() => {
+  const c = searchSounds({ q: '宝箱', limit: 1, withMeta: true }).catalog;
+  const d = searchSounds({}).catalog;
+  return c.mirror === true && c.durationUnit === 's' && c.soundCount === 1997 && /镜像/.test(String(c.note))
+    && d.mirror === true && /镜像/.test(String(d.note));
 })());
 
 /* ---- op=sound-get ---- */

@@ -118,6 +118,40 @@
   - 用法、参数默认值/边界表、回执字段、偏差清单、**端到端证据表** → `docs/功能详解.md` §`op=pixel-art`。
 
 ### 变更
+- **`op=catalog` / `op=sound-search` 的回执体积与 0 命中提示（2026-09-28 · 作者点名的 AI 侧体验）** ——
+  作者实测出的浪费：每次回执都重复带"整张分类表 + 目录元信息"（`op=catalog` 查 1 个分类时 14 行分类表
+  占回执**约一半**；`op=sound-search` 查 3 条音效时 7 行表 + `catalog` 段约占 **45%**），
+  而 0 命中的 `hint` 不说到点上（`{"q":"攻击 命中"}` 两个中文词 **AND** 撞 0 命中，`hint` 却只讲"不支持拼音/用分类/用 id"）。
+  - **铁律是「发现调用给全表、过滤调用只给结论」**：
+    · `op=catalog` —— `category`/`id`/`colorKind`/`simOnly`/`imgExists` **全空** = 发现调用 ⇒ 完整 **14 行**分类表；
+      给了任一收窄条件 = 过滤调用 ⇒ 省掉，改回**单条** `category:{id,nameZh,nameEn,count,range}`（仅 `category` 收到一个分类时）
+      + **`categoriesOmitted:14`**（数字，让人知道被省了什么；子串命中多个分类时给那几行 + 对应数字）。
+    · `op=sound-search` —— **没传 `q`**（发现调用）或 `withMeta:true` 才给 7 行分类表 + `catalog` 段；
+      带 `q` 时省掉并给 **`categoriesOmitted:7`** / **`catalogOmitted:true`**；给了 `category`（`q` 也在）时
+      **只给那一条**分类行 + `categoriesOmitted:6`。
+    · `source` **一律精简成 3 个字段**（`mirror` / `origin` / `note` = `镜像 ≠ 官方（第三方镜像，非 miHoYo 端点）`）；
+      **sha256 三连 + `fetchedAt` 只在 `withMeta:true` 时给**（审计哈希才要）。
+  - **新增 `withMeta`（boolean，`catalog` / `sound-search` 共用）**：语义 = 「把完整分类表与 sha256 元信息给我」；
+    description 明写**只在需要挑分类 / 要审计哈希时开**。`op=sound-get` 体积检查过：**本来就没有**分类表与元信息
+    （实测回执 208 B）⇒ 不需要它。
+  - **⛔ 只去体积、不去结论**：`counts`（`total`/`returned`/`truncated`/`catalogTotal`/`imgMissingInCatalog`）、
+    `filters`、`limit`/`limitClamped`、`idRange`、`notes`、`weak`、`hint`、`source.mirror|origin|note` 一个都没少；
+    **`unverified`（对外诚实口径）任何模式都在**且逐字相同。⑤ 号断言把「同一条件下 `counts` 在精简与
+    `withMeta:true` 两种回执里逐字段相等」钉住 —— 体积优化的错法都是**静默少一个判据**，不报错。
+  - **`op=sound-search` 不给 `q` 由「报错」改成「发现调用」**：回 7 行分类表 + `catalog` 段 + `browse:true` +
+    **0 条音效**（既不报错，也绝不静默把 1997 条灌进上下文 —— 旧版那句"不静默返回全表"的防线照样在）。
+    `q` 全是标点仍**报错**。
+  - **0 命中 `hint` 按 (token 数 × 纯不纯拉丁字母) 分流，首要建议放最前面**：
+    ≥2 个词 ⇒「**多关键词是 AND（全都要命中）** —— 去掉一个词再试（例如只搜「第一个词」）」；
+    1 个词含 CJK ⇒「换更短的词 / 试英文名 / 用 `category` 限定 / 用 `sound-get` 按 id 取」；
+    1 个词纯拉丁 ⇒ 才念「⚠️ **不支持拼音/首字母**（没有词表），别试 `bx`/`baoxiang`」那段长话。
+    `weak:true` 路径**保留原有提示**，不被覆盖。
+  - **实测体积**（三条真调用，`JSON.stringify` 字节）：`catalog`+`category` **2 948 → 1 355**、
+    `catalog` 无参数 **6 864 → 6 708**（发现调用按设计保留全表，只省了 `source` 的 sha256/fetchedAt）、
+    `sound-search`+`q` **1 107 → 720**；`withMeta:true` 时 `sound-search` 1 082 B（≈ 改前，多出来的就是全表与元信息）。
+  - 断言：`tests/catalog-test.mjs` **67 → 86 条**（新增 ①~⑥ 那组）、`tests/sounds-test.mjs` **97 → 102 条**
+    （三条 `hint` 分流各一条真调用 + 「有命中不给 hint」）。schema 棘轮 **32 517 B（余 251 B，绿）**。
+  - 用法与口径表 → `docs/功能详解.md` §平台图片资源库与音效库（两处**回执体积策略**小节）。
 - **工具 schema 体积第四轮下沉（为 `op=catalog` / `sound-search` 腾地方，2026-09-28 · 第五批）**：
   加两个 op 前实测 **32 084 B / 32 768 B（余 684 B）** ⇒ 把 **`miliastra_sim` 整条工具条目从 7 611 → 6 170 字符**
   （description **2 377 → 1 102**、parameters **5 083 → 4 980**）⇒ **腾出 1 441 B**；两个 op 实际花 **1 397 B**

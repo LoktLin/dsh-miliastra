@@ -20,9 +20,15 @@
  *   · 「`simRenderable` == 引擎的 6 个键」：两边各写一份常量，漂移了就只有人眼能发现 ⇒ 让测试读引擎现算。
  *   · 「未知 category 报错」：默认回落全表会让 AI 拿到 1543 条噪声却以为筛过了。
  *   · 「`limit` 夹紧并回 `limitClamped`」：不夹会让一次调用把 1543 条灌进上下文；夹了不说则等于静默截断。
- *   · 「`summaryOnly` 不丢结论」：`items` 可以省，`counts` / `categories` / `unverified` 一个都不能少
+ *   · 「`summaryOnly` 不丢结论」：`items` 可以省，`counts` / 分类表 / `unverified` 一个都不能少
  *     （本仓不变量③：只去体积、不去结论）。
  *   · 「回执无 undefined」：`JSON.stringify` 会把 `undefined` 键**整个删掉** —— 字段悄悄缺失最难发现。
+ *   · 「发现调用给全表、过滤调用只给结论」（2026-09-28 体积策略）：修前 `categories` **恒 14 行**，
+ *     查 1 个分类时它占回执约一半 ⇒ 现在过滤调用只给**单条** `category` + `categoriesOmitted:14`，
+ *     `withMeta:true` 才恢复全表；`sound-search` 那半边同理（带 `q` 时省分类表与 `catalog` 段）。
+ *     新增的 ①~⑥ 断言就是钉这条：**省体积可以，丢结论不行**（同一条件下 `counts` 逐字段相等）。
+ *   · 「无 `q` 的 `sound-search` 不再报错」：改成**发现调用**（给 7 行分类表 + `browse:true` + **0 条音效**）——
+ *     既不报错、也不静默把 1997 条灌进上下文，两头都钉住。
  *
  * 用法：`node tests/catalog-test.mjs`
  */
@@ -177,6 +183,12 @@ ok('三个新 op 用到的参数都在 schema 里（q / category / colorKind / s
 ok('★ description 里有「典型调用」且点到了两个平台通道（AI 只看得见 schema）',
   /典型调用/.test(asset.description) && /op=catalog/.test(asset.description) && /sound-search/.test(asset.description));
 ok('★ description 里写明**不支持拼音**（免得 AI 在死路上反复试）', /不支持拼音/.test(asset.description));
+ok('★ `withMeta` 在 schema 里（boolean），且 description 说清「什么时候用」（AI 只看得见 schema）',
+  asset.parameters.properties.withMeta && asset.parameters.properties.withMeta.type === 'boolean'
+  && /挑分类/.test(asset.parameters.properties.withMeta.description)
+  && /审计哈希/.test(asset.parameters.properties.withMeta.description));
+ok('★ description 里写了回执体积策略（发现调用 vs 过滤调用 + `withMeta`）',
+  /发现调用/.test(asset.description) && /categoriesOmitted/.test(asset.description) && /withMeta/.test(asset.description));
 
 const cat = await call({ op: 'catalog', category: '基础形状' });
 ok('op=catalog：分类过滤 → 6 条（分类 8 的全部成员）',
@@ -184,11 +196,58 @@ ok('op=catalog：分类过滤 → 6 条（分类 8 的全部成员）',
 ok('op=catalog：每条给 id + 分类 + 颜色档 + imgExists + simRenderable（五列齐全）',
   cat.items.every((it) => typeof it.id === 'number' && Array.isArray(it.categories)
     && COLOR_KINDS.includes(it.colorKind) && typeof it.imgExists === 'boolean' && typeof it.simRenderable === 'boolean'));
-ok('op=catalog：恒带 14 行分类表（AI 不用查文档）', cat.categories.length === 14);
+/*
+ * ★ ①「发现调用给全表，过滤调用只给结论」（作者 2026-09-28 点名的 AI 侧体积策略）
+ *   **修之前为什么红**：这版之前 `categories` **恒 14 行**（约 1.4 KB）—— 查 1 个分类时分类表占回执**约一半**；
+ *   有了 `withMeta` 之后还能一眼看出「被省了什么」，而不是悄悄少一块。
+ */
+const discover = await call({ op: 'catalog' });
+ok('★ ① op=catalog 过滤调用：**没有**完整 14 行分类表，改回**单条** `category` + `categoriesOmitted:14`',
+  cat.categories === undefined && cat.category && cat.category.id === 8
+  && cat.category.nameZh === '基础形状' && cat.category.colorKind === 'neutral'
+  && cat.categoriesOmitted === 14, JSON.stringify({ category: cat.category, omitted: cat.categoriesOmitted }));
+ok('★ ① op=catalog 发现调用（一个收窄条件都不给）：**仍给**完整 14 行分类表，且没有 `categoriesOmitted`',
+  discover.categories.length === 14 && discover.categoriesOmitted === undefined && discover.category === undefined);
+ok('★ ① 省下来的体积是实打实的（过滤回执不到发现回执的一半）',
+  JSON.stringify(cat).length * 2 < JSON.stringify(discover).length,
+  JSON.stringify(cat).length + ' B vs ' + JSON.stringify(discover).length + ' B');
+
+/* ★ ② `withMeta:true` = 「把完整分类表与 sha256 元信息给我」（只在挑分类 / 要审计哈希时开） */
+const meta = await call({ op: 'catalog', category: '基础形状', withMeta: true });
+ok('★ ② op=catalog + withMeta:true：完整 14 行分类表**恢复**，单条 `category` / `categoriesOmitted` 退场',
+  meta.categories.length === 14 && meta.categoriesOmitted === undefined && meta.category === undefined);
+ok('★ ② op=catalog + withMeta:true：sha256 三连 + `fetchedAt` 一起给（默认不给）',
+  /^[0-9a-f]{10}$/.test(meta.source.sha256Prefix.data) && /^[0-9a-f]{10}$/.test(meta.source.sha256Prefix.zh)
+  && /^[0-9a-f]{10}$/.test(meta.source.sha256Prefix.en)
+  && typeof meta.source.fetchedAt === 'string' && meta.source.fetchedAt.length > 0);
+ok('② 默认（不加 withMeta）：`source` **只有 3 个字段** `mirror / origin / note`（没有 sha256 / fetchedAt）',
+  Object.keys(cat.source).join(',') === 'mirror,origin,note'
+  && cat.source.sha256Prefix === undefined && cat.source.fetchedAt === undefined
+  && cat.source.mirror === true && /^mirror@/.test(cat.source.origin));
 ok('op=catalog：恒带 `unverified[]` 与镜像出处（别把镜像当官方）',
   Array.isArray(cat.unverified) && cat.unverified.length >= 3 && cat.source.mirror === true
   && /镜像/.test(String(cat.source.note)));
-ok('★ op=catalog：回执里**没有 undefined**', !hasUndefined(cat), JSON.stringify(cat).includes('undefined') ? '有 undefined' : '');
+ok('★ op=catalog：回执里**没有 undefined**（三种模式都查）',
+  !hasUndefined(cat) && !hasUndefined(discover) && !hasUndefined(meta),
+  JSON.stringify(cat).includes('undefined') ? '有 undefined' : '');
+/*
+ * ★ ⑤「只去体积、不去结论」：`withMeta` **只加元信息**，同一条件下的结论字段必须逐字相等。
+ *   **修之前为什么红**：体积优化最容易出的错就是「顺手把 categories 删了还把一个 counts 也删了」——
+ *   这种错**不会报错**，只会让 AI 少一个判据。
+ */
+const canon = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]));
+ok('★ ⑤ 只去体积不去结论：`counts` 在「精简」与 `withMeta:true` 两种回执里**逐字段相等**',
+  canon(meta.counts) === canon(cat.counts) && cat.counts.total === 6 && cat.counts.catalogTotal === 1543);
+ok('★ ⑤ `filters` / `items` / `limit` / `limitClamped` / `idRange` / `notes` 也逐字一致',
+  canon({ f: meta.filters, i: meta.items, l: meta.limit, lc: meta.limitClamped, ir: meta.idRange, n: meta.notes })
+  === canon({ f: cat.filters, i: cat.items, l: cat.limit, lc: cat.limitClamped, ir: cat.idRange, n: cat.notes }));
+/*
+ * ★ ⑥ `unverified` 是**对外诚实口径**：任何模式下都在，且逐字相同（体积极简也绝不动它）。
+ */
+ok('★ ⑥ `unverified` 在任何模式下都在（精简 / withMeta / 发现调用三种回执逐字相同，且 ≥3 条）',
+  Array.isArray(cat.unverified) && cat.unverified.length >= 3
+  && JSON.stringify(meta.unverified) === JSON.stringify(cat.unverified)
+  && JSON.stringify(discover.unverified) === JSON.stringify(cat.unverified));
 
 const sim = await call({ op: 'catalog', simOnly: true });
 ok('op=catalog + simOnly：正好 6 条，且都是 100001~100006',
@@ -207,12 +266,16 @@ ok('★ op=catalog：目录里没有的 id → 0 条 + 一句 note 说清（**�
   miss.counts.total === 0 && miss.items.length === 0 && miss.notes.some((n) => /不在目录里/.test(n)));
 
 const slim = await call({ op: 'catalog', category: '基础形状', summaryOnly: true });
-ok('★ summaryOnly **只去体积、不去结论**（items 缺席，counts / categories / unverified / source 一个不少）',
+ok('★ summaryOnly **只去体积、不去结论**（items 缺席，counts / category / unverified / source 一个不少）',
   slim.items === undefined && slim.itemsOmitted === 6 && slim.counts.total === cat.counts.total
-  && slim.categories.length === 14 && Array.isArray(slim.unverified) && slim.source.mirror === true);
+  && slim.category.id === 8 && slim.categoriesOmitted === 14
+  && Array.isArray(slim.unverified) && slim.source.mirror === true);
 ok('★ summaryOnly 与非 summaryOnly 的 `counts` 逐字一致',
   JSON.stringify(slim.counts) === JSON.stringify(cat.counts));
 ok('★ summaryOnly 确实更小（省的就是 items）', JSON.stringify(slim).length < JSON.stringify(cat).length);
+ok('★ summaryOnly 与分类表策略**互不干扰**（两种瘦身叠起来也不丢结论：counts 仍与 withMeta 版相等）',
+  canon(slim.counts) === canon(meta.counts) && slim.categoriesOmitted === 14 && meta.categoriesOmitted === undefined
+  && slim.category && slim.category.id === 8 && meta.categories.length === 14);
 
 const limited = await call({ op: 'catalog', category: '底板-彩色', limit: 3 });
 ok('★ op=catalog + limit：截到 3 条并给 truncated（总数仍如实给 392）',
@@ -232,16 +295,60 @@ const weak = await call({ op: 'sound-search', q: '环震' });
 ok('★ op=sound-search：最弱档是子序列/编辑距离时挂 `weak:true`（那批是"凑"的）',
   weak.weak === true && /凑/.test(String(weak.hint)));
 const soundSlim = await call({ op: 'sound-search', q: '宝箱', summaryOnly: true });
-ok('★ op=sound-search + summaryOnly：items 缺席但 total / categories / catalog 都在',
+ok('★ op=sound-search + summaryOnly：items 缺席但 total / categoriesOmitted / catalogOmitted 都在（只去体积）',
   soundSlim.items === undefined && soundSlim.itemsOmitted > 0 && soundSlim.total === 15
-  && soundSlim.categories.length === 7 && soundSlim.catalog.soundCount === 1997);
+  && soundSlim.categories === undefined && soundSlim.categoriesOmitted === 7 && soundSlim.catalogOmitted === true);
+/*
+ * ★ ③ 无 `q` 的 `sound-search` = **发现调用**：分类表与快照元信息照给，且**一条音效都不回**。
+ *   **修之前为什么红**：旧版不给 `q` 直接**报错**；作者点名「纯分类浏览＝发现调用」之后，
+ *   这条改成「给表、不回音效」—— 既让 AI 看得到 7 个分类，又不会被 1997 条灌满上下文。
+ */
+const soundFind = await call({ op: 'sound-search' });
+ok('★ ③ 无 `q` 的 sound-search：7 行分类表 + `catalog` 段都在，且 `browse:true` / 0 条音效（不是静默回 1997 条）',
+  soundFind.browse === true && soundFind.total === 0 && soundFind.items.length === 0
+  && soundFind.categories.length === 7 && soundFind.catalog.soundCount === 1997
+  && soundFind.categoriesOmitted === undefined && soundFind.catalogOmitted === undefined);
+const soundFiltered = await call({ op: 'sound-search', q: '宝箱', limit: 3 });
+ok('★ ① sound-search 带 `q`（过滤调用）：省掉分类表与 `catalog` 段，改回 `categoriesOmitted:7` / `catalogOmitted:true`',
+  soundFiltered.categories === undefined && soundFiltered.catalog === undefined
+  && soundFiltered.categoriesOmitted === 7 && soundFiltered.catalogOmitted === true && soundFiltered.total === 15);
+const soundMeta = await call({ op: 'sound-search', q: '宝箱', limit: 3, withMeta: true });
+ok('★ ② sound-search + withMeta:true：7 行分类表 + `catalog` 段**恢复**（省略标记退场）',
+  soundMeta.categories.length === 7 && soundMeta.catalog.soundCount === 1997
+  && soundMeta.categoriesOmitted === undefined && soundMeta.catalogOmitted === undefined);
+const soundCat = await call({ op: 'sound-search', q: 'attack', category: 4, limit: 1 });
+ok('★ ① sound-search 给 `category` 收窄：只给那一条分类行，另外 6 行记在 `categoriesOmitted`',
+  soundCat.categories.length === 1 && soundCat.categories[0].id === 4 && soundCat.categories[0].name === '战斗'
+  && soundCat.categoriesOmitted === 6 && soundCat.catalogOmitted === true);
+ok('★ ⑤ sound-search：精简版与 `withMeta:true` 只差那 4 个字段，其余**逐字相同**（只去体积不去结论）',
+  (() => {
+    const a = { ...soundFiltered }; const b = { ...soundMeta };
+    delete a.categoriesOmitted; delete a.catalogOmitted; delete b.categories; delete b.catalog;
+    return canon(a) === canon(b) && soundFiltered.weak === false && soundMeta.weak === false;
+  })());
+ok('★ ① sound-search 过滤回执确实小了一截（分类表 + 元信息省掉）',
+  JSON.stringify(soundFiltered).length < JSON.stringify(soundMeta).length,
+  JSON.stringify(soundFiltered).length + ' B vs ' + JSON.stringify(soundMeta).length + ' B');
+/*
+ * ★ ⑥ 的**音效半边**：这个 op **历史上就没有** `unverified` 字段 —— 本批**不新增**（每条回执都挂一大段，
+ *   正好把这一批省下来的体积又吃回去）；它的诚实口径落在 `catalog.note`（镜像 ≠ 官方），
+ *   发现调用 / `withMeta` 时给。这条断言是**把决定钉住**：将来谁想加，会先看见这里为什么没加。
+ */
+ok('★ ⑥ sound-search 不新增 `unverified`（口径写在 `catalog.note`，发现调用 / withMeta 时给）',
+  !('unverified' in soundFiltered) && !('unverified' in soundMeta) && !('unverified' in soundFind)
+  && /镜像/.test(String(soundFind.catalog.note)) && /镜像/.test(String(soundMeta.catalog.note))
+  && /镜像 ≠ 官方/.test(String(soundFiltered.catalogOmitted === true ? soundFind.catalog.note : '')));
 const emptyQ = await errOfAsync(() => asset.execute({ op: 'sound-search' }));
-ok('★ op=sound-search 不给 q → **报错**（不静默返回全表 1997 条）', emptyQ !== null && /关键词/.test(emptyQ), String(emptyQ));
+ok('★ op=sound-search 不给 q → **不再报错**（是发现调用：给分类表 + 0 条音效，绝不给 1997 条）',
+  emptyQ === null && soundFind.total === 0 && soundFind.items.length === 0);
 const badCat = await errOfAsync(() => asset.execute({ op: 'sound-search', q: '宝箱', category: 99 }));
 ok('★ op=sound-search 非法 category → 报错并列出合法 id', badCat !== null && /1 \/ 2 \/ 3/.test(badCat), String(badCat));
 const got = await call({ op: 'sound-get', id: '50214' });
 ok('op=sound-get：单条详情含 durationMs 与分类名',
   got.found === true && got.sound.durationMs === 4100 && got.sound.categoryName === '物件', JSON.stringify(got.sound));
+ok('★ op=sound-get 体积检查：**没有**分类表 / `catalog` 元信息（本来就没冗余 ⇒ 不需要 `withMeta`；回执 < 400 B）',
+  got.categories === undefined && got.catalog === undefined && got.categoriesOmitted === undefined
+  && JSON.stringify(got).length < 400, JSON.stringify(got).length + ' B');
 const notFound = await call({ op: 'sound-get', id: '99999' });
 ok('op=sound-get：找不到**不抛错**，回 found:false + hint',
   notFound.found === false && /sound-search/.test(String(notFound.hint)));

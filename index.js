@@ -2615,6 +2615,8 @@ const TOOLS = [
       + '单张图**没有名字**（目录里就没有名字字段）⇒ 只回分类名，**不编名字**。'
       + '\n★ **平台音效库**（`op=sound-search` / `op=sound-get`，离线快照 **1997 条 / 7 类**）：`q` 按**中文名或英文名**模糊搜（多词 = AND），'
       + '五档 `exact>prefix>substring>subsequence>editDistance`（逐条 `matchKind`）；`sound-get` 按 id 取单条。⛔ **不支持拼音/首字母**。'
+      + '\n★ **回执体积**（目录通道）：**发现调用给全表、过滤调用只给结论** —— `catalog` 没给任何收窄条件、或 `sound-search` 没给 `q` 时才带完整分类表；'
+      + '其余只带 `categoriesOmitted` / `catalogOmitted`。要完整分类表或 sha256 就传 `withMeta:true`（**只在挑分类 / 审计哈希时开**）。'
       + '\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景,像素画"}`｜'
       + '`{"op":"catalog","category":"基础形状"}`｜`{"op":"catalog","colorKind":"mono","summaryOnly":true}`｜'
       + '`{"op":"sound-search","q":"宝箱 开启","limit":5}`｜`{"op":"sound-get","id":"50214"}`',
@@ -2653,7 +2655,8 @@ const TOOLS = [
         },
         q: {
           type: 'string',
-          description: 'op=sound-search：关键词（中文名或英文名；空格分隔多个 = AND）。⚠️ **不支持拼音 / 首字母**（`baoxiang`/`bx` 搜不到）。',
+          description: 'op=sound-search：关键词（中文名或英文名；空格分隔多个 = AND）。⚠️ **不支持拼音 / 首字母**（`baoxiang`/`bx` 搜不到）。'
+            + '**不给 `q` = 发现调用**：只回 7 行分类表 + 快照元信息，一条音效都不回。',
         },
         category: {
           type: 'string',
@@ -2688,6 +2691,12 @@ const TOOLS = [
           type: 'boolean',
           description: 'op=list：只给**计数与总体积**，省掉逐条素材（缺失/无主/支持的类型等结论字段一个不删）。默认 false。'
             + 'op=catalog / op=sound-search 同样只去逐条 `items`（计数 / 分类表 / `unverified` 一个不删）。',
+        },
+        withMeta: {
+          type: 'boolean',
+          description: 'op=catalog / sound-search：把**完整分类表**与 sha256 元信息给我（默认按「发现调用给全表、过滤调用只给结论」省体积：'
+            + '`catalog` 过滤时只回收窄到的那条 + `categoriesOmitted`；`sound-search` 带 `q` 时省掉分类表与 `catalog` 段）。'
+            + '**只在需要挑分类 / 要审计哈希时开**。默认 false。',
         },
       },
       additionalProperties: false,
