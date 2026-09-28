@@ -52,6 +52,9 @@ import {
   playtestSummary, shouldHit, logSize,
 } from './lib/playtest.mjs';
 import { PROBE_TEMPLATES, PROBE_TEMPLATE_CHOICES, PROBE_INFO, PROBE_OVERVIEW, renderProbe } from './lib/probes.mjs';
+import {
+  assetsDir, addAsset, listAssets, getAsset, removeAsset, rebuildIndex, pruneAssets, assetStats,
+} from './lib/assets.mjs';
 import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './lib/leveldata.mjs';
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
@@ -767,6 +770,35 @@ function runRectsOp({ dir, scope, args, level = null }) {
 
 /* ---------------------------------------------------------------- 工具定义 */
 
+/**
+ * `miliastra_asset` 的实现：**插件级素材库**的 ops。
+ *
+ * ★ 为什么单开一个工具，而不是挂成 `miliastra_code op=asset`：
+ *   `miliastra_code` 的语义是「**沙箱活文件**的读/部署/体检/还原」—— 它的 `source` 指 `.lua`、
+ *   它的失败模式是「覆盖唯一副本」，它的纪律是「先备份再写」。素材库的 `source` 是**图片字节**、
+ *   失败模式是「存的图找不回来」、纪律是「按内容寻址 + 绝不自动删」。
+ *   两套纪律塞进一个工具，AI 在 `miliastra_code` 里看到 `source` 就得先想「这次是 .lua 还是 .png」——
+ *   而 op 枚举变长还会把 5.5KB 的 `miliastra_code` 说明挤爆。
+ *   代价是 schema 里多一个工具条目（体积在 smoke 的 32KB 棘轮内，实测见测试输出）——
+ *   用有限体积换「语义不串门」，这笔换得过。
+ *
+ * 所有分支都返回 `{ok, op, dir, …}`；`dir` 恒在回执里（素材落哪了必须看得见）。
+ */
+function assetOp(args = {}) {
+  const op = String(args.op || 'list');
+  const dir = assetsDir();
+  if (op === 'add') return addAsset({ source: args.source, base64: args.base64, name: args.name, tags: args.tags, dir });
+  if (op === 'list') {
+    return listAssets({ dir, tag: args.tag, limit: args.limit, summaryOnly: args.summaryOnly === true });
+  }
+  if (op === 'get') return getAsset({ dir, id: args.id, out: args.out, overwrite: args.overwrite === true });
+  if (op === 'remove') return removeAsset({ dir, id: args.id, confirm: args.confirm === true, deleteFile: args.deleteFile === true });
+  if (op === 'rebuild') return rebuildIndex({ dir });
+  if (op === 'prune') return pruneAssets({ dir, confirm: args.confirm === true });
+  if (op === 'stats') return assetStats({ dir });
+  throw new Error('没有这个 op：' + JSON.stringify(op) + '（支持 add / list / get / remove / rebuild / prune / stats）');
+}
+
 /* ---------------------------------------------- 系统提示段的数据源（0.0.10）
  *
  * ⚠️ 为什么**从数据生成**而不是手写一段话：
@@ -791,6 +823,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
+  { tool: 'miliastra_asset', when: '要把**图片素材**存下来反复引用（UI 动画 / 粒子 / 像素画的图源）用它 —— 按内容寻址、同图只存一份；它写的是**插件数据目录**（不进游戏存档、不碰活文件），素材**绝不自动删**（remove 要显式 confirm，连字节一起删还要 deleteFile）' },
   { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 控件模板索引；**索引优先自动拿**：`op=handover`（可带 `source` 读任意本地 .lua）从源码抽 → `miliastra_map op=clientui` 从 `.gil` 读 → 两个都拿不到才问创作者，**不许编**；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）；**你自己想"玩"先记住量级**：发输入 ≈5ms 级、读场景 ≈200ms 级（≈5Hz）⇒ 能做**回合制闭环**、**不能逐帧看画面**（实时档要么一次调用里跑循环、要么让人玩）；HUD 上的字直接从 `get{view:true}` 的 **`textbox.text`** 读（当闭环条件用）；按 `…Down` 要**配对** `…Up` 否则等于一直按住' },
 ];
 
@@ -2461,6 +2494,77 @@ const TOOLS = [
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
       return await simOp(args, {});
+    },
+  },
+
+  {
+    name: 'miliastra_asset',
+    description:
+      TITLE + '：**插件级素材库** —— 把图片素材存下来反复引用（UI 动画 / 粒子 / 像素画的图源）。'
+      + '**按内容寻址**：文件名 = `sha256` 前 16 位 + 原扩展名，同内容重复加入**只存一份**（回执 `deduped:true`）。'
+      + '落在**插件数据目录**的 `assets/` 下（`index.json` + 素材文件）；**不进游戏存档、不碰活文件**。'
+      + '索引丢了/坏了用 `op=rebuild` **从目录内容重建**（每个文件的 sha256 现算）。'
+      + '\n★ **磁盘是用户的**：素材**绝不自动删**。`op=remove` 要显式 `confirm:true`（删盘上字节再加 `deleteFile:true`；只给 confirm 就只摘索引、字节留着）；'
+      + '`op=prune` **只报告不删**，真删要 `confirm:true`。**没有任何批量静默删的口子**。'
+      + '\n★ **安全**：`source` / `out` 只认**绝对路径**；入库只收图片白名单、**拒绝 0 字节**、**超过 64 MiB 拒绝**（枚举与上限见 `op=list` 的 `supportedExt` / `maxBytes`）；'
+      + '`get` 写 `out` 时目标已存在**默认不覆盖**；素材名只认内容寻址的 `<id><ext>`，`../` 一律拒。'
+      + '\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景,像素画"}`（也可以传 `base64`）｜'
+      + '`{"op":"get","id":"a1b2c3d4e5f60718"}`（回 `dataUrl`；给 `out` 就写到那儿）｜'
+      + '`{"op":"stats"}`（总数 / 总体积 / 索引与目录对不对得上）｜`{"op":"rebuild"}`（索引丢了就从目录重建）',
+    parameters: {
+      type: 'object',
+      properties: {
+        op: {
+          type: 'string',
+          enum: ['add', 'list', 'get', 'remove', 'rebuild', 'prune', 'stats'],
+          description: '默认 list。add 入库（要 source 或 base64）／list 列表／get 取回（回 dataUrl 或写 out）／'
+            + 'remove 摘索引（要 confirm，删字节再加 deleteFile）／rebuild 从目录重建索引／prune 报告无主与损坏（只报告）／stats 总数与总体积。',
+        },
+        id: {
+          type: 'string',
+          description: 'op=get / remove：素材 `id`（或**唯一前缀**；命中多条就报候选、不猜）。从 `op=list` 拿。',
+        },
+        source: {
+          type: 'string',
+          description: 'op=add：**绝对路径**（如 `D:\\\\art\\\\bg.png`）或 `data:image/png;base64,…`。与 `base64` 只能给一个。',
+        },
+        base64: {
+          type: 'string',
+          description: 'op=add：裸 base64 —— 走这条路要给 `name` 一个带图片扩展名的名字，否则认不出类型。',
+        },
+        name: {
+          type: 'string',
+          description: 'op=add：**原始文件名，仅展示用**（进索引的 `name`、回在 `list` 里；不参与寻址）。省略用 source 的 basename。',
+        },
+        tags: {
+          type: 'string',
+          description: 'op=add：**逗号分隔**的标签（如 `"背景,像素画"`），只用于分类与 `list tag=` 过滤。',
+        },
+        tag: { type: 'string', description: 'op=list：只看带这个标签的素材。' },
+        limit: { type: 'number', description: 'op=list：最多回几条（默认全部）。' },
+        out: {
+          type: 'string',
+          description: 'op=get：**绝对路径** —— 把字节写到这里（逐字节一致）。不传就回 `dataUrl`。已存在时**默认不覆盖**。',
+        },
+        overwrite: { type: 'boolean', description: 'op=get：`out` 已存在时是否覆盖。默认 false（**不覆盖是刻意的**：不声不响盖掉别人的文件，和删掉它一样糟）。' },
+        confirm: {
+          type: 'boolean',
+          description: 'op=remove / prune：**显式确认**。remove 给 true 才摘索引；prune 给 true 才真删「无主 / 损坏」那两类（不给就是只报告）。',
+        },
+        deleteFile: {
+          type: 'boolean',
+          description: 'op=remove：**连盘上的字节一起删**（必须同时给 `confirm:true`）。不给就只摘索引、字节留着（回执 `fileKept:true`）。',
+        },
+        summaryOnly: {
+          type: 'boolean',
+          description: 'op=list：只给**计数与总体积**，省掉逐条素材（结论字段一个不删：缺失/无主/支持的类型都还在）。默认 false。',
+        },
+      },
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
+    async execute(args = {}) {
+      return assetOp(args);
     },
   },
 

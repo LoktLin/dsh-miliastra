@@ -36,6 +36,7 @@ const ORDER = [
   'miliastra_playtest',
   'miliastra_shot',
   'miliastra_probe',
+  'miliastra_asset',
   'miliastra_echo',
 ];
 

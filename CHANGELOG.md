@@ -14,6 +14,27 @@
 
 > 下一个版本的东西写这里。
 
+### 新增
+- **`miliastra_asset`：插件级素材库（asset store）** —— 与具体功能无关的通用图片素材存储，
+  给「UI 动画 / 粒子 / 像素画」这类**要存图并反复引用**的能力打底。**按内容寻址**：
+  文件名 = `sha256` 前 **16 位**（64 bit，理由与碰撞处置写在 `lib/assets.mjs` 文件头）+ 原扩展名，
+  同内容重复加入**只存一份**（回执 `deduped:true`）。落在**插件数据目录**的 `assets/` 下
+  （`index.json` + 素材正文），**不进游戏存档、不碰活文件**。
+  ops：`add`（绝对路径 / base64 / data URL，可带 `tags`）/ `list`（`tag`/`limit`/`summaryOnly`）/
+  `get`（回 `dataUrl` 或写到 `out`，**逐字节**一致）/ `remove` / `rebuild` / `prune` / `stats`。
+  **索引是缓存、目录才是真相**：`rebuild` 读每个文件的字节**现算 sha256** 重建索引，
+  目录说明不了的字段（原始名 / 来源）**如实标 `null`**。
+  **磁盘是用户的**：素材**绝不自动删** —— `remove` 不给 `confirm:true` 一个字都不动，
+  只给 `confirm` 就**只摘索引**（字节留着），连字节一起删还要再给 `deleteFile:true`；
+  `prune` **默认只报告**，真删要 `confirm:true` 且只删点名的**无主 / 损坏**两类。
+  **没有任何批量静默删的口子**。安全：单张上限 **64 MiB**、**拒绝 0 字节**、
+  只收图片白名单（`png/jpg/jpeg/gif/webp/bmp/svg/ico/avif`）、`source`/`out` 只认绝对路径、
+  `get` 写 `out` 时**默认不覆盖**、素材名只认内容寻址的 `<id><ext>`（`../` 一律拒）。
+  新增 `lib/assets.mjs`（写盘一律走 `lib/fsx.mjs` 的 `atomicWriteJson`）与
+  `tests/assets-test.mjs`（**31 条断言**：逐字节一致 / 去重 / 0 字节 / 超限 / 索引缺失 rebuild /
+  remove 必须显式 / 路径穿越 / 索引原子写且无 BOM / id 冲突拒绝覆盖 / 工具层接线）。
+  用法与边界见 `docs/功能详解.md` §素材库。
+
 ---
 
 ## [0.4.0] - 2026-09-26

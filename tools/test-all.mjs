@@ -43,6 +43,7 @@ export const SUITES = [
   { name: 'lualint-test（Lua 结构校验）', args: ['tests/lualint-test.mjs'] },
   { name: 'leveldata-hint-test（关卡表写法与候选，合成样本）', args: ['tests/leveldata-hint-test.mjs'] },
   { name: 'shot-test（截图命名 / 清理 / 连拍）', args: ['tests/shot-test.mjs'] },
+  { name: 'assets-test（素材库：内容寻址 / 去重 / 原子索引 / 显式删）', args: ['tests/assets-test.mjs'] },
   { name: 'sim-test（模拟器引擎）', args: ['tests/sim-test.mjs'] },
   { name: 'sim-play-test（浏览器试玩页那一串调用）', args: ['tests/sim-play-test.mjs'] },
   { name: 'client-render-test（客户端控件渲染）', args: ['tests/client-render-test.mjs'] },

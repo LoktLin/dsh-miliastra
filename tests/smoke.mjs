@@ -106,6 +106,61 @@ for (const [toolName, args] of CASES) {
   pass += 1;
 }
 
+// ---- 素材库：**绝不碰用户真实的素材目录** ----
+/*
+ * ★ 为什么这三条不进上面的 CASES：`miliastra_asset` 的 `list` / `stats` / `prune`
+ *   默认读的是 `<MILIASTRA_DATA_DIR>/assets` —— **用户的真实素材目录**。
+ *   它们确实只读（prune 默认 dryRun），但 `prune` 会把目录里**每一张图都读出来算 sha256**：
+ *   几百 MB 的素材库里，一条"只看形状"的用例会变成一次实打实的磁盘风暴。
+ *   ⇒ 这几条**自带临时数据目录**（`MILIASTRA_DATA_DIR` 在调用时才解析，所以改完跑完再放回），
+ *     与 `tests/assets-test.mjs` 的口径一致：**验证代码，不打扰用户的数据**。
+ */
+{
+  const tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-smoke-assets-'));
+  const savedDataDir = process.env.MILIASTRA_DATA_DIR;
+  process.env.MILIASTRA_DATA_DIR = tmpData;
+  try {
+    const asset = TOOLS.find((t) => t.name === 'miliastra_asset');
+    const cases = [
+      ['miliastra_asset', { op: 'list', summaryOnly: true }],
+      ['miliastra_asset', { op: 'stats' }],
+      ['miliastra_asset', { op: 'prune' }],                    // 默认 dryRun：一个字节都不删
+      ['miliastra_asset', { op: 'remove', id: 'a1b2c3d4e5f60718' }], // 不给 confirm ⇒ 必须 ok:false + needsConfirm
+    ];
+    for (const [, args] of cases) {
+      const label = 'miliastra_asset ' + JSON.stringify(args) + '（临时数据目录）';
+      let out;
+      try {
+        out = await asset.execute(args, {});
+      } catch (e) {
+        fail += 1; failures.push(`[throw] ${label}: ${e && e.message}`);
+        continue;
+      }
+      const l = checkLossless(out);
+      if (l) { fail += 1; failures.push(`[lossless] ${label}: ${l}`); continue; }
+      if (out && out.ok === false && !out.error) {
+        fail += 1; failures.push(`[shape] ${label}: ok=false 但没有 error 字段`);
+        continue;
+      }
+      if (!String(out.dir).toLowerCase().startsWith(path.resolve(tmpData).toLowerCase())) {
+        fail += 1; failures.push(`[scope] ${label}: 竟然读到了用户真实数据目录：${out.dir}`);
+        continue;
+      }
+      console.log(`✓ ${label}
+    bytes=${Buffer.byteLength(JSON.stringify(out), 'utf8')}  ok=${out && out.ok}  head=${JSON.stringify(out).slice(0, 130)}`);
+      pass += 1;
+    }
+    // 不给 confirm 的 remove 必须**什么都没动**（磁盘是用户的）
+    const idx = path.join(tmpData, 'assets', 'index.json');
+    if (fs.existsSync(idx)) { fail += 1; failures.push('[scope] 不带 confirm 的 remove 竟然写了索引：' + idx); }
+    else { console.log('✓ 不带 confirm 的 remove 没写任何东西（临时目录里连 assets/ 都没建）'); pass += 1; }
+  } finally {
+    if (savedDataDir === undefined) delete process.env.MILIASTRA_DATA_DIR;
+    else process.env.MILIASTRA_DATA_DIR = savedDataDir;
+    try { fs.rmSync(tmpData, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
 // ---- 额外断言：形状必须稳定，且"拿不到"时也不能抛 ----
 
 {
