@@ -435,12 +435,15 @@ t('`TOOLS` 里真的有 `miliastra_gen`，且 description 带「典型调用」�
   assert(/500 字符/.test(gen.description), '要写文本上限硬规则');
   assert(/未证实|未验证/.test(gen.description), '要写未验证项');
   assert(/Lua/.test(gen.description), '要写「默认出 Lua」（作者 2026-09-28 明令）');
-  eq(gen.parameters.properties.op.enum, ['text-gradient', 'struct-json'], '两个 op');
-  eq(gen.parameters.properties.output.enum, ['lua', 'data'], 'output 两个取值');
+  // ⚠️ op 清单是**逐字**断言的：加一个 op 就必须来这里改一次（防止"悄悄加 op"）。
+  //    `pixel-art` 2026-09-29 加的（它自己的 41 条断言在 `tests/pixelart-test.mjs`）。
+  eq(gen.parameters.properties.op.enum, ['text-gradient', 'struct-json', 'pixel-art'], '三个 op');
+  // `output` 同理：`struct` 是 pixel-art 专用的那档（text-gradient 仍然只认 lua / data）
+  eq(gen.parameters.properties.output.enum, ['lua', 'data', 'struct'], 'output 三个取值');
   assert(gen.parameters.properties.controlName, '要暴露 controlName（交接值）');
   assert(gen.parameters.properties.templateIndex, '要暴露 templateIndex（交接值）');
   assert(gen.parameters.properties.summaryOnly, '要暴露 summaryOnly（回执可能很长）');
-  return '2 个 op + output(默认 lua) + 两个交接值参数 + summaryOnly';
+  return '3 个 op + output(默认 lua) + 交接值参数 + summaryOnly';
 });
 
 t('工具层 op=text-gradient：真从 TOOLS.execute 调，回执是 lossless（无 undefined）', async () => {

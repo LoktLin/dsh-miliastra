@@ -56,7 +56,59 @@
     「修前为什么红」写在测试文件头）。
   - 用法、风格表、值编码表、交接值规则、未验证项 → `docs/功能详解.md` §生成器。
 
+- **`miliastra_gen op=pixel-art`：图片 → 可部署的像素画 Lua**（2026-09-29 · 第四批）。
+  来源同上（`xiaomoL444/ugc-tool` 的 `src/views/PixelArt/PixelArt.vue`，作者授权、保持开源）；
+  **只移植算法**，那份 Lua 是**本仓自己写的驾驶层**（源码走 `script:GetParam("ImagePrefebID"/"CenterOffsetX"/…)`，
+  本仓改成顶部 `CONFIG` 常量，因为 AI 交接的索引本来就来自调用参数）。
+  - **`output` 默认 `"lua"`**（一次调用 → 直接拿到可部署 Lua + `luaBytes`/`lines`）；另给 `"struct"`
+    （千星变量 JSON，形态与源码 `downloadJson` 逐字一致）与 `"data"`（块表）。
+  - **产物是矩形块拼图，不是"一个像素一个控件"**：关平滑降采样 → **行内行程** + **跨行同色同宽合并**。
+    16×16 的测试图压成 **4 个块**；透明格（`a=0`）**不建块**（源码原判据 `if color[3] > 0`）。
+  - **高层意图参数**（别逼 AI 手写像素矩阵）：`assetId`（内容寻址）/`source`（绝对路径）、`cols`/`rows`
+    （或 `maxSide`；一个都不给按 32 兜底并**如实标 `gridFrom:"default"`**）、`pixelSize`、
+    `centerOffsetX/Y`、`imageType`（默认 `Stretch`）、`use4bit`（默认 false）、`mergeRuns`（默认 true）、
+    `summaryOnly`。
+  - ★ **交接值要两个，缺了就 `ok:false` + `needsHandover[]`（复用既有 `.gil` 自动读取机制，
+    只有唯一候选才采用）**：`templateIndex`（**图片**控件模板）+ `container`（容器节点索引）。
+    `.gil` 的候选表新增 `imageTemplates` / `containerNodes` 两栏；两个值各自独立判定（混用会标 `gil+arg`）。
+  - ★ **产物遵本仓 Lua 铁律**：交接值/网格/像素尺寸/中心偏移**全在顶部 `CONFIG`**；
+    控件 nil / `InstantiateClientUIControl` 返回 nil ⇒ **`error` 点名**（带模板号与第几块）；
+    **⛔ 无 `pcall`、无静默 `return`、无屏幕诊断串**；颜色走**字段** `imageColor`
+    （官方 7.1 原文 **`SetImageColor` 0 命中**，已逐条核过）。
+    ★ **像素画是静态的 ⇒ 产物不调 `script:EnableUpdate(true)`、没有 `OnUpdate`**，并在文件顶部**写明理由**
+    （免得下一个人以为是漏了）。
+  - ★ **与源码的 5 处刻意偏差**（回执 `deviations[]` 逐条列出）：默认 `pixelSize=8`（源码缺省 1，1 时整幅画
+    只有几十像素宽）、`use4bit` 额外量化 `Color.FromRGBA` 的入参（否则 lua 模式下这个开关**空转**）、
+    alpha 固定 8 位、`mergeRuns:false` 是新增开关、`struct` 模式多了一条「单条 ≤500 字符」段长上限
+    （源码只有 `maxPixelWidth`，一行 512 格同色会算到 537 字符而**超限**）。
+  - 新增 `lib/pixelart/{model,decode,blocks,lua,struct,index}.mjs`（**不引入任何新依赖**：
+    降采样用依赖里已有的 `@napi-rs/canvas`，且走**动态 import**，纯函数层不加载原生模块）
+    + `tests/pixelart-test.mjs`（**41 条**：量化端点 0/17/255 与进位点 8/9、`resolveGrid` 四路、
+    合并判据三段 key（错位/宽度不同/被截断都不许粘）、透明格不建块、富文本形态与全角空格、
+    两个段长上限、`struct` JSON 形态、Lua 层的六条铁律、工具层的 `needsHandover`/非法入参/三种 `output`/
+    `summaryOnly`/`assetId`、**以及一条模拟器端到端**）。「修前为什么红」写在测试文件头。
+  - 用法、参数默认值/边界表、回执字段、偏差清单、**端到端证据表** → `docs/功能详解.md` §`op=pixel-art`。
+
 ### 变更
+- **工具 schema 体积第三轮下沉（为 `op=pixel-art` 腾地方）**：加新 op 前实测 **31 845 B（余 923 B）**；
+  把描述与参数塞进去后涨到 **33 846 B（超 1 078 B）** ⇒ 下沉 **1 770 B**，收在 **32 076 B / 32 768 B
+  （余 692 B，棘轮绿）**。下沉去处：
+  - `miliastra_code` 的 description：安全约定细节 / `op=rects` 配对口径 / `op=lint-ui` 细则 / `warnings[]`
+    两类已知坑 → 只留判据骨架 + 一行指针（指向 `docs/功能详解.md` §部署安全 / §已知坑 / §UI 门禁 / §矩形对账）；
+  - **新增** `docs/功能详解.md` §矩形对账（含 `driverRefs` 那条事实）与 §探针下沉原文 —— 这两处原先
+    只活在 schema 里，下沉后**必须**在 docs 里有落点（否则等于丢信息）；
+  - `miliastra_gen` 自己的：description 与 30 个参数的**默认值/边界/细则**移进 §生成器 的参数表，
+    schema 里只留「这个参数干什么用」一句；
+  - `miliastra_asset` / `miliastra_probe` / `miliastra_code` 参数说明的冗余修饰。
+  ⚠️ `tests/smoke.mjs` 钉住的**每一个关键词都没丢**（`预测试` / `≠ 真机` / `textbox` + 反引号 `text` /
+  `frame` 不是秒表 / `5ms`+`200ms` / `Down…Up` 一直按住 / `keys`+`string-literal` / `press` / `op=hud` /
+  `all:true`+`164` / `Z 序` / `sibling` / `后建的在上` / `返回值被忽略` / `assert(false`）—— 改完重跑冒烟全绿。
+- **`op=handover` 的 `.gil` 候选表新增两栏**：`imageTemplates`（名字叫 `图片` 的独立模板）与
+  `containerNodes`（独立的 `容器节点`）—— 给 `op=pixel-art` 的交接值用。**仍然只有唯一候选才采用**，
+  且这只是**名字启发式**（`.gil` 记录里没有类型字段，见 `docs/功能详解.md` §生成器）。
+- `miliastra_code` / `miliastra_gen` / `miliastra_asset` / `miliastra_probe` 的部分参数说明**变短了**
+  （信息都移进 `docs/功能详解.md` 与 `docs/模拟器与视图.md`，schema 里留一句 + 指针）；
+  **行为一个字没改**。
 - **工具 schema 体积第二轮下沉（为 `miliastra_gen` 腾地方）**：`tests/smoke.mjs` 的 32 KB 棘轮实测
   **31 118 B（30.39 KB）→ 27 739 B（加新工具前，≈27.09 KB）** ⇒ **腾出 3 379 B ≈ 3.30 KB**；
   加完 `miliastra_gen`（含默认出 Lua 那一整套）后是 **31 845 B（31.10 KB），余量 923 B**（棘轮绿）。
