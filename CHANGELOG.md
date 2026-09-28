@@ -15,6 +15,31 @@
 > 下一个版本的东西写这里。
 
 ### 新增
+- ★★ **`miliastra_gen op=vfx-lua`：粒子特效 → 一次调用出可部署 Lua（2026-09-30 · 第六批）** ——
+  驱动层（采样/发射/池子/回收 + **晚建** + 诊断 `print` + `error` 点名 + 无 `pcall` 掩盖）**逐字取自真机定稿**：
+  工作区 `tmp/fx-demo/特效 fx.lua`（关卡 `1073741838` 第一屏星雨，真机已跑通）；生成器只参数化三处
+  （`VERSION` 行 / 预设名 / `CONFIG`+`DATA`）。有断言钉住：**`driverParity`**（生成物里的驱动层必须与定稿件逐字一致）。
+  - **13 个预设**：`star-rain`（真机定稿）/ `snow-fall`（上游 `snow`）/ `petal-fall` / `ember-rise`（★反向：从底往上升）/
+    `star-scatter`（上游 `stars`）/ `confetti-pop` / `coin-collect`（上游 `coins`，贝塞尔）/ `chest-collect`（换宝箱图）/
+    **`peacock-in` / `peacock-out`**（★用满 **8 层发射器**：八向往中心收拢 / 从中心往八向展开）/ `firefly-drift` /
+    `bubble-up` / `hit-spark`。参数表（每字段实际取值 + 落程/池子核算）见
+    `docs/千星奇域_粒子特效配置格式.md` **§5.0**（**由 `tools/gen-vfx-doc.mjs` 从 `lib/vfx/presets.mjs` 生成**，改了预设就重跑）。
+  - **"图"是独立维度**：`imageId`（真机 = 平台**任意**素材号，`op=catalog` 里 1543 条 / id 空间 `100001~112042`）
+    与 `previewImageId`（只为模拟器预览 —— 模拟器**只画** `100001~100006` 六个几何号）**两层分离**，回执两个都回显。
+    ⛔ 不再说"粒子只能用 6 个号"：**"6 个"是模拟器的渲染限制，不是平台的素材限制**（作者 2026-09-30 更正）。
+  - **贝塞尔（钢笔）可配**：`path:{start?,p1,p2,target}`（三个点是**相对发射点**的偏移）+ `pathLayer`；回执回显最终生效的
+    四个点与画布绝对坐标；四条"三个点 → 常见曲线"配方见格式文档 **§5.4**。
+  - **渐进式披露**（作者明令）：schema 里只放"怎么找到预设"（`preset` 是普通 string，**不做 12/13 项枚举**），
+    `preset:"list"` **按需枚举**（中文名 + 一句话 + 关键参数 + 控件核算），完整属性表全在文档（回执恒带 `doc` 指针）。
+    `summaryOnly:true` 对 `list` / `data` 两条大回执都真的省体积。
+  - **`chest-collect` 不猜素材号**：宝箱图号由创作者指定（目录里**单张图没有名称字段**）⇒ 不传 `imageId` 时
+    `ok:false + needsImageId`。
+  - 一处**刻意的驱动层替换**（唯一）：`requireHandover("DURATION", …)` → `requirePositiveNumber(…)` ——
+    定稿件的 `requireHandover` 只认正整数（校验模板索引那类），而 `DURATION` 是秒、可以是小数（上游 `coins` = 2.5）。
+    这个 bug 是**模拟器端到端第一次跑**抓出来的（`OnStart: CONFIG.DURATION 必须是正整数，收到 2.5`）。
+  - **验证**：`tests/vfx-test.mjs` **51 条断言**（纯函数 / Lua 铁律 / 工具接线 / **模拟器端到端**）；
+    13 个预设**逐个**跑过 `op=bind → op=frames`：控件数 = 池容量 +1、帧间差 266~8129 像素（全部 `identical:false`）、
+    **0 条 `lua-error`**。⚠️ 仍是**模拟器 ≠ 真机**：官方素材 / 真机渲染 / 层级遮挡 / 帧率都没覆盖。
 - **`miliastra_asset` 接上两个「平台目录」通道（2026-09-28 · 第五批 · 作者点名的最后一公里）** ——
   「开一个 api 接口 / 接口返回 + 名称模糊搜索」。两个通道都是**离线快照**（运行时零联网、**不下载任何图片或音频**），
   与原来那套「插件自己的素材库」（`add`/`list`/`get`/…）**语义不串门**：这一批只管**平台素材目录的事实**。

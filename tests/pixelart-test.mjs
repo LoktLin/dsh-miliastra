@@ -423,7 +423,7 @@ t('`buildPixelArtLua` 的产物过本仓两道机械门（无 BOM / LF / 无 tab
 t('`TOOLS` 里真的有 `op=pixel-art`，且 description 写了「静态不加 EnableUpdate」与「典型调用」', () => {
   assert(!!gen, '找不到 miliastra_gen');
   const props = gen.parameters.properties;
-  eq(props.op.enum, ['text-gradient', 'struct-json', 'pixel-art']);
+  eq(props.op.enum, ['text-gradient', 'struct-json', 'pixel-art', 'vfx-lua']);
   assert(/典型调用/.test(gen.description), 'description 要有「典型调用」');
   assert(/pixel-art/.test(gen.description), 'description 要提 op=pixel-art');
   assert(/不加.*EnableUpdate|不加.*tick/.test(gen.description), '要写清"静态 ⇒ 不加 EnableUpdate"（AI 看不到 docs）');

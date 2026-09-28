@@ -64,6 +64,7 @@ import { textGradient, STYLE_CHOICES } from './lib/textgradient/gradient.mjs';
 import { textGradientLua } from './lib/textgradient/lua.mjs';
 import { structJson } from './lib/structvar/build.mjs';
 import { pixelArt } from './lib/pixelart/index.mjs';
+import { vfxLua } from './lib/vfx/index.mjs';
 /*
  * 素材库的两个「**平台目录**」通道（2026-09-28 接线）：
  *   · `lib/images/query.mjs`    = 平台**图片资源库**的目录事实（1543 条 / 14 类；**不落图片字节**）
@@ -907,8 +908,31 @@ export function genOp(args = {}) {
     return textGradientLua(args, auto);
   }
   if (op === 'pixel-art') return pixelArtOp(args);
+  if (op === 'vfx-lua') {
+    /*
+     * ★★ 渐进式披露（作者 2026-09-30 明令）：`preset` **不做 enum**（12 个 id 进 schema 会吃几百字符），
+     *   改成 `preset:"list"` **按需枚举** —— 第 1 层只放"怎么找到预设"，第 2 层是这条 op 的回执，
+     *   第 3 层（完整属性表 / 换算 / 模拟器边界）全在文档里（回执恒带 `doc` 指针）。
+     */
+    if (String(args.preset || '').trim() === 'list') return vfxLua(args, {});
+    // 交接值：显式参数优先；都没有才去 `.gil` 自动拿（**只有唯一候选才采用**）→ 还缺就 needsHandover[]
+    const givenTmpl = Number(args.templateIndex);
+    const givenBox = Number(args.container);
+    const hasTmpl = Number.isFinite(givenTmpl) && givenTmpl !== 0;
+    const hasBox = Number.isFinite(givenBox) && givenBox !== 0;
+    if (hasTmpl && hasBox) return vfxLua(args, { templateIndex: givenTmpl, container: givenBox, from: 'arg', candidates: null });
+    const auto = autoPixelArtFromGil(args);     // 同一条读取路径：图片模板 + 容器节点（唯一候选才采用）
+    const tmpl = hasTmpl ? givenTmpl : (auto ? auto.templateIndex : null);
+    const box = hasBox ? givenBox : (auto ? auto.container : null);
+    const fromGil = !!(auto && ((!hasTmpl && auto.templateIndex) || (!hasBox && auto.container)));
+    return vfxLua(args, {
+      templateIndex: tmpl, container: box,
+      from: fromGil ? (hasTmpl || hasBox ? 'gil+arg' : 'gil') : (hasTmpl || hasBox ? 'arg' : null),
+      candidates: auto ? auto.candidates : null,
+    });
+  }
   if (op === 'struct-json') return structJson(args);
-  throw new Error('没有这个 op：' + JSON.stringify(op) + '（支持 text-gradient / struct-json / pixel-art）');
+  throw new Error('没有这个 op：' + JSON.stringify(op) + '（支持 text-gradient / struct-json / pixel-art / vfx-lua）');
 }
 
 /**
@@ -992,8 +1016,8 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
   { tool: 'miliastra_asset', when: '要把**图片素材**存下来反复引用（UI 动画 / 粒子 / 像素画的图源）用它 —— 按内容寻址、同图只存一份；它写的是**插件数据目录**（不进游戏存档、不碰活文件），素材**绝不自动删**（remove 要显式 confirm，连字节一起删还要 deleteFile）。**要挑平台素材**也用它：`op=catalog` 查**平台图片资源库**（1543 条 / 14 类，回 id + 分类 + 有没有图 + 模拟器认不认；单图没名字、我们不编名字），**要配音效**用 `op=sound-search`（离线快照 1997 条，中英文名模糊搜 + 相关性档位，**不支持拼音**）' },
-  { tool: 'miliastra_gen', when: '要**出可直接用的东西**时用它（零平台 API、不写任何文件）：`op=text-gradient` **一次调用就出可部署的 Lua**（逐帧刷字：`EnableUpdate` + `OnUpdate` 换帧；`output:"data"` 才只要数据）；`op=struct-json` 出可导入千星的变量 JSON（**结构体 ID 必须 10 位数字、单条文本 ≤500 字符**，两条硬规则不通过直接报错）。★ **交接值**（文本框控件名 / 控件模板索引）它先自动读当前关卡的 `.gil`（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover`）—— **别自己编索引**；回执的 `nextStep` 说清怎么落地（deploy 要显式传 `level` + `file`）。`<size>` 与 4bit **未经真机验证、默认关**' },
-  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①静态预览 ②交互试玩 ③确定性判定，三档共用同一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 控件模板索引；**索引优先自动拿**：`op=handover`（可带 `source` 读任意本地 .lua）从源码抽 → `miliastra_map op=clientui` 从 `.gil` 读 → 两个都拿不到才问创作者，**不许编**；它会回「脚本跑没跑、控件建了几个」，缺交接值就报错）；**要固定「这一版怎么验收」，用 `op=cases`**（存成一份人和 AI 读同一份的清单：自动项确定性重放、人工项只列出来等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 一次跑完，没过会带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**，不用手抄 events；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字，别只断言静态值**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；不占用真机、不需要试玩按钮，但它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）；**你自己想"玩"先记住量级**：发输入 ≈5ms 级、读场景 ≈200ms 级（≈5Hz）⇒ 能做**回合制闭环**、**不能逐帧看画面**（实时档要么一次调用里跑循环、要么让人玩）；HUD 上的字直接从 `get{view:true}` 的 **`textbox.text`** 读（当闭环条件用）；按 `…Down` 要**配对** `…Up` 否则等于一直按住' },
+  { tool: 'miliastra_gen', when: '要**出可直接用的东西**时用它（零平台 API、不写任何文件）：`op=text-gradient` **一次调用就出可部署的 Lua**（逐帧刷字：`EnableUpdate` + `OnUpdate` 换帧；`output:"data"` 才只要数据）；`op=struct-json` 出可导入千星的变量 JSON（**结构体 ID 必须 10 位数字、单条文本 ≤500 字符**，两条硬规则不通过直接报错）；**要发光效/粒子就用 `op=vfx-lua`** —— 12 个预设（星雨/飘雪/花瓣/火星上升/星光散射/彩纸/金币汇聚/孔雀收拢/孔雀展开/萤火/气泡/火花），**先传 `preset:"list"` 挑预设**（按需枚举，不占 schema），挑好再传 id 拿可部署 Lua；贝塞尔预设可用 `path` 给"钢笔"三手柄。★ **交接值**（文本框控件名 / 控件模板索引 / 容器节点索引）它先自动读当前关卡的 `.gil`（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover`）—— **别自己编索引**；回执的 `nextStep` 说清怎么落地（deploy 要显式传 `level` + `file`）。`<size>` 与 4bit **未经真机验证、默认关**' },
+  { tool: 'miliastra_sim', when: '它是**真机试玩之前的「预测试」**（①看 `state`/`shot` ②玩 `play` ③判 `verify`/`cases`/`frames`，三档共用一份工程）—— 要**在游戏之外先跑一遍**（建界面 / 改控件 / 跑 levelScript / 出画面 PNG）时用它；**要把真机那份脚本搬进来跑，用 `op=bind`**（给活文件路径 + 控件模板索引；**索引优先自动拿**：`op=handover` 从源码抽 → `miliastra_map op=clientui` 从 `.gil` 读 → 都拿不到才问创作者，**不许编**）；**要固定「这一版怎么验收」，用 `op=cases`**（存成人和 AI 读同一份的清单：自动项确定性重放、人工项等人打勾；`autoPassed` 不等于验收通过）；**AI 自测逻辑一律用 `op=verify`**（一次调用 = 操作 + 断言 + 判定，确定性可重复；一组用例用 `cases[]` 跑完，没过带失败帧与运行时控件名；**人玩过的那一局用 `fromHistory:true` 直接变回归用例**；**动画/动效类用 `op=frames` 出多帧 + 帧间像素差数字**）—— 写断言前先用 `op=controls` 拿控件名（`runtime:true` 看脚本运行时建出来的）；人想自己上手玩就让他开 `GET /miliastra/play`（WebGL 试玩页，与 AI 共用同一个会话）；它**不等于真机通过**（官方素材/真机渲染/联机都不覆盖）；其余 op：`op=keys`（扫键名）/ `op=patch`（改工程）/ `op=hud`（只读画面上的字）/ `op=export`/`op=import`/`op=load`/`op=save`/`op=reset`。' },
 ];
 
 export const PROMPT_RULES = [
@@ -1046,10 +1070,9 @@ const TOOLS = [
         all: { type: 'boolean', description: 'true=返回全部关卡清单（默认只返回最近 12 个）。' },
         brief: {
           type: 'boolean',
-          description: '**只回「我在哪张图 / 活文件是哪个 / 日志在哪」（< 1KB）** —— 默认回执约 9.7KB、all:true 约 25KB，'
-            + '而这是「任何操作前先调」的工具，多数时候只要这一小撮。'
+          description: '**只回「我在哪张图 / 活文件是哪个 / 日志在哪」（< 1KB）** —— 默认回执约 9.7KB、all:true 约 25KB。'
             + '`luaFiles` 是 `[{name, bytes}]`：**0 字节**（空脚本/未写入）与**不在 `.gil` 挂载集合里**的活文件都在 `note` 里点名。'
-            + '⚠️ **与 all / summaryOnly 同时给时 brief 优先**（默认行为一个字不改）。',
+            + '⚠️ **与 all / summaryOnly 同时给时 brief 优先**。',
         },
       },
       additionalProperties: false,
@@ -1146,15 +1169,15 @@ const TOOLS = [
     name: 'miliastra_code',
     description:
       TITLE + '：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。'
-      + '**部署一律：先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**（带 BOM 原神实测会打印 "Read text file with BOM header may cause Lua error"）。'
+      + '**部署一律：先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**（带 BOM 原神会报 Lua 错，原文见 `docs/功能详解.md` §部署安全）。'
       + 'op=read 读**沙箱活文件**的正文；**给了 `source`（绝对路径）就改读那个文件**（只读：不备份、不写入）。'
       + 'op=deploy 把 source 投进沙箱（**覆盖前自动备份** + **Lua 结构校验**，默认 lintMode:"strict" 直接拒绝）；'
       + 'op=inspect 只体检不改动；op=backups 列全部备份；op=backup 手动备一份；op=restore 覆盖活文件（**backup 可不传** = 固定名那份 `<原名>.bak`）。'
       + '⚠️ 部署不会热加载正在进行的试玩：要 停试玩 → 部署 → 重开试玩。'
       + '\n★ **安全约定**：活文件是**唯一副本** ⇒ ①**备份失败就中止覆盖**；②**原子写**；③写完必校验 SHA、**不过就自动回滚**；④备份两份、**永不自动删**；⑤`noBackup` 要配 `allowNoBackup:true`。'
-      + '\n★ **`op=deploy` 选目标活文件只用名字，不按「最近改动」猜**：显式 `file` > `source` 的**同名**活文件 > 目录里只有 1 个 > 拒绝写盘并列出候选；回执恒带 `dest`。'
+      + '\n★ **`op=deploy` 选目标活文件只用名字，不按「最近改动」猜**：`file` > `source` 的同名活文件 > 目录里只有 1 个 > 拒绝写盘并列候选；回执恒带 `dest`。'
       + '\n★ **部署指纹**：deploy 成功后记 `.miliastra-deploy.<脚本名>.json`；`op=inspect` 比对不上就直说「多半是编辑器把脚本面板里的内存版存回了磁盘」，并给字节差/行数差。'
-      + '\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：①画在哪=点哪算 ②坐标/尺寸是 **8 的倍数** ③字号只许 **64/52/28/22** ④**h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，模拟器不模拟它）；回执逐条给 `{file,line,name,expected,actual,delta}`，`passed` **只代表判据全满足，不代表 UI 合格**。'
+      + '\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：①画在哪=点哪算 ②坐标/尺寸是 **8 的倍数** ③字号只许 **64/52/28/22** ④**h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，模拟器不模拟它）；`passed` **只代表判据全满足，不代表 UI 合格**。'
       + '\n★ 其余（`op=rects` 的配对口径、`warnings[]` 两类已知坑、`op=fixbom`、多脚本 `mount` 判定）见 `docs/功能详解.md` §部署安全 / §已知坑 / §UI 门禁 / §矩形对账。'
       + '\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
       + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua —— 不在沙箱里也行）｜'
@@ -1163,7 +1186,7 @@ const TOOLS = [
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects', 'lint-ui'], description: '默认 inspect。给了 `source` 的 op=read 只读那个文件；给了 `dir` 的 op=rects / op=lint-ui 扫那个工程目录。' },
+        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects', 'lint-ui'], description: '默认 inspect。`source` 给 op=read 读那个文件（只读）；`dir` 给 op=rects / op=lint-ui 扫那个目录。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
@@ -1215,7 +1238,7 @@ const TOOLS = [
         pairs: {
           type: 'array',
           items: { type: 'object' },
-          description: 'op=rects / op=lint-ui：**人点名的**名字对照，如 `[["ovB1","T_START"],{"a":"btnSet","b":"BTN_SET"}]` —— 画面在 view、热区在 input，两边名字往往不同，工具不猜语义。',
+          description: 'op=rects / op=lint-ui：**人点名的**名字对照，如 `[["ovB1","T_START"]]` —— 画面在 view、热区在 input，名字往往不同，工具不猜语义。',
         },
         files: {
           type: 'array',
@@ -1740,9 +1763,9 @@ const TOOLS = [
         pattern: { type: 'string', description: '正文正则过滤。' },
         run: {
           type: 'string',
-          description: 'op=tail/grep/tags：**只看某一局**。给 epoch 秒（如 1790170177）或 instance 片段（与 playtest 的 epochSec 同源）。',
+          description: 'op=tail/grep/tags：**只看某一局**（epoch 秒或 instance 片段，与 playtest 的 epochSec 同源）。',
         },
-        limit: { type: 'number', description: 'op=tail/grep：几条（默认 120，**超限留最新**）；op=runs/metrics：几局（默认 10 / 40）；op=sessions：几个文件（默认 40）。' },
+        limit: { type: 'number', description: 'op=tail/grep：默认 120（**超限留最新**）；op=runs/metrics：默认 10 / 40；op=sessions：默认 40。' },
         last: { type: 'number', description: 'op=tail/grep：**只取尾部 N 条**；顺序永远是**先过滤 → 再取尾**，返回仍按时间正序。' },
         from: {
           type: 'string',
@@ -1943,9 +1966,9 @@ const TOOLS = [
         afterSec: {
           oneOf: [
             { type: 'number', description: 'op=wait：命中后再等 N 秒才返回（默认 0，上限 120）。' },
-            { type: 'array', items: { type: 'number' }, description: 'op=arm：**秒点数组**（默认 `[8,12,16,20]`）—— 到每个秒点各拍一张，相对**开跑时刻**算。' },
+            { type: 'array', items: { type: 'number' }, description: 'op=arm：**秒点数组**（默认 `[8,12,16,20]`，≤12 个）。' },
           ],
-          description: 'op=wait 传**数字**（命中后再等 N 秒才返回）；**op=arm 传秒点数组**（如 `[8,12,16,20]`，最多 12 个，到每个秒点各拍一张）。',
+          description: 'op=wait 传**数字**；**op=arm 传秒点数组**（到每个秒点各拍一张）。',
         },
         target: { type: 'string', enum: Object.keys(SHOT_TARGETS), description: 'op=arm：截哪个窗口（默认 game=游戏客户端）。' },
         process: { type: 'string', description: 'op=arm：直接指定进程名（覆盖 target）。' },
@@ -2033,17 +2056,14 @@ const TOOLS = [
   {
     name: 'miliastra_shot',
     description:
-      TITLE + '：截图 —— 把「现在画面上是什么」变成一张 PNG。'
-      + '日志（miliastra_log）能回答「代码跑了没、print 了什么」，回答不了「画面对不对」（控件挂上了没、位置歪没歪、颜色对不对）；这一环靠它。'
-      + 'op=capture（默认）立刻截一张（`target=game` 原神客户端 / `editor` 千星沙箱，也可用 `process` 指定任意进程名）；op=list 看截到哪去了、有多少张、占多大；op=clean 清理，**默认只报告不删**。'
-      + '**截图存在插件的数据目录**（默认 `~/.dsh/miliastra/shots`，`MILIASTRA_DATA_DIR` 可整体覆盖）—— 不在游戏存档目录、也不在包目录（插件升级会整个替换掉它）。'
-      + '**不会自动删**：清理要显式给条件（`all` / `olderThanDays`），真删还要 `confirm:true`。'
-      + '回执恒带 `pid / process / title` + **候选窗口清单**（同进程多窗口时逐条给标题/尺寸/是否最小化，并标出选中哪个）—— **截到的到底是哪个窗口**必须看得见。'
-      + '`suspect` 只在**判得出来**时给（进程名对不上 / `target=game` 而标题像编辑器 / 全黑 / 单色 / 屏抓却不在前台）—— **画面内容本工具不识别**，图对不对最终要看图。'
-      + '\n★ **连拍每张约 2.6~3.5 秒**（回执的 `measuredIntervalMs` 是实测值，`burstMs` 给再小也无效）。'
-      + '**短局（< 20 秒）别用「等 8 秒再连拍 4 张」**（4 张会全落局外）：用 '
-      + '`op=burst awaitPlaytest:true startAfterSec:<小值> untilGone:true`（命中就开拍、局一结束就停，逐张标 `inRun`），或 `miliastra_playtest op=arm`。'
-      + '（**选窗规则 / 缩略图 / 连拍时序的完整说明见 `docs/功能详解.md` §截图**。）'
+      TITLE + '：截图 —— 把「现在画面上是什么」变成一张 PNG（日志只能回答「代码跑了没」，画面对不对靠这一环）。'
+      + '`op=capture`（默认）立刻截一张（`target=game` 原神 / `editor` 沙箱，也可 `process` 指任意进程）；`list` 看截到哪去了；`clean` 清理**默认只报告不删**。'
+      + '**截图存在插件数据目录**（`MILIASTRA_DATA_DIR` 可覆盖，不在游戏存档）—— **不会自动删**（要 `all`/`olderThanDays` + `confirm:true`）。'
+      + '回执恒带 `pid/process/title` + **候选窗口清单**（同进程多窗口逐条给尺寸/是否最小化 + 选中哪个）—— **截到的到底是哪个窗口**必须看得见；'
+      + '`suspect` 只在判得出来时给（进程对不上 / 全黑 / 单色…），**画面内容本工具不识别**。'
+      + '\n★ **连拍每张约 2.6~3.5 秒**（`burstMs` 给再小也无效）；**短局（<20 秒）别"等 8 秒再连拍 4 张"**（会全落局外）——'
+      + '用 `op=burst awaitPlaytest:true startAfterSec:<小值> untilGone:true`（命中就拍、局结束就停）。'
+      + '选窗规则 / 缩略图 / 连拍时序完整说明见 `docs/功能详解.md` §截图。'
       + '\n\n**典型调用**：`{"op":"capture","target":"game"}`（现在截一张）｜'
       + '`{"op":"burst","awaitPlaytest":true,"startAfterSec":1,"untilGone":true,"count":20}`（短局：命中就拍、局结束就停，逐张给 `inRun`）｜'
       + '`{"op":"burst","dryRun":true}`（先看要多久、拍几张）',
@@ -2516,80 +2536,78 @@ const TOOLS = [
     description:
       '内置**千星模拟器**：游戏之外搭界面、跑 levelScript、出画面 PNG。**定位：真机试玩之前的「预测试」**：'
       + '拦掉可自动判定的问题（脚本跑没跑 / 控件建没建·几个 / 布局 / 动画）；拦不下官方素材 / 真机渲染 / 联机 / 手感'
-      + ' ⇒ **模拟器通过 ≠ 真机通过**，真机那一步仍要人点试玩。'
-      + '\n三档共用一份工程：①看（`state`/`shot`）②玩（`play`）③判（`verify`/`cases`/`frames`，可复现）。'
-      + '\n★ 主入口：自测 `op=verify`（一组 `cases[]`）/ 交接值 `op=handover` / 真机工程 `op=bind`（缺交接值报错、不许编）/ 验收单 `op=cases`。'
-      + '\n★ 量级：发输入 ≈ **5ms**、读 `get{view:true}` ≈ **200ms** ⇒ 回合制闭环可以、**不能逐帧看画面**；HUD 上的字用 **`op=hud`** 读 `textbox.text`（文本框的 `text` 字段）。'
-      + '\n★ `op=keys` 从脚本源码扫键名（`KeyEventType.X` 与**裸字符串**两路，`found[].via` 标 `string-literal`），回执带 **`press`**；`all:true` 给全量 **164** 个键名。'
-      + '\n★ 按 `…Down` 要配对 `…Up`，否则等于**一直按住**；`frame` **不是秒表**，计时用 `time`。'
-      + '\n★ **PNG 里有脚本建的客户端控件**（`InstantiateClientUIControl` 建的含子控件**都会画进图**；'
-      + '只有客户端控件模板工程**自己那棵树**不在）；仍是**离线渲染** ⇒ 视觉终验看真机。'
-      + '\n★ Z 序：按 sibling 顺序画（越靠前越上层）；`op=patch add` 追加 ⇒ 新控件在最底层（真机脚本是**后建的在上**）'
+      + ' ⇒ **模拟器通过 ≠ 真机通过**，真机那一步仍要点试玩。'
+      + '\n★ 三档（①看 `state`/`shot` ②玩 `play` ③判 `verify`/`cases`/`frames`）共用一份工程；'
+      + '`op=verify` 自测 / `op=handover` 抽交接值 / `op=bind` 搬真机工程（缺交接值报错，不许编）/ `op=cases` 验收单。'
+      + '\n★ 发输入 ≈ **5ms**、读 `get{view:true}` ≈ **200ms**（⇒ 不能逐帧看画面）；HUD 上的字用 **`op=hud`** 读 `textbox.text` 的 `text` 字段。'
+      + '按 `…Down` 要配对 `…Up`（否则等于**一直按住**）；`frame` **不是秒表**，计时用 `time`。'
+      + '\n★ `op=keys` 扫键名两路（含**裸字符串** + `found[].via` 的 `string-literal`），回执带可直接照抄的 **`press`**；`all:true` 给全量 **164** 个。'
+      + '\n★ **PNG 里有脚本建的客户端控件**（`InstantiateClientUIControl` 建的含子控件**都会画进图**；只有客户端控件模板工程**自己那棵树**不在）；仍是**离线渲染** ⇒ 视觉终验看真机。'
+      + '\n★ Z 序：按 sibling 顺序画（越靠前越上层）；`op=patch add` 追加 ⇒ 新控件在**最底层**（真机是**后建的在上**，方向相反）'
       + '—— **不覆盖**跨父级叠序 / 官方素材层序 / 真机渲染管线。'
       + '\n★ `kind=lua` 的 `expect[]` **只看报不报错**（**返回值被忽略** —— 要失败得自己 `assert(false,…)`）。'
-      + '\n细节见 `docs/模拟器与视图.md` 文末「下沉原文」。'
+      + '\n★ **能验 / 不能验什么**、各 op 字段表与坑：见 `docs/模拟器与视图.md` 文末「下沉原文」。'
       + '\n\n**典型调用**：`{"op":"bind","source":"D:\\\\…\\\\双相.lua","templates":[{"guid":1073741868,"kind":"image"}],"containerId":1073741866}`',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state；op 分工见上方「主入口」。' },
+        op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。' },
         /*
          * ⚠️ 这个 `all` **同时服务两个 op** —— 写成两个键会**静默覆盖**（JS 对象字面量后者胜），
          * 于是其中一个说明永远不会到达 AI（2026-09-24 被 ESLint 的 `no-dupe-keys` 抓到，见 `tools/lint.mjs`）。
          */
         all: { type: 'boolean', description: 'op=keys：给**全量键名**；op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
-        steps: { type: 'array', description: 'op=verify 的操作序列（每步全形状见「下沉原文」§1）。', items: { type: 'object' } },
-        expect: { type: 'array', description: 'op=verify 的断言（八种 kind 见「下沉原文」§1）；`count` 是**建了几个** —— 动态 UI 只能用它数。', items: { type: 'object' } },
+        steps: { type: 'array', description: 'op=verify 的操作序列（形状见「下沉」§1）。', items: { type: 'object' } },
+        expect: { type: 'array', description: 'op=verify 的断言（八种 kind 见「下沉」§1）；`count` = **建了几个**。', items: { type: 'object' } },
         cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}。', items: { type: 'object' } },
-        fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**的事件当用例（含浏览器试玩页玩的）。' },
-        frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，最多 12 个）。', items: { type: 'number' } },
+        fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**当用例。' },
+        frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，≤12 个）。', items: { type: 'number' } },
         diff: { type: 'boolean', description: 'op=frames：是否比帧间像素差（默认 true）。' },
-        threshold: { type: 'number', description: 'op=frames：像素算「变了」的每通道差值阈值（默认 8）。' },
+        threshold: { type: 'number', description: 'op=frames：像素算「变了」的每通道阈值（默认 8）。' },
         shotOnFail: { type: 'boolean', description: 'op=verify：没过时自动存一帧失败点 PNG 并回 `shot`（默认 true）。' },
-        stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个没过就停（默认 false = 跑完全部）。' },
-        keepRunning: { type: 'boolean', description: 'op=verify：判定后不停会话（默认停）便于接着 op=play。' },
+        stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个没过就停（默认 false）。' },
+        keepRunning: { type: 'boolean', description: 'op=verify：判定后不停会话（默认停），便于接着 op=play。' },
         dt: { type: 'number', description: 'op=verify：重放的每步时长（秒）。' },
         runtime: { type: 'boolean', description: 'op=controls：看**运行中**会话的控件树（脚本动态建的），需先 op=play start。' },
-        geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带世界坐标 `x/y` + 源尺寸 `w/h` + `text`（左下原点，可直接喂 pointer/click）。' },
+        geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带世界坐标 `x/y` + 尺寸 `w/h` + `text`。' },
         namedOnly: { type: 'boolean', description: 'op=controls：只列有名字的控件（只有它们能按 name 断言）。' },
         nameContains: { type: 'string', description: 'op=controls：按名字子串过滤（中文可用）。' },
         kind: { type: 'string', description: 'op=controls：按类型过滤（container / textbox / image …）。' },
         maxDepth: { type: 'number', description: 'op=controls：只列到第几层（0=根）。' },
-        limit: { type: 'number', description: 'op=controls：最多回多少条（默认 200，截了多少看 `omitted`）。' },
+        limit: { type: 'number', description: 'op=controls：最多回多少条（默认 200）。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
         treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树（默认 200）。' },
-        patch: { type: 'object', description: 'op=patch 的编辑操作；数据写要带 expectedRevision。**每个 op 只认自己的字段**（白名单见「下沉原文」§4）。' },
-        action: { type: 'string', description: 'op=play 的动作：start/device/view/get/step/pointer/key/click/pause/resume/stop/serverGet/serverSet/serverSend。' },
+        patch: { type: 'object', description: 'op=patch 的编辑操作；数据写要带 expectedRevision。**每个 op 只认自己的字段**（见「下沉原文」§4）。' },
+        action: { type: 'string', description: 'op=play 的动作（start/get/step/pointer/key/click/pause/resume/stop… 全表见文档）。' },
         args: { type: 'object', description: 'op=play 的参数（形状见「下沉原文」§7）。' },
-        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 取景：ui=编辑器视图（静态），play=试玩画面（需先 start）。' },
-        label: { type: 'string', description: 'op=shot 的文件名标签（便于事后认图）。' },
-        reuse: { type: 'boolean', description: 'op=shot 连帧：固定名覆盖写、只留当前帧（不传 = 每张新建）。' },
-        format: { type: 'string', description: 'op=export / op=import 的格式（默认 gia）。' },
+        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 取景：ui=编辑器视图，play=试玩画面（需先 start）。' },
+        label: { type: 'string', description: 'op=shot 的文件名标签。' },
+        reuse: { type: 'boolean', description: 'op=shot：固定名覆盖写、只留当前帧（不传 = 每张新建）。' },        format: { type: 'string', description: 'op=export / op=import 的格式（默认 gia）。' },
         assetType: { type: 'string', description: 'op=export 的资产类型过滤。' },
         file: { type: 'string', description: 'op=import 要导入的文件绝对路径。' },
         archive: { type: 'string', description: 'op=load 的存档；省略=列出工作区里的存档。' },
         path: { type: 'string', description: 'op=save 的存档文件名（默认 qxqy-simulator.save.json）。' },
-        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**（handover **只读**）。' },
+        source: { type: 'string', description: 'op=bind / op=handover：一个 .lua 的**绝对路径**（op=handover **只读**，不写盘）。' },
         scripts: {
           type: 'array',
           items: { type: 'object' },
-          description: 'op=bind：**一次挂多个脚本** `[{path, source|sourceFrom}]`；给了它就不看顶层 `source`。',
+          description: 'op=bind：**一次挂多个脚本** `[{path, source|sourceFrom}]`（就不看顶层 `source`）。',
         },
-        templates: { type: 'array', description: 'op=bind：控件模板清单 `[{guid,kind,name?}]`。`guid` = 客户端控件模板索引（优先自动拿）；`kind` 拿不准传 `"auto"`。', items: { type: 'object' } },
+        templates: { type: 'array', description: 'op=bind：模板清单 `[{guid,kind,name?}]`。`kind` 拿不准传 `"auto"`。', items: { type: 'object' } },
         containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。' },
         scriptName: { type: 'string', description: 'op=bind：挂载名（见「下沉原文」§7）。' },
         mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件（id 或名字；缺省=服务端容器节点）。' },
-        fresh: { type: 'boolean', description: 'op=bind：默认 true = 清掉出厂工程与已有脚本重建；false = 追加。' },
-        last: { type: 'boolean', description: 'op=bind：用**上次那份配方**重搭（「一键回来」）。' },
+        fresh: { type: 'boolean', description: 'op=bind：默认 true = 清掉出厂工程与已有脚本重建。' },
+        last: { type: 'boolean', description: 'op=bind：用**上次那份配方**重搭。' },
         keepFactory: { type: 'boolean', description: 'op=bind：保留出厂橱窗控件（默认清掉）。' },
-        run: { type: 'boolean', description: 'op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs` 与 `run.controlCount`。' },
+        run: { type: 'boolean', description: 'op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs` 与 `controlCount`。' },
         settleSec: { type: 'number', description: 'op=bind：起完会话先让时钟走几秒再读。' },
-        saveAs: { type: 'string', description: 'op=bind：把工程存进工作区（缺省名 bind-<脚本名>.save.json）。' },
+        saveAs: { type: 'string', description: 'op=bind：把工程存进工作区（缺省 bind-<脚本名>.save.json）。' },
         script: { type: 'object', description: 'op=bind：直接用源码代替读文件 `{path, source}`。' },
-        caseSet: { type: 'string', description: 'op=verify：直接跑 `op=cases` 里存的那一组（人工项只列不跑）。' },
+        caseSet: { type: 'string', description: 'op=verify：直接跑 `op=cases` 里存的那一组。' },
         set: { type: 'string', description: 'op=cases：用例集的名字（建议「玩法-关卡」）。' },
-        case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组，仍要 confirm:true）。' },
-        confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true（不传只回 dryRun）。' },
+        case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组）。' },
+        confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true。' },
         manual: { type: 'boolean', description: '存用例时标**人工项**（配合 note）—— 不代跑也不代判，只在 `manual[]` 里等人打勾。' },
         note: { type: 'string', description: '用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。' },
         name: { type: 'string', description: 'op=bind：存档名；op=cases：set 的别名（manual 项缺省取 note 前 20 字）。' },
@@ -2607,16 +2625,14 @@ const TOOLS = [
     description:
       TITLE + '：**插件级素材库** + **两个平台目录通道**（图片资源库 / 音效库 —— 只报**目录事实**，**不落图片或音频字节**）。'
       + '\n★ **插件素材库**：**按内容寻址**（文件名 = `sha256` 前 16 位 + 扩展名，同图只存一份 ⇒ `deduped:true`），落**插件数据目录** `assets/`'
-      + '（**不进游戏存档、不碰活文件**）；索引坏了用 `op=rebuild` **从目录重建**。'
-      + '\n★ **磁盘是用户的**：素材**绝不自动删** —— `op=remove` 要显式 `confirm:true`（连字节一起删再加 `deleteFile:true`）；`op=prune` **只报告不删**。'
+      + '（**不进游戏存档、不碰活文件**）。**磁盘是用户的**：素材**绝不自动删** —— `op=remove` 要显式 `confirm:true`（连字节删再加 `deleteFile:true`）；`op=prune` **只报告不删**。'
       + '\n★ **安全**：`source` / `out` 只认**绝对路径**；只收图片白名单、拒 0 字节 / >64 MiB；`get` 写 `out` **默认不覆盖**；`../` 一律拒。'
-      + '\n★ **平台图片资源库**（`op=catalog`，离线快照 **1543 条 / 14 类**，**不下载图片**）：按分类 / 颜色档 / `simOnly` / `imgExists` 过滤，'
-      + '回 `id` + 分类 + 颜色档 + `imgExists`（**21 条是"目录里有、图却缺"** —— 拿号前先看这列）+ `simRenderable`（只有 `100001~100006`）。'
-      + '单张图**没有名字**（目录里就没有名字字段）⇒ 只回分类名，**不编名字**。'
-      + '\n★ **平台音效库**（`op=sound-search` / `op=sound-get`，离线快照 **1997 条 / 7 类**）：`q` 按**中文名或英文名**模糊搜（多词 = AND），'
-      + '五档 `exact>prefix>substring>subsequence>editDistance`（逐条 `matchKind`）；`sound-get` 按 id 取单条。⛔ **不支持拼音/首字母**。'
-      + '\n★ **回执体积**（目录通道）：**发现调用给全表、过滤调用只给结论** —— `catalog` 没给任何收窄条件、或 `sound-search` 没给 `q` 时才带完整分类表；'
-      + '其余只带 `categoriesOmitted` / `catalogOmitted`。要完整分类表或 sha256 就传 `withMeta:true`（**只在挑分类 / 审计哈希时开**）。'
+      + '\n★ **平台图片资源库**（`op=catalog`，快照 **1543 条 / 14 类**，id 空间 `100001~112042`）：按分类 / 颜色档 / `simOnly` / `imgExists` 过滤；'
+      + '回 `id` + 分类 + 颜色档 + `imgExists`（**21 条"目录里有、图却缺"**）+ `simRenderable`（只有 `100001~100006`，那是**模拟器**画不画得出，不是平台限制）；单张图**没有名字** ⇒ 只回分类名。'
+      + '\n★ **平台音效库**（`op=sound-search` / `op=sound-get`，快照 **1997 条 / 7 类**）：`q` 按**中/英名**模糊搜（多词 = AND），'
+      + '五档 `exact>prefix>substring>subsequence>editDistance`（逐条 `matchKind`）。⛔ **不支持拼音/首字母**。'
+      + '\n★ **回执体积**：**发现调用给全表、过滤调用只给结论**（`catalog` 没给收窄条件、或 `sound-search` 没给 `q` 才带完整分类表，'
+      + '其余只带 `categoriesOmitted` / `catalogOmitted`），要完整分类表或 sha256 传 `withMeta:true`（**只在挑分类 / 审计哈希时开**）。'
       + '\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景,像素画"}`｜'
       + '`{"op":"catalog","category":"基础形状"}`｜`{"op":"catalog","colorKind":"mono","summaryOnly":true}`｜'
       + '`{"op":"sound-search","q":"宝箱 开启","limit":5}`｜`{"op":"sound-get","id":"50214"}`',
@@ -2655,8 +2671,7 @@ const TOOLS = [
         },
         q: {
           type: 'string',
-          description: 'op=sound-search：关键词（中文名或英文名；空格分隔多个 = AND）。⚠️ **不支持拼音 / 首字母**（`baoxiang`/`bx` 搜不到）。'
-            + '**不给 `q` = 发现调用**：只回 7 行分类表 + 快照元信息，一条音效都不回。',
+          description: 'op=sound-search：关键词（中文名或英文名；空格分隔 = AND）。⚠️ **不支持拼音 / 首字母**。**不给 `q` = 发现调用**（只回分类表 + 快照元信息，一条音效都不回）。',
         },
         category: {
           type: 'string',
@@ -2665,7 +2680,7 @@ const TOOLS = [
         colorKind: {
           type: 'string',
           enum: ['mono', 'multi', 'neutral', 'mixed'],
-          description: 'op=catalog：颜色档 —— `mono` 官方名含「单色」／`multi` 含「彩色」／`neutral` 官方没标、实测无彩度白图／`mixed` 官方没标、实测多色。不传 = 全部。',
+          description: 'op=catalog：颜色档（`mono` 官方名含「单色」／`multi` 含「彩色」／`neutral`／`mixed` 是官方没标的实测档）。不传 = 全部。',
         },
         simOnly: {
           type: 'boolean',
@@ -2689,14 +2704,11 @@ const TOOLS = [
         },
         summaryOnly: {
           type: 'boolean',
-          description: 'op=list：只给**计数与总体积**，省掉逐条素材（缺失/无主/支持的类型等结论字段一个不删）。默认 false。'
-            + 'op=catalog / op=sound-search 同样只去逐条 `items`（计数 / 分类表 / `unverified` 一个不删）。',
+          description: 'op=list / op=catalog / op=sound-search：只去逐条 `items`，**计数 / 分类表 / `unverified` 等结论字段一个不删**。默认 false。',
         },
         withMeta: {
           type: 'boolean',
-          description: 'op=catalog / sound-search：把**完整分类表**与 sha256 元信息给我（默认按「发现调用给全表、过滤调用只给结论」省体积：'
-            + '`catalog` 过滤时只回收窄到的那条 + `categoriesOmitted`；`sound-search` 带 `q` 时省掉分类表与 `catalog` 段）。'
-            + '**只在需要挑分类 / 要审计哈希时开**。默认 false。',
+          description: 'op=catalog / sound-search：把**完整分类表**与 sha256 元信息给我（**只在挑分类 / 审计哈希时开**）。默认 false。',
         },
       },
       additionalProperties: false,
@@ -2713,52 +2725,66 @@ const TOOLS = [
       TITLE + '：**离线生成器** —— 一次调用就出**能直接用的东西**：默认出**可部署的 Lua 源码**（不是数据模型、不是半成品）。'
       + '\nop=text-gradient：文本 → 色标采样 → 风格（流动 / 淡入淡出 / 跳字）→ **逐帧**富文本，包成一段**逐帧刷字的客户端 Lua**（`OnStart` 开 `EnableUpdate`、`OnUpdate(dt)` 按 `fps` 换帧、第一帧立刻上屏）。'
       + '\nop=struct-json：结构体 / 字典 → **可直接导入千星的变量 JSON**（同时给「结构体定义」与「结构体变量值」两种形态；默认写 `struct_ype` —— 同仓库 **25 份真实样例全是它**）。'
-      + '\nop=pixel-art：**图片 → 可部署的像素画 Lua**（默认 output=lua）—— 图片控件的**矩形块拼图**，不是"一个像素一个控件"：关平滑降采样 → 行内行程 + 跨行同色同宽合并 →（可选）4bit → Lua。'
-      + '参数给**意图**就行：图源（`assetId` 或 `source`）+ `cols`/`rows`（或 `maxSide`）+ `pixelSize` + `centerOffsetX/Y` + 交接值 `templateIndex`（**图片**控件的模板）+ `container`（容器节点）。'
+      + '\nop=pixel-art：**图片 → 可部署的像素画 Lua** —— 图片控件的**矩形块拼图**，不是"一个像素一个控件"（关平滑降采样 → 行内行程 + 跨行同色同宽合并 → 可选 4bit）；要图源 + `cols`/`rows`/`maxSide` + `pixelSize`。'
       + '★ 像素画是**静态**的 ⇒ 产物**不加** `EnableUpdate`。'
+      + '\nop=vfx-lua：**UI 粒子特效 → 可部署的客户端 Lua**（**13 个预设**：星雨/飘雪/花瓣/火星上升/星光散射/彩纸/金币汇聚/宝箱汇聚/孔雀收拢/孔雀展开/萤火/气泡/火花；'
+      + '`preset:"list"` 列中文名 + 关键参数 + 控件核算，**清单不进 schema**）；驱动层**逐字取自真机定稿件**（晚建 / error 点名 / 无 pcall 掩盖）；贝塞尔预设用 `path` 给"钢笔"三手柄。'
+      + '\n★ 粒子贴图 `imageId` **真机可用平台全部 1543 个素材号**（`miliastra_asset op=catalog` 挑）；**只有模拟器**只画 `100001~100006` ⇒ 要预览就再传 `previewImageId`（回执两个号都回显）。'
       + '\n★ **硬规则**：结构体 ID 必须 **10 位数字**、单条文本 **≤500 字符**（超了千星导不进去；要放行传 `allowLongText:true`）—— **生成前校验，不通过直接报错**。'
-      + '\n★ **交接值**（控件模板索引 / 控件名 / 容器节点索引）AI 拿不到：**先自动读当前关卡 `.gil`**（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover[]` + `handoverCandidates[]`），**绝不编索引**；产物自己也会在运行时 `error` 点名。pixel-art 要**两个**（图片模板 + 容器节点）。'
-      + '\n★ **未验证**（回执恒带 `unverified[]`）：`<size=N>`（text-gradient）、4bit（两个 op）、24 个 ParamType 是否等于 7.1 **完整**类型集；启用未验证项时**产物顶部加一行注释**。`summaryOnly:true` **只去正文**，统计与 `nextStep` 必须留。'
-      + '\n★ 参数默认值 / 边界 / 各 op 细则见 `docs/功能详解.md` §生成器。'
+      + '\n★ **交接值**（控件模板索引 / 控件名 / 容器节点索引）AI 拿不到：**先自动读当前关卡 `.gil`**（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover[]` + `handoverCandidates[]`），**绝不编索引**；产物自己也会在运行时 `error` 点名。'
+      + '\n★ **未验证**（回执恒带 `unverified[]`）：`<size=N>`、4bit、24 个 ParamType 是否等于 7.1 **完整**类型集、粒子特效的**真机渲染 / 帧率 / 素材号**。`summaryOnly:true` **只去正文**，统计与 `nextStep` 必须留。'
       + '\n\n**典型调用**：`{"op":"text-gradient","text":"原神千星","colors":["#FFCC33","#37FFFF"],"colorStyle":"flow-forward","controlName":"标题"}`（**一次调用 → 可直接部署的逐帧刷字 Lua**）｜'
-      + '`{"op":"struct-json","structId":"1077936165","fields":[{"key":"id","param_type":"Int32","value":1},{"key":"标题","param_type":"String","value":"序章"}]}`｜'
-      + '`{"op":"pixel-art","assetId":"a1b2c3d4e5f60718","cols":32,"pixelSize":8,"templateIndex":1073741900,"container":1073741866}`（**一次调用 → 可直接部署的像素画 Lua**）',
+      + '`{"op":"struct-json","structId":"1077936165","fields":[{"key":"id","param_type":"Int32","value":1}]}`｜'
+      + '`{"op":"pixel-art","assetId":"a1b2c3d4e5f60718","cols":32,"pixelSize":8,"templateIndex":1073741900,"container":1073741866}`｜'
+      + '`{"op":"vfx-lua","preset":"coin-collect","imageId":101023,"previewImageId":100002}`（真机用素材号、模拟器用圆预览；先看清单传 `{"op":"vfx-lua","preset":"list"}`）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['text-gradient', 'struct-json', 'pixel-art'], description: '默认 text-gradient。后面还会加 tween-lua / particle-lua。' },
-        output: { type: 'string', enum: ['lua', 'data', 'struct'], description: '默认 **lua**（回执直接给可部署的 Lua + `luaBytes`/`lines`）；`data` = 只要结构化数据；`struct` 只有 pixel-art 用。' },
-        assetId: { type: 'string', description: 'op=pixel-art：图源 —— `miliastra_asset` 的素材 id（或唯一前缀）。与 `source` 二选一。' },
+        op: { type: 'string', enum: ['text-gradient', 'struct-json', 'pixel-art', 'vfx-lua'], description: '默认 text-gradient。' },
+        output: { type: 'string', enum: ['lua', 'data', 'struct'], description: '默认 lua（回执给可部署的 Lua + `luaBytes`/`lines`）；`data` = 只要数据；`struct` 只有 pixel-art 用。' },
+        assetId: { type: 'string', description: 'op=pixel-art：图源 —— `miliastra_asset` 的素材 id（或前缀）。与 `source` 二选一。' },
         source: { type: 'string', description: 'op=pixel-art：图源 —— 图片**绝对路径**（**不抓网图**）。' },
-        cols: { type: 'number', description: 'op=pixel-art：网格列数（格）。只给一边就按原图宽高比推另一边。' },
+        cols: { type: 'number', description: 'op=pixel-art：网格列数（格）。只给一边就按比例推另一边。' },
         rows: { type: 'number', description: 'op=pixel-art：网格行数（格）。' },
-        maxSide: { type: 'number', description: 'op=pixel-art：只给**长边**格数，另一边按原图比例推；都不给时默认 32（`gridFrom` 会标 `default`）。' },
-        pixelSize: { type: 'number', description: 'op=pixel-art：一格在画布上占多少像素（默认 8，1~64）。' },
+        maxSide: { type: 'number', description: 'op=pixel-art：只给**长边**格数（另一边按比例推）；都不给默认 32。' },
+        pixelSize: { type: 'number', description: 'op=pixel-art：一格占多少像素（默认 8，1~64）。' },
         centerOffsetX: { type: 'number', description: 'op=pixel-art：像素画中心相对容器中心的水平偏移（默认 0）。' },
-        centerOffsetY: { type: 'number', description: 'op=pixel-art：同上，垂直方向（默认 0）。' },
-        container: { type: 'number', description: 'op=pixel-art：**交接值** —— **容器节点索引**。别编，问创作者要。' },
-        imageType: { type: 'string', enum: ['Stretch', 'Basic'], description: 'op=pixel-art：`Enum.ImageType`（默认 Stretch；官方原文只有这两个值）。' },
-        mergeRuns: { type: 'boolean', description: 'op=pixel-art：行内行程 + 跨行同色同宽合并（默认 true）；false = 一格一个控件。' },
+        centerOffsetY: { type: 'number', description: 'op=pixel-art：同上，垂直方向。' },
+        container: { type: 'number', description: 'op=pixel-art / op=vfx-lua：**交接值** —— **容器节点索引**。别编，问创作者要。' },
+        imageId: { type: 'number', description: 'op=vfx-lua：粒子贴图（**真机任意平台素材号**，用 `miliastra_asset op=catalog` 挑；不传 = 预设默认）。' },
+        previewImageId: { type: 'number', description: 'op=vfx-lua：**预览用号**（生成物里换成它，只为模拟器看得见：只画 `100001~100006`）。' },
+        loop: { type: 'boolean', description: 'op=vfx-lua：播完是否循环（不传 = 预设默认）。' },
+        duration: { type: 'number', description: 'op=vfx-lua：播多久（秒；不传 = 预设默认）。' },
+        imageType: { type: 'string', enum: ['Stretch', 'Basic'], description: 'op=pixel-art：`Enum.ImageType`（默认 Stretch）。' },
+        mergeRuns: { type: 'boolean', description: 'op=pixel-art：行内行程 + 跨行同色同宽合并（默认 true）。' },
         text: { type: 'string', description: 'op=text-gradient：文本（按 UTF-16 码元逐字符切）。' },
         colors: { type: 'array', items: { type: 'string' }, description: 'op=text-gradient：色标（≥1，有序）；hex 或 `rgb()/rgba()`。' },
         sizes: { type: 'array', items: { type: 'number' }, description: 'op=text-gradient：字号色标（默认 `[20,20]`）。' },
-        colorStyle: { type: 'string', description: 'op=text-gradient：颜色风格 ' + STYLE_CHOICES.color.map((s) => '`' + s + '`').join('/') + '（flat 普通 / flow 流动 / fade 淡入淡出）。' },
+        colorStyle: { type: 'string', description: 'op=text-gradient：颜色风格 ' + STYLE_CHOICES.color.map((s) => '`' + s + '`').join('/') + '。' },
         sizeStyle: { type: 'string', description: 'op=text-gradient：字号风格 ' + STYLE_CHOICES.size.map((s) => '`' + s + '`').join('/') + '（jitter=跳字）。' },
         withColor: { type: 'boolean', description: 'op=text-gradient：是否包 `<color=…>`（默认 true）。' },
         withSize: { type: 'boolean', description: 'op=text-gradient：是否包 `<size=N>`（默认 false，**未验证**）。' },
-        use4bit: { type: 'boolean', description: 'op=text-gradient / pixel-art：4bit（`round(v/17)`；前者是 `#RGBA` 短格式、后者是每通道 0–15 级）。默认 false，**未验证**。' },
-        colorJumpFrames: { type: 'number', description: 'op=text-gradient：颜色跳帧（步长 = `max(1,值+1)`）。默认 0。' },
-        fps: { type: 'number', description: 'op=text-gradient（lua）：每秒切几帧（默认 8，上限 60）= `CONFIG.FPS`。' },
-        controlName: { type: 'string', description: 'op=text-gradient（lua）：**交接值** —— 要逐帧改字的文本框控件名。别编，问创作者要。' },
-        templateIndex: { type: 'number', description: 'op=text-gradient / pixel-art（lua）：**交接值** —— 控件模板索引（只有「存为模板」的能创建）。pixel-art 要的是**图片**模板。别编。' },
-        frames: { type: 'array', items: { type: 'number' }, description: 'op=text-gradient（data）：点名要哪几帧；不给就出前 60 帧（lua 时忽略）。' },
-        structId: { type: 'string', description: 'op=struct-json / pixel-art(output=struct)：结构体 ID —— **必须 10 位数字**。别编，问创作者要。' },
+        use4bit: { type: 'boolean', description: 'op=text-gradient / pixel-art：4bit 量化（默认 false，**未验证**）。' },
+        colorJumpFrames: { type: 'number', description: 'op=text-gradient：颜色跳帧（默认 0）。' },
+        fps: { type: 'number', description: 'op=text-gradient：每秒切几帧（默认 8，上限 60）。' },
+        controlName: { type: 'string', description: 'op=text-gradient：**交接值** —— 要逐帧改字的文本框控件名。别编。' },
+        templateIndex: { type: 'number', description: 'op=text-gradient / pixel-art / vfx-lua：**交接值** —— 控件模板索引（只有「存为模板」的能创建）。别编。' },
+        frames: { type: 'array', items: { type: 'number' }, description: 'op=text-gradient（data）：要哪几帧；不给就出前 60 帧。' },
+        structId: { type: 'string', description: 'op=struct-json：结构体 ID —— **必须 10 位数字**。别编。' },
         structName: { type: 'string', description: 'op=struct-json：结构体名。' },
-        fields: { type: 'array', items: { type: 'object' }, description: 'op=struct-json：字段表 `{key, param_type, value?}`（嵌套形状见 `docs/功能详解.md` §生成器）。' },
+        fields: { type: 'array', items: { type: 'object' }, description: 'op=struct-json：字段表 `{key, param_type, value?}`。' },
         variableName: { type: 'string', description: 'op=struct-json：给了就额外回「自定义变量」形态。' },
-        spelling: { type: 'string', enum: ['struct_ype', 'struct_type'], description: 'op=struct-json：写出的拼写键（默认 `struct_ype`；两个**读入都认**）。' },
+        spelling: { type: 'string', enum: ['struct_ype', 'struct_type'], description: 'op=struct-json：写出的拼写键（默认 `struct_ype`，都认）。' },
         allowLongText: { type: 'boolean', description: 'op=struct-json：放行 > 500 字符（默认 false = 报错）。' },
-        summaryOnly: { type: 'boolean', description: '只去正文不去结论（换字节数）：text-gradient 去 `lua`；struct-json 去 JSON 正文；pixel-art 去 `lua`/`blockList`/`structText`。统计 / `nextStep` / 警告都留。' },
+        summaryOnly: { type: 'boolean', description: '只去正文不去结论：去掉 `lua` / JSON 正文 / 逐条块数据。统计与 `nextStep` 都留。' },
+        preset: { type: 'string', description: 'op=vfx-lua：预设 id（**13 个**：星雨/飘雪/花瓣/火星上升/星光散射/彩纸/金币汇聚/宝箱汇聚/孔雀收拢/孔雀展开/萤火/气泡/火花）；**传 `"list"` 可列出全部预设**（中文名 + 关键参数 + 控件核算）。' },
+        path: { type: 'object', description: 'op=vfx-lua：贝塞尔"钢笔"三手柄 `{start?,p1,p2,target}`（后三个**相对发射点**）。给了就设 `motion="bezier"`。' },
+        pathLayer: { type: 'number', description: 'op=vfx-lua：`path` 打到第几层（1 起，默认 1）。' },
+        particlesPerEmitter: { type: 'number', description: 'op=vfx-lua：每层池子上限（要 ≥ rate×lifetime.max，见回执 `pool`）。' },
+        sizeScale: { type: 'number', description: 'op=vfx-lua：粒子尺寸倍率（1 = 原生）。' },
+        createAfterFrames: { type: 'number', description: 'op=vfx-lua：晚建帧数（默认 30；**别设 0**，会被全屏背景盖住）。' },
+        diagSteadyAt: { type: 'number', description: 'op=vfx-lua：稳态诊断时刻（秒，默认 2）。' },
+        parentName: { type: 'string', description: 'op=vfx-lua：一个**屏幕上看得见的控件名**（借它的容器当父节点）；不给就用 `script.object`。' },
       },
       additionalProperties: false,
     },
