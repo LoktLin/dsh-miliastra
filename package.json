@@ -28,6 +28,7 @@
     "lib/**/*.html",
     "lib/**/*.ps1",
     "lib/assets/*",
+    "lib/**/*.json",
     "locale/*.json",
     "icon.svg",
     "cordis.patch.yml",
