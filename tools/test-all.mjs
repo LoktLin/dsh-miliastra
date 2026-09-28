@@ -52,6 +52,7 @@ export const SUITES = [
   { name: 'feedback4-test（第四批：P0-1/P1/P2/N-1~3 + 保持项）', args: ['tests/feedback4-test.mjs'] },
   { name: 'feedback5-test（第五批施工单：P0-2/P1-3/P1-4/P2-5）', args: ['tests/feedback5-test.mjs'] },
   { name: 'uilint-test（P0-1 UI 门禁 op=lint-ui + 两次真跑验收）', args: ['tests/uilint-test.mjs'] },
+  { name: 'gen-test（生成器：文本渐变逐帧 / 结构体 JSON / 两条硬规则）', args: ['tests/gen-test.mjs'] },
   { name: 'engine（`node --test` 上游单测）', args: ['--test', 'engine/**/*.test.mjs'] },
 ];
 

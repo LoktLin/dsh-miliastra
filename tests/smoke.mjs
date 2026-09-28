@@ -75,6 +75,11 @@ const CASES = [
   ['miliastra_probe', { op: 'render', template: 'ping', tag: 'SMOKE' }],
   ['miliastra_probe', { op: 'render', template: 'tree', tag: 'SMOKE' }],
   ['miliastra_probe', { op: 'render', template: 'instantiate', tag: 'SMOKE', ids: [1073741824, 1073741825] }],
+  // 生成器：默认就出 Lua（作者 2026-09-28 明令）；交接值显式给，免得依赖本机有没有存档
+  ['miliastra_gen', { op: 'text-gradient', text: '原神千星', colors: ['#FFCC33', '#37FFFF'], colorStyle: 'flow-forward', controlName: '标题' }],
+  ['miliastra_gen', { op: 'text-gradient', text: 'ab', templateIndex: 1073741867, summaryOnly: true }],
+  ['miliastra_gen', { op: 'text-gradient', output: 'data', text: 'ab', summaryOnly: true }],
+  ['miliastra_gen', { op: 'struct-json', structId: '1077936165', fields: [{ key: 'a', param_type: 'Int32', value: 1 }] }],
 ];
 
 for (const t of TOOLS) {

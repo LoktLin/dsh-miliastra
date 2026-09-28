@@ -15,6 +15,58 @@
 > 下一个版本的东西写这里。
 
 ### 新增
+- **`miliastra_gen`：离线生成器** —— 承载「AI 出参数 → **回执里就是能直接用的东西**」这条能力
+  （作者 2026-09-28 明令：**默认就出可部署的 Lua**，不是数据模型、不是"再调一次拼起来"）。
+  来源：`xiaomoL444/ugc-tool`（**作者已授权移植，唯一要求保持开源**）；每个 lib 文件头都写了
+  `移植自 …— 源文件：…` 并列出**刻意的偏差**。⛔ 不吸收登录 / OSS 直传 / Cloudflare Worker / 桌面伴侣。
+  - **`op=text-gradient`**：文本按字符切分 → 色标采样 → 风格（`flat` / `flow-forward` / `flow-backward` /
+    `fade-in` / `fade-out` × `flat` / `jitter`）→ 逐帧富文本，**并包成一段可直接部署的客户端 Lua**。
+    `output` 默认 **`lua`**（回执 `lua` / `luaBytes` / `lines`）；`output:"data"` 才只给结构化数据。
+    Lua 遵本仓铁律：`OnStart` 里 `script:EnableUpdate(true)`（不开则 `OnUpdate` 永不触发）+ print 版本行、
+    `OnUpdate(dt)` 按 `fps` 累积换帧且**第一帧立刻上屏**、**交接值与节奏全在顶部 `CONFIG`**、
+    **四处 `error` 点名**（`script.object` 为空 / 找不到控件 / 不是文本框 / 实例化返回 nil）、
+    **⛔ 没有 `pcall` 吞异常、没有静默 return、没有屏幕诊断串**。
+    ★ **交接值优先自动拿**：`controlName` / `templateIndex` 没给时**只读当前关卡的 `.gil`** 找候选，
+    只有**唯一候选**才采用（回执 `handoverFrom:"gil"` + `HANDOVER_AUTO_FROM_GIL` 警告）；
+    多候选或读不到 ⇒ **`ok:false` + `needsHandover[]` + `handoverCandidates[]`**，错误文案直说「**别自己编**」。
+    ⚠️ `.gil` 控件记录**没有类型字段**，所以候选叫 `namedChildrenOfContainer`（不叫 textboxes）—— 文本框由创作者确认。
+    ★ **`output:"lua"` 一帧都不少**（`data` 模式有「不给 `frames` 只出前 60 帧」的上限，动画不吃它）。
+    ★ **5 处刻意偏差**（回执 `deviations[]`）：枚举**自己命名**；默认色标钉死（源码是**随机色**）；
+    色标采样改为**线性 sRGB**（**不引入 `chroma-js`**）；字号插值**修正**了源码的区间外取值（2 色标逐值相同）；
+    跳字用**固定种子 PRNG**。⚠️ **`<size=N>` 与 4bit 短格式默认关**，启用时**产出的 Lua 顶部就有一行注释**
+    说明它未经真机验证（官方 7.1 原文：`<color` 1 处命中，`<size`/`4bit`/`#RGB` **全 0 命中**）。
+    ★ 顺带实测出的事实：**8bit 六位十六进制不带 alpha** ⇒ 淡入/淡出 + 8bit 时 `distinctColorFrames = 1`
+    （颜色空转），`notes[]` 里点破，且该字段**按真正的输出格式**算（4bit 下 16 种）。
+  - **`op=struct-json`**：声明式字段表 → **两种可直接导入千星的形态**：「结构体定义」
+    （`{type:"Struct", struct_ype:"basic", name, value:[{key,param_type,value}]}`）与「结构体变量值」
+    （`{structId, type:"Struct", value:[ParamNode…]}`，位置参数）。24 个 `ParamType` + 中文标签；
+    值编码**从同仓库 25 份真实千星样例归纳**（标量一律写成**字符串**：`"0"` / `"2.00"` / `"False"` / `"0,0,0"`）。
+    ★ **两条硬规则在生成前校验、不通过直接报错**：① **结构体 ID 必须 10 位数字**（所有出现位置都查，
+    含嵌套 `Struct`/`StructList` 与 `Dict.value_structId`）；② **单条文本 ≤ 500 字符**（`StringList` 逐元素算；
+    默认报错并列出 `over[]` 的路径+长度，`allowLongText:true` 才降级成 `warnings[]` —— 源码只 `toast.warning`
+    就放行，这是**默认拦**的刻意差异：那条错误要到千星导入时才暴露）。
+    ★ **`struct_ype` 兼容**：同仓库 25 份真实样例**全部**写 `struct_ype` ⇒ **读入两个都认、默认写出 `struct_ype`**，
+    要写 `struct_type` 传 `spelling`；回执给 `spelling`/`spellingAlternative`/`spellingAccepted`。
+    ★ 回执带 `nextStep`（和 text-gradient 一样说清下一步）。
+  - 新增 `lib/textgradient/{math,model,gradient,lua}.mjs` + `lib/structvar/{model,validate,build}.mjs`
+    （**不引入任何新依赖**）+ `tests/gen-test.mjs`（**55 条断言**：算法逐值、**测试抓到的两处真 bug**
+    （4bit alpha 被二次量化、`distinctColorFrames` 没按输出格式算）、两条硬规则、`struct_ype` 兼容、
+    **Lua 层**（铁律逐条 / 交接值缺失必须报错 / 模板模式 nil 检查 / 未验证注释在 Lua 顶部 / 一帧都不少 /
+    lua 的 `summaryOnly` 只去正文）、以及**真从 `TOOLS` 调 `execute`** 的工具层断言（未知 op 明确报错）。
+    「修前为什么红」写在测试文件头）。
+  - 用法、风格表、值编码表、交接值规则、未验证项 → `docs/功能详解.md` §生成器。
+
+### 变更
+- **工具 schema 体积第二轮下沉（为 `miliastra_gen` 腾地方）**：`tests/smoke.mjs` 的 32 KB 棘轮实测
+  **31 118 B（30.39 KB）→ 27 739 B（加新工具前，≈27.09 KB）** ⇒ **腾出 3 379 B ≈ 3.30 KB**；
+  加完 `miliastra_gen`（含默认出 Lua 那一整套）后是 **31 845 B（31.10 KB），余量 923 B**（棘轮绿）。
+  下沉去处：`miliastra_sim` 的**参数说明** → `docs/模拟器与视图.md` 文末**新增的「§7 其余参数的下沉原文」**；
+  `miliastra_sim` / `miliastra_code` / `miliastra_shot` / `miliastra_probe` / `miliastra_playtest` /
+  `miliastra_asset` / `miliastra_log` 的说明性长文**只留判据骨架 + 一行指针**。
+  ⚠️ `tests/smoke.mjs` 钉住的**每一个关键词都没丢**（`预测试` / `≠ 真机` / `textbox` + 反引号 `text` / `frame` 不是秒表 /
+  `5ms`+`200ms` / `Down…Up` 一直按住 / `keys`+`string-literal` / `press` / `op=hud` / `all:true`+`164` /
+  `Z 序` / `sibling` / `后建的在上` / `返回值被忽略` / `assert(false`）—— 改一处就重跑一次冒烟，全绿。
+
 - **`miliastra_asset`：插件级素材库（asset store）** —— 与具体功能无关的通用图片素材存储，
   给「UI 动画 / 粒子 / 像素画」这类**要存图并反复引用**的能力打底。**按内容寻址**：
   文件名 = `sha256` 前 **16 位**（64 bit，理由与碰撞处置写在 `lib/assets.mjs` 文件头）+ 原扩展名，
