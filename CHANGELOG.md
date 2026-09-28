@@ -15,6 +15,34 @@
 > 下一个版本的东西写这里。
 
 ### 新增
+- **`miliastra_asset` 接上两个「平台目录」通道（2026-09-28 · 第五批 · 作者点名的最后一公里）** ——
+  「开一个 api 接口 / 接口返回 + 名称模糊搜索」。两个通道都是**离线快照**（运行时零联网、**不下载任何图片或音频**），
+  与原来那套「插件自己的素材库」（`add`/`list`/`get`/…）**语义不串门**：这一批只管**平台素材目录的事实**。
+  - **`op=catalog`（平台图片资源库）**：**1543 条 / 14 类**，参数 `category`（分类 id 或名字，支持子串如「单色」）、
+    `colorKind`（`mono`/`multi`/`neutral`/`mixed`）、`simOnly`、`imgExists` + 复用的 `id`/`limit`/`summaryOnly`。
+    回执 `{ok, op, filters, categories, items?, counts, limit, limitClamped, idRange, source, unverified, notes}`。
+    ★ **`imgExists` 是必看的一列**：目录里 **21 条**的 `img`/`border` 是空串、实测 PNG **404**
+    （拿号去 `SetImage` 之前先筛 `imgExists:true`）。★ `simRenderable` = **我们模拟器认不认**（只有
+    `100001~100006`），由 `tests/catalog-test.mjs` **直接读 `engine/studio/constants.js` 的 `IMAGE_PRIMITIVES`** 核对，防两边常量漂移。
+    ★ **单图没有名字**（目录里只有 `id`/`img`/`border`，1543 条全量核对）⇒ 只回分类名，**绝不编名字**。
+    ★ `colorKind` **以官方分类名为主口径**（含「单色」→ `mono`、含「彩色」→ `multi`），官方名没标的 6 类按抽样实测
+    分 `neutral`/`mixed`，抽样（66 张）**只作旁证**，工具**不判决**官方写得对不对。
+  - **`op=sound-search` / `op=sound-get`（平台音效库）**：**1997 条 / 7 类**，`q` 按**中英文名**模糊搜
+    （空格分隔多词 = AND），五档相关性 `exact>prefix>substring>subsequence>editDistance`（逐条 `matchKind`，
+    档内按整数 `score`）；`limit` 默认 20 / 上限 100；空 `q` 与非法 `category` **报错**（不静默回全表）；
+    `sound-get` 找不到**不抛错**（`found:false` + `hint`）。
+    ⛔ **不支持拼音/首字母**（没有词表）—— 这条**写在 schema 的 `q` 参数与 description 里**，免得 AI 在死路上反复试；
+    最弱档是子序列/编辑距离时挂 `weak:true`（那批是"凑"的）。
+  - 新增 `lib/images/query.mjs` + `lib/images/catalog.json`（**四元组 `[id,分类,flags,颜色档代号]`**，
+    flags 的 `bit0=imgExists`、`bit1=simRenderable`；1543 条 / 34.9 KB，UTF-8 无 BOM + LF）
+    + `tools/build-image-catalog.mjs`（**三个源 sha256 钉死 + `--check` 逐字节校验**，镜像一变直接拒绝；
+    **从不发网络请求**、**不落任何图片字节**）。音效那半边的数据层与生成脚本是上一批的产物，本批只做**接线**。
+  - `tools/test-all.mjs` 新增 `catalog-test`：**67 条断言**（分类 id/名/子串、四态颜色档、`simOnly`、`imgExists` 筛出的
+    21 条与拓扑文档逐个对上、`limit` 夹紧、未知 category/colorKind/limit/id/op 报错、`summaryOnly` 只去体积不去结论、
+    **回执无 `undefined`**、五档各一条（真数据）、`sound-get` 三态、**镜像重建逐字节一致 + 1543 条逐条对账**）。
+  - 用法、边界、未验证表 → `docs/功能详解.md` §平台图片资源库与音效库；`miliastra_sim` description 的下沉原文
+    （本批为此腾了 **1 441** 字符）→ `docs/模拟器与视图.md` §8。
+
 - **`miliastra_gen`：离线生成器** —— 承载「AI 出参数 → **回执里就是能直接用的东西**」这条能力
   （作者 2026-09-28 明令：**默认就出可部署的 Lua**，不是数据模型、不是"再调一次拼起来"）。
   来源：`xiaomoL444/ugc-tool`（**作者已授权移植，唯一要求保持开源**）；每个 lib 文件头都写了
@@ -90,6 +118,20 @@
   - 用法、参数默认值/边界表、回执字段、偏差清单、**端到端证据表** → `docs/功能详解.md` §`op=pixel-art`。
 
 ### 变更
+- **工具 schema 体积第四轮下沉（为 `op=catalog` / `sound-search` 腾地方，2026-09-28 · 第五批）**：
+  加两个 op 前实测 **32 084 B / 32 768 B（余 684 B）** ⇒ 把 **`miliastra_sim` 整条工具条目从 7 611 → 6 170 字符**
+  （description **2 377 → 1 102**、parameters **5 083 → 4 980**）⇒ **腾出 1 441 B**；两个 op 实际花 **1 397 B**
+  （`miliastra_asset` 整条 2 271 → 3 668），收在 **32 040 B（余 728 B，棘轮绿）**。
+  下沉原文（**逐字**）在 `docs/模拟器与视图.md` **§8**。
+  ⚠️ `tests/smoke.mjs:400-449` 钉住的**每一个关键词都没丢**（`预测试` / `≠ 真机` / 三档 `①`…`③` /
+  `textbox`+`` `text` `` / `frame` 不是秒表 / `5ms`+`200ms` / `Down…Up` 一直按住 / `keys`+`string-literal` /
+  `press` / `op=hud` / `all:true`+`164`）以及本批点名要保的 `Z 序` / `sibling` / `后建的在上` / `返回值被忽略` /
+  `assert(false`；**另有 `feedback3-test` / `feedback4-test` 钉住的 4 句**（`PNG 里有脚本建的客户端控件` /
+  `都会画进图` / `自己那棵树` / `按 sibling 顺序画` + `不覆盖`）—— 第一版下沉漏了这 4 句，那两套当场红，
+  这也说明「smoke 全绿 ≠ schema 没丢话」。
+  ★ **一条口径修正**（免得下一轮又按错数算账）：简报里说的「`miliastra_sim` 的 description 约 7 611 字符」，
+  实测 **7 611 是整条工具条目**（description 2 377 + parameters 5 083 + JSON 开销），**description 只有 2 377** ——
+  「把 description 全砍光」的上限就是 2 377。
 - **工具 schema 体积第三轮下沉（为 `op=pixel-art` 腾地方）**：加新 op 前实测 **31 845 B（余 923 B）**；
   把描述与参数塞进去后涨到 **33 846 B（超 1 078 B）** ⇒ 下沉 **1 770 B**，收在 **32 076 B / 32 768 B
   （余 692 B，棘轮绿）**。下沉去处：
