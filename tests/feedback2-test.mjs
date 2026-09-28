@@ -110,6 +110,19 @@ const bytesOf = (v) => Buffer.byteLength(JSON.stringify(v), 'utf8');
 /** 按句读切开 —— 把「本关 + 外来号**同框**」变成可断言的形状。 */
 const sentencesOf = (s) => String(s || '').split(/[。；\n]/).map((x) => x.trim()).filter(Boolean);
 
+/**
+ * 「本关」句里的**外来号**（= 真·跨关混入）：某一句自己说「本关」，却报出一个**不在本关清单里**的 10 位号。
+ * `ownIds` = **本关自己**的 `likelyTemplates` 号；`levelIds` = 关卡标识（本关 ID / 取证关卡 ID，不是控件号）。
+ * ⚠️ 基准**只能是本关自己的清单** —— 模板号跨关卡复用（见下面 ① 集成那条的注释），
+ *    拿"另一张图的取证快照"当否定依据，会把本关自己的号判成外来号（假红，2026-09-29 踩过）。
+ */
+function foreignIdsInOwnSentences(hint, ownIds, levelIds) {
+  return sentencesOf(hint)
+    .filter((s) => /本关/.test(s))
+    .flatMap((s) => (s.match(/\b1\d{9}\b/g) || []).filter((id) => !levelIds.has(id)).map((id) => ({ id, s })))
+    .filter((x) => !ownIds.has(x.id));
+}
+
 /* ================================================================== ① clientui 的 hint 不许拿别的关卡的号说「本关」 */
 
 /*
@@ -143,18 +156,53 @@ await check('① 本关一个模板都没读到 → 如实说没有（不拿外�
   return '本关 0 条 → 「本关没有读到」+ 来源标注';
 });
 
-await check('① 集成（真机有 .gil 就查不变量）：hint 里没有「本关 + 外来号」同框', async () => {
+/*
+ * ★ 这条不变量**按关卡各自判定**：基准必须是**本关自己的清单**（`r.likelyTemplates`，同一份回执里读到的），
+ *   ⛔ 不许拿「另一张图的取证快照（CLIENTUI_EVIDENCE）」当否定依据。
+ *
+ * 为什么要这么改（2026-09-29 在本机这张图上踩出来的实测事实）：
+ *   **客户端控件模板号在本机是跨关卡复用的** —— `1073741867 / 1073741868 / 1073741859 / 1073741863 / 1073741852`
+ *   在关卡 `1073741833`（CLIENTUI_EVIDENCE 那次真机实测的来源图）与本机当前打开的 `1073741838` 里**完全一样**。
+ *   旧版这条断言把 `1073741867 / 1073741868 / 1073741863` 写死成「外来号」，于是在 `1073741838` 上把
+ *   **本关自己清单里的号**判成了「同框」—— 是**测试的假设错**（把"某号属于某张图"当成了事实），
+ *   不是平台问题、更不是 `op=clientui` 的问题。⇒ 后人别把它当 bug 改回去。
+ *
+ * 保留的风险（这条不变量原本要挡的）：**真·跨关混入** —— hint 里某一句话自己说「本关」，
+ *   却报出一个**不在本关清单里、来源不明**的号。判据：把「本关」那一句里的 10 位号抽出来，
+ *   逐个对照本关自己的清单；**只有不在清单里的才算混入**。
+ *   （关卡 ID 是关卡标识、不是控件模板号，不算混入。）
+ *
+ * ⚠️ 它依赖**本机某张具体地图**的数据：回执形状里没有 `likelyTemplates` 时**明确跳过并打印原因**（不静默跳过）。
+ */
+await check('① 集成（真机有 .gil 就查不变量）：hint 里说「本关」的句子只报本关清单里的号（按关卡各自判定）', async () => {
   let r = null;
   try { r = await mapTool.execute({ op: 'clientui', summaryOnly: true }, {}); } catch (e) { /* 本机没有 .gil → 跳过 */ }
   if (!r || !r.ok) return '跳过：这台机器上读不到 .gil（' + ((r && r.error) || '没试玩过/没存盘') + '）';
-  // ⚠️ 本机这张图**就是**那次实测的图时，说「本关」是对的 —— 那时不适用这条不变量
-  if (String(r.level && r.level.id) === String(CLIENTUI_EVIDENCE.levelId)) {
-    return '跳过不变量：本机这张图（' + r.level.id + '）**就是**那次实测的图 —— 说「本关」是对的';
+  // ★ 绊线自检（放在拿真机数据之前，跳过时也照跑）：证明这条判据**不是永真** ——
+  //   ① 本关自己的号**不许**被误判；② 一条**真·跨关混入**的 hint **必须**被报出来。
+  const selfOwn = foreignIdsInOwnSentences(
+    '**本关读到的**独立控件（关卡 1073741838，1 条）：1073741867(文本框)。',
+    new Set(['1073741867']), new Set(['1073741838']));
+  assert(selfOwn.length === 0, '自检失败：本关自己的号（1073741867）被误判成混入：' + JSON.stringify(selfOwn));
+  const selfForeign = foreignIdsInOwnSentences(
+    '**本关读到的**独立控件（关卡 1073741838，1 条）：1073741999(文本框)。',
+    new Set(['1073741867']), new Set(['1073741838']));
+  assert(selfForeign.length === 1 && selfForeign[0].id === '1073741999',
+    '自检失败：真·跨关混入没被报出来（判据成了永真）：' + JSON.stringify(selfForeign));
+  // 这台机器换张图 / 回执形状变了 → 拿不到「本关自己的清单」就没法判定，明确跳过并说清缺什么
+  if (!Array.isArray(r.likelyTemplates)) {
+    return '跳过：本机 op=clientui 回执里没有 likelyTemplates 数组（拿不到本关清单，无法按关卡判定）—— 回执字段：'
+      + Object.keys(r).join('/');
   }
-  const ids = CLIENTUI_EVIDENCE.creatable.map((c) => c.id).concat(['1073741863']);
-  const mixed = sentencesOf(r.hint).filter((s) => /本关/.test(s) && ids.some((i) => s.includes(String(i))));
-  assert(mixed.length === 0, '真机回执里还有同框：' + JSON.stringify(mixed));
-  return 'levelId=' + r.level + '，hint ' + r.hint.length + ' 字，无同框';
+  const ownIds = new Set(r.likelyTemplates.map((t) => String(t && t.id)));
+  // 关卡标识（本关 ID + 取证关卡 ID）不是控件模板号 —— 它们出现在「本关」句里是正常的
+  const levelIds = new Set([r.level && r.level.id, CLIENTUI_EVIDENCE.levelId].filter((x) => x != null).map(String));
+  const mixed = foreignIdsInOwnSentences(r.hint, ownIds, levelIds);
+  assert(mixed.length === 0,
+    '真·跨关混入：这些号出现在说「本关」的句子里、却不在本关自己的清单里（本关 ' + ownIds.size + ' 条：'
+      + [...ownIds].join('/') + '）：' + JSON.stringify(mixed.map((x) => x.id + ' @ ' + x.s)));
+  return 'levelId=' + (r.level && r.level.id) + '，本关清单 ' + ownIds.size + ' 条，hint ' + r.hint.length
+    + ' 字；「本关」句里没有本关清单之外的号（自检：本关自己的号不误判 / 外来号必报）';
 });
 
 /* ================================================================== ② errorKinds 要说清命中了哪些词 */
