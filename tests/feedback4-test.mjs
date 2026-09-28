@@ -149,13 +149,19 @@ await check('P0-1 pickLiveFile：显式 file 优先（同名不同后缀也认�
   assert(r.picked.name === '交互 input.lua' && r.pickedBy === 'explicit', '显式 file 没优先：' + JSON.stringify(r).slice(0, 160));
   // ★ 显式 file 选中了、但**名字与 source 不同**时，判据必须如实报 false（不是"指了就算对"）
   assert(r.destBasenameMatchesSource === false && r.basenameMismatch === true, '显式 file 名字不符没标出来：' + JSON.stringify({ a: r.destBasenameMatchesSource, b: r.basenameMismatch }));
-  assert(/不一样/.test(r.warning || ''), '没给 warning：' + r.warning);
+  /*
+   * ★ 2026-09-30 降噪（真机实战）：**显式 `file` 时"文件名不一致"降级为 `note`** ——
+   *   "把生成物投成活文件"是每次都会遇到的正常用法，置顶 warning 会淹掉真警告。
+   *   ⇒ 这条断言改的是**契约**（warning → note），**不是放宽**：判据字段照旧钉死，且**多钉一条"warning 必须为空"**。
+   */
+  assert(r.warning === null, '显式 file 时不该再给置顶 warning 了（降级为 note）：' + r.warning);
+  assert(/不一样/.test(r.mismatchNote || ''), '没给 mismatchNote：' + r.mismatchNote);
   const same = pickLiveFile({ levelId: 3, liveFiles: live, source: 'D:\\交互 input.lua', file: '交互 input.lua' });
   assert(same.destBasenameMatchesSource === true && same.basenameMismatch === false, '显式 file 同名时该 true：' + JSON.stringify({ a: same.destBasenameMatchesSource }));
   let msg = null;
   try { pickLiveFile({ levelId: 3, liveFiles: live, source: 'D:\\x.lua', file: '不存在.lua' }); } catch (e) { msg = e.message; }
   assert(msg && /没有活文件/.test(msg), 'file 找不到没报错：' + msg);
-  return '显式 file 第一优先；名字不符 → destBasenameMatchesSource:false + warning；找不到 → 报错';
+  return '显式 file 第一优先；名字不符 → destBasenameMatchesSource:false + mismatchNote（warning 为空）；找不到 → 报错';
 });
 
 await check('P0-1 集成：写盘路径按 basename 命中（回执 dest / destBasenameMatchesSource）；对不上时**拒绝且活文件零改动**', async () => {

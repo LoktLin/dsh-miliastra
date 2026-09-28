@@ -55,6 +55,7 @@ export const SUITES = [
   { name: 'gen-test（生成器：文本渐变逐帧 / 结构体 JSON / 两条硬规则）', args: ['tests/gen-test.mjs'] },
   { name: 'pixelart-test（生成器：图片转像素画 —— 合并/量化/序列化 + 模拟器端到端）', args: ['tests/pixelart-test.mjs'] },
   { name: 'vfx-test（生成器：粒子特效 op=vfx-lua —— 13 预设/落程池子/驱动层逐字 + 模拟器端到端）', args: ['tests/vfx-test.mjs'] },
+  { name: 'fx-hardening-test（真机实战 5 个坑：缺 container / op=errors / 落盘提示 / 部署降噪 / preflight）', args: ['tests/fx-hardening-test.mjs'] },
   { name: 'sounds-test（音效库：1997 条目录 + 中英模糊搜索）', args: ['tests/sounds-test.mjs'] },
   { name: 'catalog-test（图片资源库：分类/颜色档/有无图/可渲染 + 三个新 op 的接线）', args: ['tests/catalog-test.mjs'] },
   { name: 'engine（`node --test` 上游单测）', args: ['--test', 'engine/**/*.test.mjs'] },

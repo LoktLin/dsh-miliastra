@@ -420,9 +420,27 @@ t('③e 缺交接值：ok:false + needsHandover（文案含"别自己编"）', a
     ok('', '（本机 .gil 有唯一候选，自动采用）');
     return;
   }
-  assert(Array.isArray(r.needsHandover) && r.needsHandover.some((x) => x.param === 'templateIndex'), '要 needsHandover.templateIndex');
+  /*
+   * ★ 2026-09-30：`container` **也是必填**（真机实测：漏它只有真机会 error）。
+   *   ⇒ 这条判据**不能**再写死"必须是 templateIndex" —— 本机 `.gil` 可能刚好只能自动拿到其中一个，
+   *     缺的另一个才是 `needsHandover` 里的那一条（实测本机就是"模板有、容器没有"）。
+   *   **没放宽**：① 两个必填值**至少**报出一个；② 缺的那个必须能在 `preflight` 里看到 FAIL；
+   *   ③ 下面再补一条"两个都不给 ⇒ 两个都报"的纯层用例（不依赖本机 `.gil`）。
+   */
+  const missing = (r.needsHandover || []).map((x) => x.param);
+  assert(missing.includes('templateIndex') || missing.includes('container'),
+    '两个必填交接值一个都没报：' + JSON.stringify(missing));
+  assert(Array.isArray(r.preflight) && r.preflight.some((p) => p.ok === false),
+    'preflight 里必须有 FAIL 项（这正是"还差哪几项"最该看的清单）');
   assert(r.error.includes('别自己编索引') || JSON.stringify(r.needsHandover).includes('别自己编'), '文案要含"别自己编"');
   assert(r.lua === undefined, '缺交接值不许给 lua');
+  // ③ 两个都不给（lib 层，不依赖本机 .gil）⇒ templateIndex 与 container 都要点名
+  const { vfxLua } = await import('../lib/vfx/index.mjs');
+  const bare = vfxLua({ op: 'vfx-lua', preset: 'star-rain' }, {});
+  const bareMissing = (bare.needsHandover || []).map((x) => x.param);
+  assert(bare.ok === false && bareMissing.includes('templateIndex') && bareMissing.includes('container'),
+    '两个交接值都不给时，两个都要点名：' + JSON.stringify(bareMissing));
+  return '缺 ' + JSON.stringify(missing) + '（+ 空 handover 时两个都报）';
 });
 
 t('③f preset:"list"：第 2 层按需枚举（13 条 + 关键参数 + 控件核算），summaryOnly 只留 id/中文名', async () => {

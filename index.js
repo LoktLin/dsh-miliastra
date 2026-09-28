@@ -46,7 +46,8 @@ import { snapshotFreshness } from './lib/freshness.mjs';
 import { lintUiFiles } from './lib/uilint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
-import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState } from './lib/gia.mjs';
+import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
+  findErrorRecords, parseFileLine, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
   playtestSummary, shouldHit, logSize,
@@ -1011,7 +1012,7 @@ export const PROMPT_GUIDE = [
   { tool: 'miliastra_health', when: '先用它定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）' },
   { tool: 'miliastra_code', when: '改完本地 lua 用 op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM；还会跑 Lua 结构校验）；op=inspect 看有没有被编辑器写回旧版；op=read 给 source=<绝对路径> 就只读看任意本地 .lua（不在沙箱里也行）' },
   { tool: 'miliastra_map', when: '判断「哪些控件能被脚本动态创建」用 op=clientui（只看无父节点的独立模板）' },
-  { tool: 'miliastra_log', when: '运行时结果一律用它取证（Lua 里 print，别靠猜）；op=runs 按「局」切分、op=metrics 汇总指标分布' },
+  { tool: 'miliastra_log', when: '运行时结果一律用它取证（Lua 里 print，别靠猜）；**怀疑有报错就先跑 `op=errors`**（按**形态**捞、不看标签 —— 真机的报错行可能没有任何 `[...]` 前缀，按 tag grep 一条都捞不到），它还能把 `文件:行号` 解析出来' },
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
   { tool: 'miliastra_probe', when: '需要运行时真相（某个控件能不能建、某个枚举叫什么名）时部署探针，让人重新试玩一局后 collect，**收完记得还原脚本**' },
@@ -1180,9 +1181,10 @@ const TOOLS = [
       + '\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：①画在哪=点哪算 ②坐标/尺寸是 **8 的倍数** ③字号只许 **64/52/28/22** ④**h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，模拟器不模拟它）；`passed` **只代表判据全满足，不代表 UI 合格**。'
       + '\n★ 其余（`op=rects` 的配对口径、`warnings[]` 两类已知坑、`op=fixbom`、多脚本 `mount` 判定）见 `docs/功能详解.md` §部署安全 / §已知坑 / §UI 门禁 / §矩形对账。'
       + '\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
-      + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua —— 不在沙箱里也行）｜'
-      + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua","file":"双相.lua"}`（投代码；**多脚本工程必须带 `file`**）｜'
-      + '`{"op":"lint-ui","dir":"D:\\\\code\\\\侦探1","pairs":[["ovB1","T_START"]],"summaryOnly":true}`（UI 门禁；不传 dir = 当前关卡活文件目录）',
+      + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua）｜'
+      + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua","file":"双相.lua"}`（**多脚本工程必须带 `file`**）｜'
+      + '`{"op":"lint-ui","dir":"D:\\\\code\\\\侦探1","summaryOnly":true}`（UI 门禁）'
+      + '（其余可照抄的请求体见 `docs/功能详解.md` §各 op 典型调用）',
     parameters: {
       type: 'object',
       properties: {
@@ -1229,7 +1231,7 @@ const TOOLS = [
         },
         nameHint: {
           type: 'string',
-          description: 'op=levels：关卡表的**变量名**（默认 `LEVELS`）。`local LEVELS = {` 与 `DATA.LEVELS = {` 都认；抽不到会列 `nameCandidates`。',
+          description: 'op=levels：关卡表的**变量名**（默认 `LEVELS`，`local` 与 `DATA.` 两种写法都认；抽不到会列 `nameCandidates`）。',
         },
         dir: {
           type: 'string',
@@ -1238,7 +1240,7 @@ const TOOLS = [
         pairs: {
           type: 'array',
           items: { type: 'object' },
-          description: 'op=rects / op=lint-ui：**人点名的**名字对照，如 `[["ovB1","T_START"]]` —— 画面在 view、热区在 input，名字往往不同，工具不猜语义。',
+          description: 'op=rects / op=lint-ui：**人点名的**名字对照，如 `[["ovB1","T_START"]]` —— 画面在 view、热区在 input，名字往往不同，**不猜语义**。',
         },
         files: {
           type: 'array',
@@ -1247,7 +1249,7 @@ const TOOLS = [
         },
         uiConfig: {
           type: 'object',
-          description: 'op=lint-ui：覆盖默认档位 —— `{grid:8, fonts:[64,52,28,22], lineHeight:1.4, slack:16}`；回执 `usedConfig` 报实际用的值。',
+          description: 'op=lint-ui：覆盖默认档位 —— `{grid:8, fonts:[64,52,28,22], lineHeight:1.4, slack:16}`（回执 `usedConfig`）。',
         },
       },
       additionalProperties: false,
@@ -1447,9 +1449,16 @@ const TOOLS = [
          *   放在末尾的 warnings[] 里，实测就是没人看（上一次静默写错文件正是这么发生的）。
          */
         const mismatchWarning = wpick.warning || null;
+        /*
+         * ★★ 降噪（2026-09-30）：显式 `file` 时的"文件名不一致"**降级为 `note`**（不再顶 warning）——
+         *   把生成物投成活文件是每次都会遇到的正常用法，置顶 warning 会淹掉真警告。
+         *   判据字段（`destBasenameMatchesSource` / `basenameMismatch`）**照旧保留**。
+         */
+        const mismatchNote = wpick.mismatchNote || null;
         return {
           ...(mismatchWarning ? { warning: mismatchWarning } : {}),
           ok: r.ok, op, level: { levelId: lv.levelId }, dest: destPath, ...picked, ...r,
+          ...(mismatchNote ? { note: mismatchNote } : {}),
           // ★ P1-3：已知坑（对象）与既有告警（字符串）并存在这里；**不阻断**，`ok` 语义不变
           warnings: warnings.length ? warnings : (r.warnings || []),
           knownPitCount: pit.warnings.length,
@@ -1742,30 +1751,33 @@ const TOOLS = [
   {
     name: 'miliastra_log',
     description:
-      TITLE + '：读客户端运行时日志 `.gia`。**这是运行时取证（Lua 里 print 出来的东西）的唯一入口**。'
-      + 'op=sessions 列出所有日志文件（倒序，带大小/时间）；op=tail 读某个文件的结构化记录；'
-      + 'op=grep 用 tag/pattern 过滤（tag 是子串，pattern 是正则）；op=tags 汇总标签（正文**开头**的 `[...]` 前缀，如 `[侦探1/view]`）；'
-      + '**op=runs 按「局」切分** —— 一个 `.gia` 里可能装多局：给每局一行摘要（开跑时刻 / 记录数 / 就绪行 / 异常次数 / **命中的词**）**并和上一局做 diff**。'
-      + '记录字段：time / account / player / channel / message。'
-      + '\n★ **`staleLog:true` = 不是本局**（回执带 `logBelongsTo`）—— 别当本局证据；本局落没落盘看 `miliastra_playtest op=status` 的 `localGia`。'
-      + '\n⚠️ **「试玩了却没有新日志」**：`.gia` 里**只有脚本自己 `print` 出来的东西** —— 最常见是压根没从编辑器开试玩，或编辑器「日志」面板里 `客户端脚本` 没勾上；'
-      + '（完整排查步骤见 `docs/功能详解.md` §按局读日志。）'
-      + '\n\n**典型调用**：`{"op":"runs"}`（这一局/这几局发生了什么，含局间 diff）｜'
-      + '`{"op":"metrics"}`（死亡位置分布与集中区，**不用改脚本**）｜'
+      TITLE + '：读客户端运行时日志 `.gia`（运行时取证的唯一入口）。'
+      + '`sessions` 列文件；`tail` 读结构化记录；`grep` 按 tag/pattern 过滤；`tags` 汇总**开头**的 `[...]` 前缀；'
+      + '**`runs` 按「局」切分**（每局一行摘要 + 与上一局 diff）；`metrics` 汇总指标分布。记录字段：time / account / player / channel / message。'
+      + '\n★ **`op=errors`：按「形态」捞报错，不看标签**（`stack traceback` / `attempt to index|call` / `nil value` / `缺少交接值` / '
+      + '`文件:行号` / `instantiate…nil` / `error`）—— 真机的报错行**可能完全没有 `[...]` 前缀**，按 tag grep **一条都捞不到**'
+      + '（实测那条致命的 `缺少交接值 CONFIG.CONTAINER_INDEX` 就是这么漏掉的）；给 `errors[]{time,run,channel,message,fileLine{file,line},kind}`'
+      + ' + `count` / `runsAffected`。'
+      + '\n★ **`staleLog:true` = 不是本局**（带 `logBelongsTo`）—— 别当本局证据；本局落没落盘看 `miliastra_playtest op=status` 的 `localGia`。'
+      + '\n⚠️ **「试玩了却没有新日志」有两种**：① 这一局一条 `print` 都没有；② **`.gia` 落盘会因时序失败** —— '
+      + '此时**「没有日志」不能当唯一判据**（实测本局没落盘、更早的局落了，而画面是正常的）⇒ **判画面用 `miliastra_shot`**。'
+      + '（完整排查见 `docs/功能详解.md` §按局读日志。）'
+      + '\n\n**典型调用**：`{"op":"errors"}`（**先跑这个**：不看标签捞「像报错/堆栈」的行，含 `文件:行号`）｜'
+      + '`{"op":"runs"}`（含局间 diff）｜`{"op":"metrics"}`（死亡位置分布，**不用改脚本**）｜'
       + '`{"op":"tail","tag":"miliastra-code","limit":30}`（按标签读正文）｜`{"op":"tail","run":1790171162}`（只看那一局）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics'], description: '默认 tail。' },
+        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics', 'errors'], description: '默认 tail。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用它对应的日志目录）。' },
-        file: { type: 'string', description: 'op=tail/grep/runs：日志文件名或绝对路径；省略=最新那个。' },
+        file: { type: 'string', description: 'op=tail/grep/runs/errors：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
         pattern: { type: 'string', description: '正文正则过滤。' },
         run: {
           type: 'string',
-          description: 'op=tail/grep/tags：**只看某一局**（epoch 秒或 instance 片段，与 playtest 的 epochSec 同源）。',
+          description: 'op=tail/grep/tags/errors：**只看某一局**（epoch 秒或 instance 片段，与 playtest 的 epochSec 同源）。',
         },
-        limit: { type: 'number', description: 'op=tail/grep：默认 120（**超限留最新**）；op=runs/metrics：默认 10 / 40；op=sessions：默认 40。' },
+        limit: { type: 'number', description: 'op=tail/grep：默认 120（**超限留最新**）；op=errors：默认 200（超了 `truncated:true`）；op=runs/metrics：默认 10 / 40；op=sessions：默认 40。' },
         last: { type: 'number', description: 'op=tail/grep：**只取尾部 N 条**；顺序永远是**先过滤 → 再取尾**，返回仍按时间正序。' },
         from: {
           type: 'string',
@@ -1775,7 +1787,8 @@ const TOOLS = [
         evt: { type: 'string', description: 'op=metrics：只看某个事件名（严格约定的 `evt=`）。' },
         summaryOnly: {
           type: 'boolean',
-          description: 'op=metrics：去掉直方图分箱，只留 `n/min/max/median/core/hotBin` 这些标量（有箱可去时 `binsOmitted` 报数量）。默认 false。',
+          description: 'op=metrics：去掉直方图分箱，只留 `n/min/max/median/core/hotBin` 这些标量（`binsOmitted` 报数量）'
+            + '；op=errors：只去 `errors[].message` 正文，**计数 / 分布 / `fileLine` / 提示一个不删**。默认 false。',
         },
         bins: { type: 'number', description: 'op=metrics：直方图分箱数（默认 10，1~50）。**集中区看 `core`，热区看 `hotBin`**。' },
         withRaw: { type: 'boolean', description: 'true=把整段结构化记录一起回传（默认只回 time/message 等要点）。' },
@@ -1804,11 +1817,21 @@ const TOOLS = [
        *   而在回执里它只是一行 `file` —— 子代理三次都把它当成了本局的证据。
        *   判据与 `miliastra_playtest op=status` 的 `localGia` 同源（文件里有没有本局那个 epochSec）。
        */
-      const staleness = logStalenessFor(lv, file, giaRunEpochs(gia.records));
+      const fileEpochs = giaRunEpochs(gia.records);
+      const staleness = logStalenessFor(lv, file, fileEpochs);
+      /*
+       * ★★ 「`.gia` 落盘会失败」的醒目提示（2026-09-30 真机实战）：
+       *   `staleLog:true` = 本局那个 epochSec 不在文件里 ⇒ 本局没落盘（而文件里有更早的局）。
+       *   旧版只给一句中性的"不属于本次会话"，实测把人误导成"脚本层没跑"——
+       *   而**同一段流程里画面其实是正常的** ⇒ 所以这里必须明说"这不代表没跑，判画面用截图"。
+       */
+      const landingHint = staleness.staleLog
+        ? landingMisleadingHint({ fileEpochSecs: fileEpochs, sessionEpochSec: staleness.sessionEpochSec, status: 'missing' })
+        : null;
       const staleFields = Object.assign({
         staleLog: staleness.staleLog,
         logBelongsTo: staleness.logBelongsTo,
-      }, staleness.staleLog ? {
+      }, landingHint ? { landingHint } : {}, staleness.staleLog ? {
         staleLogWarning: '⚠️ 这份日志**不属于本次会话**：' + staleness.logFreshnessNote
           + '（本局 epochSec ' + (staleness.sessionEpochSec == null ? '未知' : staleness.sessionEpochSec) + '）',
       } : {});
@@ -1844,6 +1867,63 @@ const TOOLS = [
           ok: false, op, file,
           error: '这个文件里没有 instance 含 "' + runQ + '" 的记录。先用 op=runs 看有哪些局（instance / epochSec）。',
         };
+      }
+
+      if (op === 'errors') {
+        /*
+         * ★★ `op=errors`（2026-09-30 真机实战）：**按形态捞报错，不看标签**。
+         *
+         * 为什么必须有这一路：真机那条致命的报错——
+         *   `缺少交接值 CONFIG.CONTAINER_INDEX：…` + `stack traceback:` + `特效 fx:428: in function 'requireHandover'`
+         * ——**完全没有 `[...]` 前缀**，所以 `op=tags` / `op=grep tag=` 一条都捞不到（作者连猜 4 轮关键词）。
+         * 纯函数在 `lib/gia.mjs` 的 `findErrorRecords`（这里只做编排：读文件 → 过滤 → 判 → 给可执行提示）。
+         */
+        const slim = args.summaryOnly === true;
+        const cap = clampNum(args.limit, 200, 1, 1000);
+        const found = findErrorRecords(pool, { limit: cap });
+        const kinds = Object.entries(found.kindCounts).map(([kind, count]) => ({
+          kind, count, what: ERROR_KIND_LABELS[kind] || null,
+        })).sort((a, b) => b.count - a.count);
+        /**
+         * ⚠️ 显式标 `Record<string, any>`：下面会**按条件**补 `hint` / `errorsOmitted` 两个字段，
+         *    不标的话 TS 会把 `out` 推成一个联合类型，后面几处赋值就报 TS2339（typecheck 门禁会红）。
+         * @type {Record<string, any>}
+         */
+        const out = {
+          ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+          ...staleFields,
+          runFilter: runQ,
+          scanned: pool.length,
+          count: found.count,
+          // `count` = 命中总数（未截断前）；`truncated` 后 `errors[]` 只留前 N 条 —— **结论字段一个不删**
+          returned: found.errors.length,
+          truncated: found.truncated,
+          limit: cap,
+          runsAffected: found.runsAffected,
+          runs: found.runs,
+          channels: found.channels,
+          kindCounts: found.kindCounts,
+          kinds,
+          forms: ERROR_FORMS.map((f) => ({ kind: f.kind, what: ERROR_KIND_LABELS[f.kind] || null })),
+          errors: found.errors,
+          summaryOnly: slim,
+        };
+        if (found.count === 0) {
+          out.hint = staleFields.landingHint
+            ? NO_ERRORS_HINT + ' ' + staleFields.landingHint
+            : NO_ERRORS_HINT;
+        } else {
+          out.hint = ERRORS_TAG_HINT + ' ★ 命中最多的是 `' + (kinds[0] ? kinds[0].kind : '?') + '`。';
+          if (staleFields.landingHint) out.hint += ' ' + staleFields.landingHint;
+        }
+        if (slim) {
+          // 只去正文（`errors[].message` 与 `errors[].kinds` 全文），**计数 / 分布 / 提示一个不删**
+          if (found.errors.length) out.errorsOmitted = found.errors.length;
+          out.errors = found.errors.map((e) => ({
+            time: e.time, run: e.run, channel: e.channel, kind: e.kind, fileLine: e.fileLine,
+          }));
+        }
+        return out;
       }
 
       if (op === 'metrics') {
@@ -2079,8 +2159,8 @@ const TOOLS = [
             + '。默认 game。',
         },
         process: { type: 'string', description: '直接指定进程名（不带 .exe），覆盖 target。' },
-        window: { type: 'string', description: '按窗口标题子串挑窗口（一个进程常有多窗口；默认取**面积最大**的）。' },
-        label: { type: 'string', description: '文件名里的标签，如「试玩第1局」（允许中文；非法字符会被清掉）。' },
+        window: { type: 'string', description: '按窗口标题子串挑窗口（默认取**面积最大**的）。' },
+        label: { type: 'string', description: '文件名里的标签，如「试玩第1局」（允许中文）。' },
         level: { type: 'string', description: 'op=burst（配合 awaitPlaytest）：关卡 ID / 品牌；省略=当前关卡。' },
         dir: { type: 'string', description: '覆盖截图目录（默认插件数据目录下的 shots\\）。' },
         keepLast: { type: 'number', description: 'op=clean：至少保留最新的 N 张（保护网，任何模式下都生效）。' },
@@ -2408,9 +2488,8 @@ const TOOLS = [
       + `**${PROBE_TEMPLATE_CHOICES.length} 个模板**：`
       + PROBE_TEMPLATE_CHOICES.join(' / ') + '（**别猜**：每个模板"能答什么问题"用 `op=list` 看 `info[]`）。'
       + 'op=render 只生成 Lua 不部署。探针只读，不做场景写操作。'
-      + '★ **`template:"custom"`**：现成模板答不了的问题，用 `lua` 传一段**完整 Lua** 当正文 ——'
-      + '它走**同一条流水线**（render → 人部署 → 试玩 → collect → 还原），部署前照样**先备份活文件**，正文也先过一遍**结构校验**。'
-      + '它**不给探针任何新能力**：仍然只能 print + 只读 API（细则见 `docs/功能详解.md` §探针）。'
+      + '★ **`template:"custom"`**：用 `lua` 传一段**完整 Lua** 当正文 —— 走**同一条流水线**（render → 人部署 → 试玩 → collect → 还原），'
+      + '部署前照样**先备份**、正文先过**结构校验**；它**不给探针新能力**（仍然只能 print + 只读 API；细则见 `docs/功能详解.md` §探针）。'
       + '\n\n**典型调用**：`{"op":"deploy","template":"ping"}` → 人重新试玩 → `{"op":"collect","tag":"P1"}` → '
       + '**还原**：`miliastra_code {"op":"restore"}`（不传 backup 就是用固定名那份）',
     parameters: {
@@ -2556,20 +2635,20 @@ const TOOLS = [
          * ⚠️ 这个 `all` **同时服务两个 op** —— 写成两个键会**静默覆盖**（JS 对象字面量后者胜），
          * 于是其中一个说明永远不会到达 AI（2026-09-24 被 ESLint 的 `no-dupe-keys` 抓到，见 `tools/lint.mjs`）。
          */
-        all: { type: 'boolean', description: 'op=keys：给**全量键名**；op=cases action=remove：删掉整个用例集（仍要 confirm:true）。' },
-        steps: { type: 'array', description: 'op=verify 的操作序列（形状见「下沉」§1）。', items: { type: 'object' } },
-        expect: { type: 'array', description: 'op=verify 的断言（八种 kind 见「下沉」§1）；`count` = **建了几个**。', items: { type: 'object' } },
-        cases: { type: 'array', description: 'op=verify 的**多用例**：每项 {name, steps, expect}。', items: { type: 'object' } },
+        all: { type: 'boolean', description: 'op=keys：给**全量键名**；op=cases remove：删整个用例集（要 confirm）。' },
+        steps: { type: 'array', description: 'op=verify 操作序列（形状见「下沉」§1）。', items: { type: 'object' } },
+        expect: { type: 'array', description: 'op=verify 断言（八种 kind 见「下沉」§1）；`count` = **建了几个**。', items: { type: 'object' } },
+        cases: { type: 'array', description: 'op=verify 多用例：每项 {name, steps, expect}。', items: { type: 'object' } },
         fromHistory: { type: 'boolean', description: 'op=verify：用**刚跑过那一局**当用例。' },
         frames: { type: 'array', description: 'op=frames 的时间点（模拟秒，升序，≤12 个）。', items: { type: 'number' } },
         diff: { type: 'boolean', description: 'op=frames：是否比帧间像素差（默认 true）。' },
         threshold: { type: 'number', description: 'op=frames：像素算「变了」的每通道阈值（默认 8）。' },
-        shotOnFail: { type: 'boolean', description: 'op=verify：没过时自动存一帧失败点 PNG 并回 `shot`（默认 true）。' },
+        shotOnFail: { type: 'boolean', description: 'op=verify：没过时自动存失败帧 PNG 并回 `shot`（默认 true）。' },
         stopOnFail: { type: 'boolean', description: 'op=verify 配 cases：第一个没过就停（默认 false）。' },
         keepRunning: { type: 'boolean', description: 'op=verify：判定后不停会话（默认停），便于接着 op=play。' },
         dt: { type: 'number', description: 'op=verify：重放的每步时长（秒）。' },
-        runtime: { type: 'boolean', description: 'op=controls：看**运行中**会话的控件树（脚本动态建的），需先 op=play start。' },
-        geom: { type: 'boolean', description: 'op=controls 配 runtime:true：再带世界坐标 `x/y` + 尺寸 `w/h` + `text`。' },
+        runtime: { type: 'boolean', description: 'op=controls：看**运行中**的控件树（脚本动态建的），需先 op=play start。' },
+        geom: { type: 'boolean', description: 'op=controls + runtime:true：带世界坐标 `x/y`、尺寸 `w/h`、`text`。' },
         namedOnly: { type: 'boolean', description: 'op=controls：只列有名字的控件（只有它们能按 name 断言）。' },
         nameContains: { type: 'string', description: 'op=controls：按名字子串过滤（中文可用）。' },
         kind: { type: 'string', description: 'op=controls：按类型过滤（container / textbox / image …）。' },
@@ -2577,10 +2656,10 @@ const TOOLS = [
         limit: { type: 'number', description: 'op=controls：最多回多少条（默认 200）。' },
         summaryOnly: { type: 'boolean', description: '只去体积不去结论（默认 true：state 不回 boxes 与 tree 全量）。' },
         treeLimit: { type: 'number', description: 'op=state 在 summaryOnly 下最多回多少条控件树（默认 200）。' },
-        patch: { type: 'object', description: 'op=patch 的编辑操作；数据写要带 expectedRevision。**每个 op 只认自己的字段**（见「下沉原文」§4）。' },
-        action: { type: 'string', description: 'op=play 的动作（start/get/step/pointer/key/click/pause/resume/stop… 全表见文档）。' },
+        patch: { type: 'object', description: 'op=patch 编辑操作；数据写带 expectedRevision，**每个 op 只认自己的字段**（§4）。' },
+        action: { type: 'string', description: 'op=play 的动作（start/get/step/pointer/key/click/pause/stop… 全表见文档）。' },
         args: { type: 'object', description: 'op=play 的参数（形状见「下沉原文」§7）。' },
-        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 取景：ui=编辑器视图，play=试玩画面（需先 start）。' },
+        target: { type: 'string', enum: ['ui', 'play'], description: 'op=shot 取景：ui=编辑器视图，play=试玩画面（先 start）。' },
         label: { type: 'string', description: 'op=shot 的文件名标签。' },
         reuse: { type: 'boolean', description: 'op=shot：固定名覆盖写、只留当前帧（不传 = 每张新建）。' },        format: { type: 'string', description: 'op=export / op=import 的格式（默认 gia）。' },
         assetType: { type: 'string', description: 'op=export 的资产类型过滤。' },
@@ -2593,14 +2672,14 @@ const TOOLS = [
           items: { type: 'object' },
           description: 'op=bind：**一次挂多个脚本** `[{path, source|sourceFrom}]`（就不看顶层 `source`）。',
         },
-        templates: { type: 'array', description: 'op=bind：模板清单 `[{guid,kind,name?}]`。`kind` 拿不准传 `"auto"`。', items: { type: 'object' } },
+        templates: { type: 'array', description: 'op=bind：模板清单 `[{guid,kind,name?}]`（`kind` 拿不准传 `"auto"`）。', items: { type: 'object' } },
         containerId: { type: 'number', description: 'op=bind：创作者交接的**容器节点索引**。' },
         scriptName: { type: 'string', description: 'op=bind：挂载名（见「下沉原文」§7）。' },
         mountTo: { type: 'string', description: 'op=bind：脚本挂在哪个控件（id 或名字；缺省=服务端容器节点）。' },
         fresh: { type: 'boolean', description: 'op=bind：默认 true = 清掉出厂工程与已有脚本重建。' },
         last: { type: 'boolean', description: 'op=bind：用**上次那份配方**重搭。' },
         keepFactory: { type: 'boolean', description: 'op=bind：保留出厂橱窗控件（默认清掉）。' },
-        run: { type: 'boolean', description: 'op=bind：默认 true = 搭完顺手起一次会话，回 `run.logs` 与 `controlCount`。' },
+        run: { type: 'boolean', description: 'op=bind：默认 true = 起一次会话，回 `run.logs` 与 `controlCount`。' },
         settleSec: { type: 'number', description: 'op=bind：起完会话先让时钟走几秒再读。' },
         saveAs: { type: 'string', description: 'op=bind：把工程存进工作区（缺省 bind-<脚本名>.save.json）。' },
         script: { type: 'object', description: 'op=bind：直接用源码代替读文件 `{path, source}`。' },
@@ -2608,7 +2687,7 @@ const TOOLS = [
         set: { type: 'string', description: 'op=cases：用例集的名字（建议「玩法-关卡」）。' },
         case: { type: 'string', description: 'op=cases action=remove：要删的用例名（不给 = 删整组）。' },
         confirm: { type: 'boolean', description: 'op=cases action=remove：删除不可恢复，必须显式 confirm:true。' },
-        manual: { type: 'boolean', description: '存用例时标**人工项**（配合 note）—— 不代跑也不代判，只在 `manual[]` 里等人打勾。' },
+        manual: { type: 'boolean', description: '存用例时标**人工项**（配合 note）；不代跑不代判，只在 `manual[]` 等人打勾。' },
         note: { type: 'string', description: '用例/人工项的说明：人工项必填「人要看什么、看到什么算过」。' },
         name: { type: 'string', description: 'op=bind：存档名；op=cases：set 的别名（manual 项缺省取 note 前 20 字）。' },
       },
@@ -2629,13 +2708,11 @@ const TOOLS = [
       + '\n★ **安全**：`source` / `out` 只认**绝对路径**；只收图片白名单、拒 0 字节 / >64 MiB；`get` 写 `out` **默认不覆盖**；`../` 一律拒。'
       + '\n★ **平台图片资源库**（`op=catalog`，快照 **1543 条 / 14 类**，id 空间 `100001~112042`）：按分类 / 颜色档 / `simOnly` / `imgExists` 过滤；'
       + '回 `id` + 分类 + 颜色档 + `imgExists`（**21 条"目录里有、图却缺"**）+ `simRenderable`（只有 `100001~100006`，那是**模拟器**画不画得出，不是平台限制）；单张图**没有名字** ⇒ 只回分类名。'
-      + '\n★ **平台音效库**（`op=sound-search` / `op=sound-get`，快照 **1997 条 / 7 类**）：`q` 按**中/英名**模糊搜（多词 = AND），'
-      + '五档 `exact>prefix>substring>subsequence>editDistance`（逐条 `matchKind`）。⛔ **不支持拼音/首字母**。'
+      + '\n★ **平台音效库**（`op=sound-search` / `op=sound-get`，快照 **1997 条 / 7 类**）：`q` 按**中/英名**模糊搜（多词 = AND），逐条给 `matchKind` 档位。⛔ **不支持拼音/首字母**。'
       + '\n★ **回执体积**：**发现调用给全表、过滤调用只给结论**（`catalog` 没给收窄条件、或 `sound-search` 没给 `q` 才带完整分类表，'
       + '其余只带 `categoriesOmitted` / `catalogOmitted`），要完整分类表或 sha256 传 `withMeta:true`（**只在挑分类 / 审计哈希时开**）。'
       + '\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景,像素画"}`｜'
-      + '`{"op":"catalog","category":"基础形状"}`｜`{"op":"catalog","colorKind":"mono","summaryOnly":true}`｜'
-      + '`{"op":"sound-search","q":"宝箱 开启","limit":5}`｜`{"op":"sound-get","id":"50214"}`',
+      + '`{"op":"catalog","category":"基础形状"}`｜`{"op":"sound-search","q":"宝箱 开启","limit":5}`',
     parameters: {
       type: 'object',
       properties: {
@@ -2667,15 +2744,15 @@ const TOOLS = [
         tag: { type: 'string', description: 'op=list：只看带这个标签的素材。' },
         limit: {
           type: 'number',
-          description: 'op=list：最多回几条（默认全部）；op=catalog：默认 50 / 上限 500；op=sound-search：默认 20 / 上限 100。超限**夹紧**并回 `truncated` / `limitClamped`。',
+          description: 'op=list：默认全部（catalog 50/500、sound-search 20/100）；超限**夹紧**并回 `limitClamped`。',
         },
         q: {
           type: 'string',
-          description: 'op=sound-search：关键词（中文名或英文名；空格分隔 = AND）。⚠️ **不支持拼音 / 首字母**。**不给 `q` = 发现调用**（只回分类表 + 快照元信息，一条音效都不回）。',
+          description: 'op=sound-search：关键词（中/英名；空格 = AND）。⚠️ **不支持拼音 / 首字母**。**不给 `q` = 发现调用**（只回分类表，0 条音效）。',
         },
         category: {
           type: 'string',
-          description: 'op=catalog：分类 id（`"8"`）或名字（「基础形状」，也可只给子串如「单色」）；op=sound-search：分类 id（`"5"`=物件；7 类见回执 `categories`）。给错报错并列合法值。',
+          description: 'op=catalog：分类 id（`"8"`）或名字（「基础形状」，也可给子串）；op=sound-search：分类 id（`"5"`=物件）。给错报错并列合法值。',
         },
         colorKind: {
           type: 'string',
@@ -2704,11 +2781,11 @@ const TOOLS = [
         },
         summaryOnly: {
           type: 'boolean',
-          description: 'op=list / op=catalog / op=sound-search：只去逐条 `items`，**计数 / 分类表 / `unverified` 等结论字段一个不删**。默认 false。',
+          description: 'op=list / op=catalog / op=sound-search：只去逐条 `items`，**计数 / 分类表 / `unverified` 等结论一个不删**。默认 false。',
         },
         withMeta: {
           type: 'boolean',
-          description: 'op=catalog / sound-search：把**完整分类表**与 sha256 元信息给我（**只在挑分类 / 审计哈希时开**）。默认 false。',
+          description: 'op=catalog / sound-search：把**完整分类表**与 sha256 元信息给我（**只在挑分类 / 审计哈希时开**）。',
         },
       },
       additionalProperties: false,
@@ -2727,12 +2804,14 @@ const TOOLS = [
       + '\nop=struct-json：结构体 / 字典 → **可直接导入千星的变量 JSON**（同时给「结构体定义」与「结构体变量值」两种形态；默认写 `struct_ype` —— 同仓库 **25 份真实样例全是它**）。'
       + '\nop=pixel-art：**图片 → 可部署的像素画 Lua** —— 图片控件的**矩形块拼图**，不是"一个像素一个控件"（关平滑降采样 → 行内行程 + 跨行同色同宽合并 → 可选 4bit）；要图源 + `cols`/`rows`/`maxSide` + `pixelSize`。'
       + '★ 像素画是**静态**的 ⇒ 产物**不加** `EnableUpdate`。'
-      + '\nop=vfx-lua：**UI 粒子特效 → 可部署的客户端 Lua**（**13 个预设**：星雨/飘雪/花瓣/火星上升/星光散射/彩纸/金币汇聚/宝箱汇聚/孔雀收拢/孔雀展开/萤火/气泡/火花；'
-      + '`preset:"list"` 列中文名 + 关键参数 + 控件核算，**清单不进 schema**）；驱动层**逐字取自真机定稿件**（晚建 / error 点名 / 无 pcall 掩盖）；贝塞尔预设用 `path` 给"钢笔"三手柄。'
-      + '\n★ 粒子贴图 `imageId` **真机可用平台全部 1543 个素材号**（`miliastra_asset op=catalog` 挑）；**只有模拟器**只画 `100001~100006` ⇒ 要预览就再传 `previewImageId`（回执两个号都回显）。'
+      + '\nop=vfx-lua：**UI 粒子特效 → 可部署的客户端 Lua**（13 个预设；`preset:"list"` 列中文名 + 关键参数 + 控件核算，**清单不进 schema**）；'
+      + '驱动层**逐字取自真机定稿件**（晚建 / error 点名 / 无 pcall 掩盖）；贝塞尔预设用 `path` 给"钢笔"三手柄。'
+      + '\n★ 粒子贴图 `imageId` **真机可用平台全部 1543 个素材号**（`op=catalog` 挑）；**只有模拟器**只画 `100001~100006` ⇒ 要预览就再传 `previewImageId`（两个号都回显）。'
       + '\n★ **硬规则**：结构体 ID 必须 **10 位数字**、单条文本 **≤500 字符**（超了千星导不进去；要放行传 `allowLongText:true`）—— **生成前校验，不通过直接报错**。'
-      + '\n★ **交接值**（控件模板索引 / 控件名 / 容器节点索引）AI 拿不到：**先自动读当前关卡 `.gil`**（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover[]` + `handoverCandidates[]`），**绝不编索引**；产物自己也会在运行时 `error` 点名。'
-      + '\n★ **未验证**（回执恒带 `unverified[]`）：`<size=N>`、4bit、24 个 ParamType 是否等于 7.1 **完整**类型集、粒子特效的**真机渲染 / 帧率 / 素材号**。`summaryOnly:true` **只去正文**，统计与 `nextStep` 必须留。'
+      + '\n★ **交接值**（控件模板索引 / 控件名 / 容器节点索引）AI 拿不到：**先自动读当前关卡 `.gil`**（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover[]` + `handoverCandidates[]`），**绝不编索引**。'
+      + '\n★ **`preflight[]`：投递前的可判定自检清单**（7 项 `{item,ok,why}`，`ok:null` = 判不了、**不猜**）。`op=vfx-lua` 的 **`container` 与 `templateIndex` 同等必填**'
+      + '（真机实测：漏 `container` 时 `deploy`/`lint`/`模拟器` **三环全绿、只有真机 `OnStart` 报 `缺少交接值 CONFIG.CONTAINER_INDEX` ⇒ 整屏没有粒子**）；产物顶部带**运行时依赖清单**。'
+      + '\n★ **未验证**（回执恒带 `unverified[]`）：`<size=N>`、4bit、24 个 ParamType 是否等于 7.1 **完整**类型集、特效的**真机渲染/帧率**。`summaryOnly` **只去正文**，统计与 `nextStep` 必留。'
       + '\n\n**典型调用**：`{"op":"text-gradient","text":"原神千星","colors":["#FFCC33","#37FFFF"],"colorStyle":"flow-forward","controlName":"标题"}`（**一次调用 → 可直接部署的逐帧刷字 Lua**）｜'
       + '`{"op":"struct-json","structId":"1077936165","fields":[{"key":"id","param_type":"Int32","value":1}]}`｜'
       + '`{"op":"pixel-art","assetId":"a1b2c3d4e5f60718","cols":32,"pixelSize":8,"templateIndex":1073741900,"container":1073741866}`｜'
