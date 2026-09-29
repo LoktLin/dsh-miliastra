@@ -166,19 +166,50 @@
   }
 
   /**
+   * ★ 清掉错误条与「出错」态（2026-09-30 作者反复看到「出错」+`net::ERR_ABORTED`）。
+   *
+   * 事实：**会话被替换的那一瞬间**（面板里切换预设 ⇒ `op=bind` 换了会话），页面正在发的轮询会被浏览器中断
+   * （`net::ERR_ABORTED`）。旧代码把这种**瞬断当成终态** ⇒ 停在「出错」**永不恢复**（作者每次都得手点「重载画面」）。
+   * ⇒ 配合 `api()` 的退避重试：**成功一次就调它**，把状态收回来。
+   */
+  function clearError() {
+    const box = $('fatal')
+    if (box && box.classList.contains('show')) box.classList.remove('show')
+    const st = $('state')
+    if (st && st.className === 'tag err') { st.className = 'tag'; st.textContent = '● 运行中' }
+  }
+
+  /**
    * 页面 → Host：POST /miliastra/engine（与面板、与「模拟器」工具同一个 simOp 入口，
    * 所以浏览器里玩的和 AI/面板操作的是**同一份工程状态、同一个会话**）。
    * ⚠️ 画面要 `summaryOnly:false`：`scene` 是节点级增量场景，默认的"瘦身"会把它砍掉（只留计数）。
    */
   async function api(action, args = {}) {
-    const res = await fetch(API, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ op: 'play', action, args: { view: true, ...args }, summaryOnly: false }),
-    })
-    const env = await res.json().catch(() => null)
-    if (!res.ok || !env || env.ok === false) throw new Error((env && env.error) || '试玩请求失败')
-    return env.data
+    /*
+     * ★ 瞬断**不该当终态**（2026-09-30）：会话被替换时页面在飞的请求会被中断（`net::ERR_ABORTED`），
+     *   旧实现直接 `.catch(showError)` ⇒ 永久「出错」、只能靠手点「重载画面」。
+     *   ⇒ 退避重试（最多 4 次、300/600/900ms）；**成功一次就清错误条**（`clearError`）。
+     *   ⚠️ 只对"网络级/中断"这类可重试失败有意义；`env.ok === false`（服务端明确报错）也会重试几次再抛，
+     *   但那时 showError 显示的是**真实原因**，不再被一次瞬断污染。
+     */
+    let lastErr = null
+    for (let i = 0; i < 4; i++) {
+      try {
+        const res = await fetch(API, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ op: 'play', action, args: { view: true, ...args }, summaryOnly: false }),
+        })
+        const env = await res.json().catch(() => null)
+        if (!res.ok || !env || env.ok === false) throw new Error((env && env.error) || '试玩请求失败')
+        clearError()
+        return env.data
+      } catch (error) {
+        lastErr = error
+        if (i < 3) await new Promise((r) => setTimeout(r, 300 * (i + 1)))
+      }
+    }
+    throw lastErr
   }
 
   /*
