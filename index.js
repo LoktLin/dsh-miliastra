@@ -73,6 +73,7 @@ import { vfxLua } from './lib/vfx/index.mjs';
  * 两个都是**只读快照**、不联网、不写文件；快照由 `tools/build-{image,sound}-catalog.mjs` 生成。
  */
 import { queryImageCatalog } from './lib/images/query.mjs';
+import { searchIcons } from './lib/images/icons.mjs';
 import { searchSounds, getSound } from './lib/sounds/search.mjs';
 import {
   SHOT_TARGETS, shotsDir, dataRoot, listShots, planClean, removeShots, captureWindow,
@@ -818,8 +819,10 @@ function assetOp(args = {}) {
   if (op === 'catalog') return queryImageCatalog(args);
   if (op === 'sound-search') return searchSounds(args);
   if (op === 'sound-get') return getSound(args);
+  /* ★ 图标检索（2026-09-30）：按**语义**找图 —— 名字/关键词是模型识图推断的（官方目录没有单图名称）。 */
+  if (op === 'icon-search') return searchIcons(args);
   throw new Error('没有这个 op：' + JSON.stringify(op)
-    + '（支持 add / list / get / remove / rebuild / prune / stats / catalog / sound-search / sound-get）');
+    + '（支持 add / list / get / remove / rebuild / prune / stats / catalog / sound-search / sound-get / icon-search）');
 }
 
 /* ---------------------------------------------- 生成器（miliastra_gen）
@@ -2723,9 +2726,10 @@ const TOOLS = [
       properties: {
         op: {
           type: 'string',
-          enum: ['add', 'list', 'get', 'remove', 'rebuild', 'prune', 'stats', 'catalog', 'sound-search', 'sound-get'],
+          enum: ['add', 'list', 'get', 'remove', 'rebuild', 'prune', 'stats', 'catalog', 'sound-search', 'sound-get', 'icon-search'],
           description: '默认 list。add 入库（要 source 或 base64）／get 取回／remove 摘索引／rebuild 重建索引／prune 报告不删／stats 总数与体积；'
-            + 'catalog = 查**平台图片资源库**；sound-search = 模糊搜音效；sound-get = 按 id 取单条音效。',
+            + 'catalog = 查**平台图片资源库**；sound-search = 模糊搜音效；sound-get = 按 id 取单条音效；'
+            + 'icon-search = **按语义找图标**（不传参数给分类概览、传 `q` 关键词搜、传 `id` 看单条）。',
         },
         id: {
           type: 'string',

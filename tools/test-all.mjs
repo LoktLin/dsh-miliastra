@@ -58,6 +58,7 @@ export const SUITES = [
   { name: 'fx-hardening-test（真机实战 5 个坑：缺 container / op=errors / 落盘提示 / 部署降噪 / preflight）', args: ['tests/fx-hardening-test.mjs'] },
   { name: 'sounds-test（音效库：1997 条目录 + 中英模糊搜索）', args: ['tests/sounds-test.mjs'] },
   { name: 'catalog-test（图片资源库：分类/颜色档/有无图/可渲染 + 三个新 op 的接线）', args: ['tests/catalog-test.mjs'] },
+  { name: 'icon-search-test（图标语义检索：三档回执 / 严格诚实口径 / 错误路径 / summaryOnly 只去正文）', args: ['tests/icon-search-test.mjs'] },
   { name: 'engine（`node --test` 上游单测）', args: ['--test', 'engine/**/*.test.mjs'] },
 ];
 

@@ -12,6 +12,14 @@
 
 ## [未发布]
 
+- **`miliastra_asset op=icon-search`（新）**：按**语义**找平台图标（1543 条）—— 不传参给分类概览、`q` 关键词（中英、空格=AND）、
+  `id` 看单条全字段、`shape`/`colorKind`/`category`/`simOnly` 收窄；名字来自**模型识图推断**（恒带 `nameSource:"vision-inferred"` + `confidence`），
+  未识别的 121 条标 `recognized:false` 且**不编名**；`summaryOnly` 只去正文（counts/hint/unverified/doc 一个不删）。
+  数据 `lib/images/icons.json`（0.9 MB / 1543 条）由 `tools/build-icon-index.mjs` 合并「目录事实 + 本地像素 + 视觉识别」三源生成。
+- **面板第四个 tab「预制效果」（1:2）**：左 = 预设下拉 + 发射器属性**可覆盖项** + 「生成 Lua / 一键复制 / 预览」；右 = 模拟器试玩页。
+  面板改动**只作用于本次生成**（不写回预设库），且**没有**「一键投到活文件」按钮（改关卡必须走工具、由人决定）。
+- GUI：顶栏显示**当前版本号**；打开面板查一次 GitHub tags ⇒ 不是最新则显**红按钮「插件有更新」**（**查不到就说"没查到"，不冒充"已是最新"**）；面板右下角可拖大。
+
 > 下一个版本的东西写这里。
 
 ### 新增
