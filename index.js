@@ -1812,7 +1812,22 @@ const TOOLS = [
         ? (args.file.includes('\\') ? args.file : dir + '\\' + args.file)
         : (listGia(dir, 1)[0] || {}).path;
       if (!file) throw new Error('该目录下没有 .gia 日志文件——先在编辑器里试玩一局。');
-      const gia = readGia(file);
+      /*
+       * ★ `readGia` 自己**没兜住"文件不存在"**（2026-09-30 实测）：`.gia` 被清理/轮转后，
+       *   `op=errors`（以及同路的 tail/grep/runs）会让 `ENOENT` 栈冒到调用方，
+       *   而本仓约定是回 `{ok:false, error}`；`fx-hardening-test ②e` 正是被这个绊红的
+       *   （它的兜底期待的是 `r.error`，见测试第 272-275 行）。这里兜一层转成**优雅回执**。
+       */
+      let gia;
+      try {
+        gia = readGia(file);
+      } catch (e) {
+        gia = {
+          ok: false,
+          error: '读不到日志文件：' + String((e && e.message) || e)
+            + ' —— 日志目录里的 `.gia` 会随会话轮转或被清理；换一个 `file`，或省略 `file` 用**最新那份**。',
+        };
+      }
       if (!gia.ok) return { ok: false, op, file, error: gia.error };
       const withMsg = gia.records.filter((r) => r.message);
       /*
