@@ -2721,7 +2721,15 @@ const TOOLS = [
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
-      return await simOp(args, {});
+      /*
+       * ★ 回执**必须带 `ok`**（2026-09-30 AI 侧易用性实测发现）：全仓只有 `miliastra_sim` 不带 ——
+       *   它把引擎回执原样透出去（`{version, canvas, ...}` / `{bound, treeCount, ...}`）。
+       *   实测后果两次：`op=bind` 明明成功，调用方按 `r.ok` 判定 ⇒ **误报失败**（面板显示"预览失败"、
+       *   AI 侧同样会误判 —— `if (r.ok)` 是任何调用者的第一反应）。这里补 `ok:true`；
+       *   **已有 `ok` 的不动**（尤其别把 `false` 盖成 `true`）。
+       */
+      const simR = await simOp(args, {});
+      return (simR && typeof simR === "object" && !Array.isArray(simR) && simR.ok === undefined) ? { ok: true, ...simR } : simR;
     },
   },
 
