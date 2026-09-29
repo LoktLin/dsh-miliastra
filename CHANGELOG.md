@@ -12,6 +12,13 @@
 
 ## [未发布]
 
+- **回执契约（AI 易用性实测后立）**：`miliastra_sim` 的回执**补 `ok`**（此前全仓只有它不带 —— `op=bind` 明明成功，
+  调用方按 `r.ok` 判定会**误报失败**）；sim 的**守卫错误改为回执**（`op=hud` 无会话等不再抛异常，
+  消息一字不改、只换形式）；新增 **`tests/receipt-contract-test.mjs`** 机制性门禁：
+  **必有 `ok`｜`ok:false` 必带 `error`｜不许抛异常**（16 条只读用例）。
+- `miliastra_health` 的 **brief 档补 `version`**（此前读不到版本号，只能绕道 `miliastra_echo`）；
+  `miliastra_log` 读不到 `.gia`（轮转/被清理是常态）时**回 `ok:false` 而不是抛 ENOENT 栈**。
+
 - **`miliastra_asset op=icon-search`（新）**：按**语义**找平台图标（1543 条）—— 不传参给分类概览、`q` 关键词（中英、空格=AND）、
   `id` 看单条全字段、`shape`/`colorKind`/`category`/`simOnly` 收窄；名字来自**模型识图推断**（恒带 `nameSource:"vision-inferred"` + `confidence`），
   未识别的 121 条标 `recognized:false` 且**不编名**；`summaryOnly` 只去正文（counts/hint/unverified/doc 一个不删）。

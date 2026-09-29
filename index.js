@@ -2728,7 +2728,18 @@ const TOOLS = [
        *   AI 侧同样会误判 —— `if (r.ok)` 是任何调用者的第一反应）。这里补 `ok:true`；
        *   **已有 `ok` 的不动**（尤其别把 `false` 盖成 `true`）。
        */
-      const simR = await simOp(args, {});
+      let simR;
+      try {
+        simR = await simOp(args, {});
+      } catch (e) {
+        /*
+         * ★ 守卫错误**回回执、不回异常**（2026-09-30 AI 侧易用性实测）：
+         *   例 `op=hud` 没有在跑的会话时原本 `throw` —— 调用方（尤其 AI）必须自己 try/catch，
+         *   否则**整轮被打断**；而全仓其它工具是回 `{ok:false,error}`。
+         *   **消息一个字不改**，只把"形式"换成回执（AI 拿到的信息量不减、但不会再炸掉调用）。
+         */
+        return { ok: false, error: String((e && e.message) || e) };
+      }
       return (simR && typeof simR === "object" && !Array.isArray(simR) && simR.ok === undefined) ? { ok: true, ...simR } : simR;
     },
   },

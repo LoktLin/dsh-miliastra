@@ -59,6 +59,7 @@ export const SUITES = [
   { name: 'sounds-test（音效库：1997 条目录 + 中英模糊搜索）', args: ['tests/sounds-test.mjs'] },
   { name: 'catalog-test（图片资源库：分类/颜色档/有无图/可渲染 + 三个新 op 的接线）', args: ['tests/catalog-test.mjs'] },
   { name: 'icon-search-test（图标语义检索：三档回执 / 严格诚实口径 / 错误路径 / summaryOnly 只去正文）', args: ['tests/icon-search-test.mjs'] },
+  { name: 'receipt-contract-test（回执契约：必有 ok / ok:false 必带 error / 不许抛异常）', args: ['tests/receipt-contract-test.mjs'] },
   { name: 'engine（`node --test` 上游单测）', args: ['--test', 'engine/**/*.test.mjs'] },
 ];
 

@@ -22,6 +22,18 @@ import crypto from 'node:crypto';
 import { TOOLS } from '../index.js';
 import { readLuaAt, MAX_EXTERNAL_READ_BYTES } from '../lib/codefile.mjs';
 
+/**
+ * ★ 同 `refusal`，但**两种拒绝形式都认**（2026-09-30 起 sim 的守卫错误统一回执、不抛栈）：
+ *   ① `{ok:false, error}`（回执式，**新约定**）  ② 抛异常（旧约定，保留兼容）
+ * 返回错误文字；两种都不是则 `null`（断言据此判红）。
+ */
+const refusalMsg = async (fn) => {
+  try {
+    const r = await fn();
+    return (r && r.ok === false && r.error) ? String(r.error) : null;
+  } catch (e) { return (e && e.message) || String(e); }
+};
+
 let pass = 0;
 let fail = 0;
 const failures = [];
@@ -193,7 +205,7 @@ await check(`★ 太大：超过 ${MAX_EXTERNAL_READ_BYTES} 字节（8 MB）就�
   const r2 = readLuaAt(EXT, { maxBytes: 8 });
   assert(r2.ok === false && /太大/.test(r2.error), 'readLuaAt 的 maxBytes 分支没生效：' + JSON.stringify(r2).slice(0, 160));
   // ③ op=handover source= 走的是**同一套校验**（复用 readLuaAt）—— 同一个文件在它那里也必须被拒
-  const hoMsg = await refusal(() => simTool.execute({ op: 'handover', source: huge }));
+  const hoMsg = await refusalMsg(() => simTool.execute({ op: 'handover', source: huge }));
   assert(hoMsg !== null && /太大/.test(hoMsg), 'op=handover source= 没把 8 MB 上限这条判据复用过来：' + hoMsg);
   fs.unlinkSync(huge);
   return r.error;
@@ -368,7 +380,7 @@ await check('★ source 分支复用 op=read 那套校验（源码断言：走 r
 });
 
 await check('★ 相对路径：op=handover source=… 拒绝（以前会按进程当前目录解析 —— 静默读错文件）', async () => {
-  const msg = await refusal(() => simTool.execute({ op: 'handover', source: '背景图片.lua' }));
+  const msg = await refusalMsg(() => simTool.execute({ op: 'handover', source: '背景图片.lua' }));
   assert(msg !== null, '相对路径竟然被接受了（会按进程当前目录解析到别的文件）');
   assert(/绝对路径/.test(msg), '报错没点明"要绝对路径"：' + msg);
   assert(/运行目录|盘符/.test(msg), '没给可行动的下一步：' + msg);
@@ -378,7 +390,7 @@ await check('★ 相对路径：op=handover source=… 拒绝（以前会按进�
 await check('★ 二进制（含 NUL 字节）：op=handover source=… 拒绝按文本读', async () => {
   const bin = path.join(tmp, 'handover二进制.lua');
   fs.writeFileSync(bin, Buffer.concat([Buffer.from('-- 头\nlocal T = 1073741868\n', 'utf8'), Buffer.from([0x00, 0x01, 0xff])]));
-  const msg = await refusal(() => simTool.execute({ op: 'handover', source: bin }));
+  const msg = await refusalMsg(() => simTool.execute({ op: 'handover', source: bin }));
   assert(msg !== null, '二进制竟然被当文本读了（会把乱码当成候选交接值）');
   assert(/二进制|NUL/.test(msg), '报错没点明二进制/NUL：' + msg);
   return msg.slice(0, 60) + '…';
