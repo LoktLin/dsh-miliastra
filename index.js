@@ -540,7 +540,18 @@ function classifyControls(clientUI) {
   const likelyTemplates = standalone.filter((r) => CLIENT_CONTROL_NAME.test(r.name));
   const likelyContainers = standalone.filter((r) => r.name === '容器节点');
   const structural = standalone.filter((r) => STRUCTURAL_NAME.test(r.name)).map((r) => ({ id: r.id, name: r.name }));
-  return { standalone, likelyTemplates, likelyContainers, structural };
+  /*
+   * ★ E6（2026-09-29 实战反馈）：`likelyTemplates` 里混进了**容器节点**，与 `likelyContainers` 重叠 ⇒
+   *   调用方看着像"4 个候选模板"，其中两个其实不能当控件模板用。
+   *   ⇒ 每条给 `role`（container / control），并把重叠**点名**（不删字段：同一批记录两种用途，删了会丢信息）。
+   */
+  const roleOf = (r) => (likelyContainers.some((c) => c.id === r.id) ? 'container' : 'control');
+  const withRole = (list) => list.map((r) => Object.assign({}, r, { role: roleOf(r) }));
+  const overlapIds = likelyTemplates.filter((r) => likelyContainers.some((c) => c.id === r.id)).map((r) => r.id);
+  const roleNote = overlapIds.length
+    ? '⚠️ 有 ' + overlapIds.length + ' 条同时在 likelyTemplates 与 likelyContainers 里（' + overlapIds.join(', ') + '）—— 它们是**容器节点**，不是可创建的控件模板。看 `role` 字段分辨；容器节点不该当控件模板用（控件要 InstantiateClientUIControl，容器由创作者在画布上摆）。多个候选形态相同时：让创作者点名，或删掉多余的那些。'
+    : null;
+  return { standalone, likelyTemplates: withRole(likelyTemplates), likelyContainers: withRole(likelyContainers), structural, roleNote };
 }
 
 /**
@@ -686,6 +697,25 @@ function runLintUiOp({ dir, scope, args, level = null }) {
     checks[k] = withWhere(list);
     if (summaryOnly && list.length > 3) checksOmitted[k] = list.length - 3;
   }
+  /*
+   * ★ E1②（2026-09-29 实战反馈）：**图片控件没指定图源 ⇒ 真机渲染成 `?` 占位符，而模拟器会给它补一张默认方块 ⇒ 离线全绿**。
+   *   这条只能靠**静态**拦：文件里出现 `InstantiateClientUIControl(` 却没有任何 `:SetImage(` ⇒ warn（不是 error：
+   *   也可能控件本身就不需要图源）。判据只报事实与位置，不替作者判"必须改"。
+   */
+  const imgSrcWarn = [];
+  for (const f of rows) {
+    const lines = String(f.text).split(/\r?\n/);
+    const instLine = lines.findIndex((l) => /InstantiateClientUIControl\s*\(/.test(l));
+    if (instLine < 0) continue;
+    if (/:SetImage\s*\(/.test(f.text)) continue;
+    imgSrcWarn.push({
+      file: f.name, line: instLine + 1,
+      message: 'IMAGE_WITHOUT_SOURCE：本文件用 InstantiateClientUIControl 建控件，但**一处 `:SetImage(` 都没有** —— '
+        + '若这些控件来自「图片」模板，**真机会渲染成 `?` 占位符**（模拟器会补一张默认方块，离线看不出来）。'
+        + '拿不准就显式调 `SetImage(Enum.ImageSource.StaticReference, <号>)`（号见 miliastra_asset op=catalog）。'
+    });
+  }
+  if (imgSrcWarn.length) checks.imageWithoutSource = withWhere(imgSrcWarn);
   return {
     ok: true, op: 'lint-ui',
     dir: root, scope,
@@ -1188,17 +1218,15 @@ const TOOLS = [
   {
     name: 'miliastra_code',
     description:
-      TITLE + '：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。'
-      + '**部署一律：先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**（带 BOM 原神会报 Lua 错，原文见 `docs/功能详解.md` §部署安全）。'
-      + 'op=read 读**沙箱活文件**的正文；**给了 `source`（绝对路径）就改读那个文件**（只读：不备份、不写入）。'
-      + 'op=deploy 把 source 投进沙箱（**覆盖前自动备份** + **Lua 结构校验**，默认 lintMode:"strict" 直接拒绝）；'
-      + 'op=inspect 只体检不改动；op=backups 列全部备份；op=backup 手动备一份；op=restore 覆盖活文件（**backup 可不传** = 固定名那份 `<原名>.bak`）。'
-      + '⚠️ 部署不会热加载正在进行的试玩：要 停试玩 → 部署 → 重开试玩。'
-      + '\n★ **安全约定**：活文件是**唯一副本** ⇒ ①**备份失败就中止覆盖**；②**原子写**；③写完必校验 SHA、**不过就自动回滚**；④备份两份、**永不自动删**；⑤`noBackup` 要配 `allowNoBackup:true`。'
-      + '\n★ **`op=deploy` 选目标活文件只用名字，不按「最近改动」猜**：`file` > `source` 的同名活文件 > 目录里只有 1 个 > 拒绝写盘并列候选；回执恒带 `dest`。'
-      + '\n★ **部署指纹**：deploy 成功后记 `.miliastra-deploy.<脚本名>.json`；`op=inspect` 比对不上就直说「多半是编辑器把脚本面板里的内存版存回了磁盘」，并给字节差/行数差。'
-      + '\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：①画在哪=点哪算 ②坐标/尺寸是 **8 的倍数** ③字号只许 **64/52/28/22** ④**h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，模拟器不模拟它）；`passed` **只代表判据全满足，不代表 UI 合格**。'
-      + '\n★ 其余（`op=rects` 的配对口径、`warnings[]` 两类已知坑、`op=fixbom`、多脚本 `mount` 判定）见 `docs/功能详解.md` §部署安全 / §已知坑 / §UI 门禁 / §矩形对账。'
+      TITLE + '：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。**部署一律：先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**（带 BOM 原神会报 Lua 错）。'
+      + '\nop=read 读沙箱活文件正文（**给了 `source` 绝对路径就读那个文件**，只读不写）；op=deploy 投进去（**覆盖前自动备份** + Lua 结构校验，默认 `lintMode:"strict"` 直接拒绝）；op=inspect 只体检；op=backup / op=backups / op=restore（**backup 可不传** = 固定名 `<原名>.bak`）；op=fixbom。'
+      + '\n⚠️ 部署**不会热加载**正在进行的试玩：要 **停试玩 → 部署 → 重开试玩**。'
+      + '\n★ **安全约定**：活文件是**唯一副本** ⇒ ①备份失败就中止覆盖 ②原子写 ③写完校验 SHA、不过**自动回滚** ④备份两份、**永不自动删** ⑤跳过备份要配 `allowNoBackup:true`。'
+      + '\n★ **`op=deploy` 选目标只用名字、不按「最近改动」猜**：`file` > `source` 同名活文件 > 目录里只有 1 个 > 拒绝并列候选；回执恒带 `dest`。'
+      + '\n★ **部署指纹**：成功后记 `.miliastra-deploy.<脚本名>.json`；`op=inspect` 对不上就直说「多半是编辑器把脚本面板里的内存版存回了磁盘」，并给字节差 / 行数差。'
+      + '\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：①画在哪=点哪算 ②坐标/尺寸是 **8 的倍数** ③字号只许 **64/52/28/22** ④**h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，模拟器不模拟）；`passed` **只代表判据全满足，不代表 UI 合格**。'
+      + '\n★ 另见 `docs/功能详解.md`：`op=rects` 配对口径 / `warnings[]` 两类已知坑 / 多脚本 `mount` 判定 / 各 op 典型调用。'
+      + '\n\n'
       + '\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜'
       + '`{"op":"read","source":"C:/Users/me/Desktop/背景图片.lua","head":60}`（只读看任意本地 .lua）｜'
       + '`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua","file":"双相.lua"}`（**多脚本工程必须带 `file`**）｜'
@@ -2222,7 +2250,8 @@ const TOOLS = [
         bringToFront: { type: 'boolean', description: '默认 true：抓不到时把目标窗口拉到前台再抓。' },
         keepWindowOnTop: { type: 'boolean', description: '默认 false：退回屏幕抓取时临时把目标窗口置顶。' },
         count: { type: 'number', description: 'op=burst：连拍几张（默认 5，上限 20）。' },
-        burstMs: { type: 'number', description: 'op=burst：两张之间的**额外等待**毫秒（默认 800）。⚠️ **不是「每 N 毫秒一张」**（真实帧距看 `measuredIntervalMs`）。' },
+        burstMs: { type: 'number', description: 'op=burst：两张之间的**额外等待**毫秒（默认 800）。⚠️ 不是「每 N 毫秒一张」（真实帧距看 `measuredIntervalMs`）。' },
+        extraWaitMs: { type: 'number', description: 'op=burst：`burstMs` 的别名（更准确；都传时以它为准）。' },
         awaitPlaytest: { type: 'boolean', description: 'op=burst：**默认 false（立刻开拍）**；true = 「等开跑 → 再等 afterSec 秒 → 连拍」**一次调用完成**。' },
         afterSec: { type: 'number', description: 'op=burst（配合 awaitPlaytest）：命中开跑后等 N 秒才开拍（默认 0，上限 120）。⚠️ 短局改用 startAfterSec + untilGone。' },
         startAfterSec: { type: 'number', description: 'op=burst：命中开跑后等 N 秒**立刻开拍**（默认 = afterSec）—— 短局给小值，配 `untilGone:true`。' },
@@ -2314,7 +2343,7 @@ const TOOLS = [
        * 分成「先 op=wait 再逐个 capture」两次调用时，两次之间的往返延迟（1~3 秒）会毁掉时间精度。
        */
       if (op === 'burst') {
-        const plan = planBurst({ count: args.count, intervalMs: args.burstMs });
+        const plan = planBurst({ count: args.count, intervalMs: (args.extraWaitMs != null ? args.extraWaitMs : args.burstMs) });
         let playtest = null;
         let startedAtMs = null;
         let runWindow = null;
@@ -2765,6 +2794,22 @@ const TOOLS = [
          */
         return { ok: false, error: String((e && e.message) || e) };
       }
+      /*
+       * ★ E10（2026-09-29 实战反馈）：**模拟器不渲染富文本**（`<color=#…>` / `<size=…>` 在画面上是原始标签），
+       *   真机正常（已实测）—— 工具以前不主动说 ⇒ "画面上有标签"会被误判成产物有问题。
+       *   ⇒ 画面类 op（frames / shot）的回执带 `simLimitations[]`（**只陈述模拟器边界，不改任何判据**）。
+       */
+      if (simR && typeof simR === "object" && !Array.isArray(simR) && (args.op === "frames" || args.op === "shot")) {
+        if (!Array.isArray(simR.simLimitations)) {
+          simR.simLimitations = [{
+            what: "模拟器不渲染富文本",
+            symptom: "画面（PNG / HUD）里出现 <color=…> / <size=…> 原始标签",
+            real: "真机正常（已实测）—— 这不是产物 bug",
+            other: "官方素材渲染、联机、手感同样不在模拟器覆盖内；视觉终验看真机",
+          }];
+        }
+      }
+
       return (simR && typeof simR === "object" && !Array.isArray(simR) && simR.ok === undefined) ? { ok: true, ...simR } : simR;
     },
   },
@@ -2772,15 +2817,14 @@ const TOOLS = [
   {
     name: 'miliastra_asset',
     description:
-      TITLE + '：**插件级素材库** + **两个平台目录通道**（图片资源库 / 音效库 —— 只报**目录事实**，**不落图片或音频字节**）。'
-      + '\n★ **插件素材库**：**按内容寻址**（文件名 = `sha256` 前 16 位 + 扩展名，同图只存一份 ⇒ `deduped:true`），落**插件数据目录** `assets/`'
-      + '（**不进游戏存档、不碰活文件**）。**磁盘是用户的**：素材**绝不自动删** —— `op=remove` 要显式 `confirm:true`（连字节删再加 `deleteFile:true`）；`op=prune` **只报告不删**。'
-      + '\n★ **安全**：`source` / `out` 只认**绝对路径**；只收图片白名单、拒 0 字节 / >64 MiB；`get` 写 `out` **默认不覆盖**；`../` 一律拒。'
-      + '\n★ **平台图片资源库**（`op=catalog`，快照 **1543 条 / 14 类**，id 空间 `100001~112042`）：按分类 / 颜色档 / `simOnly` / `imgExists` 过滤；'
-      + '回 `id` + 分类 + 颜色档 + `imgExists`（**21 条"目录里有、图却缺"**）+ `simRenderable`（只有 `100001~100006`，那是**模拟器**画不画得出，不是平台限制）；单张图**没有名字** ⇒ 只回分类名。'
-      + '\n★ **平台音效库**（`op=sound-search` / `op=sound-get`，快照 **1997 条 / 7 类**）：`q` 按**中/英名**模糊搜（多词 = AND），逐条给 `matchKind` 档位。⛔ **不支持拼音/首字母**。'
-      + '\n★ **回执体积**：**发现调用给全表、过滤调用只给结论**（`catalog` 没给收窄条件、或 `sound-search` 没给 `q` 才带完整分类表，'
-      + '其余只带 `categoriesOmitted` / `catalogOmitted`），要完整分类表或 sha256 传 `withMeta:true`（**只在挑分类 / 审计哈希时开**）。'
+      TITLE + '：**插件素材库** + 两个平台目录通道（图片资源库 / 音效库 —— 只报目录事实，不落图片或音频字节）。'
+      + '\n★ 插件素材库：**按内容寻址**（文件名 = sha256 前 16 位 + 扩展名，同图只存一份 ⇒ `deduped:true`），落**插件数据目录**（不进游戏存档、不碰活文件）。**磁盘是用户的**：素材**绝不自动删**（`op=remove` 要 `confirm:true`，连字节删再加 `deleteFile:true`；`op=prune` 只报告不删）。'
+      + '\n★ 安全：`source`/`out` 只认**绝对路径**；只收图片白名单、拒 0 字节 / >64 MiB；`get` 写 `out` **默认不覆盖**；`../` 一律拒。'
+      + '\n★ 平台图片资源库（`op=catalog`，1543 条 / 14 类，id 100001~112042）：过滤分类/色档/`simOnly`/`imgExists`；**单张图没有名字** ⇒ 只回分类名（几何号 100001~100006 例外，回 `meaning`）。'
+      + '\n★ 平台音效库（`op=sound-search` / `sound-get`，1997 条 / 7 类）：`q` 按**中英名**模糊搜（多词 = AND），逐条给 `matchKind`；⛔ **不支持拼音/首字母**。'
+      + '\n★ **回执体积**：**发现调用**给全表、**过滤调用**只给结论（`categoriesOmitted` 报省了几行）；要完整分类表或 sha256 传 `withMeta:true`。'
+      + '\n★ 另见 `docs/功能详解.md`。'
+      + '\n\n'
       + '\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景,像素画"}`｜'
       + '`{"op":"catalog","category":"基础形状"}`｜`{"op":"sound-search","q":"宝箱 开启","limit":5}`',
     parameters: {
@@ -2870,19 +2914,17 @@ const TOOLS = [
   {
     name: 'miliastra_gen',
     description:
-      TITLE + '：**离线生成器** —— 一次调用就出**能直接用的东西**：默认出**可部署的 Lua 源码**（不是数据模型、不是半成品）。'
-      + '\nop=text-gradient：文本 → 色标采样 → 风格（流动 / 淡入淡出 / 跳字）→ **逐帧**富文本，包成一段**逐帧刷字的客户端 Lua**（`OnStart` 开 `EnableUpdate`、`OnUpdate(dt)` 按 `fps` 换帧、第一帧立刻上屏）。'
-      + '\nop=struct-json：结构体 / 字典 → **可直接导入千星的变量 JSON**（同时给「结构体定义」与「结构体变量值」两种形态；默认写 `struct_ype` —— 同仓库 **25 份真实样例全是它**）。'
-      + '\nop=pixel-art：**图片 → 可部署的像素画 Lua** —— 图片控件的**矩形块拼图**，不是"一个像素一个控件"（关平滑降采样 → 行内行程 + 跨行同色同宽合并 → 可选 4bit）；要图源 + `cols`/`rows`/`maxSide` + `pixelSize`。'
-      + '★ 像素画是**静态**的 ⇒ 产物**不加** `EnableUpdate`。'
-      + '\nop=vfx-lua：**UI 粒子特效 → 可部署的客户端 Lua**（13 个预设；`preset:"list"` 列中文名 + 关键参数 + 控件核算，**清单不进 schema**）；'
-      + '驱动层**逐字取自真机定稿件**（晚建 / error 点名 / 无 pcall 掩盖）；贝塞尔预设用 `path` 给"钢笔"三手柄。'
-      + '\n★ 粒子贴图 `imageId` **真机可用平台全部 1543 个素材号**（`op=catalog` 挑）；**只有模拟器**只画 `100001~100006` ⇒ 要预览就再传 `previewImageId`（两个号都回显）。'
-      + '\n★ **硬规则**：结构体 ID 必须 **10 位数字**、单条文本 **≤500 字符**（超了千星导不进去；要放行传 `allowLongText:true`）—— **生成前校验，不通过直接报错**。'
-      + '\n★ **交接值**（控件模板索引 / 控件名 / 容器节点索引）AI 拿不到：**先自动读当前关卡 `.gil`**（只有唯一候选才采用），拿不到就**报错点名让你去问创作者**（`needsHandover[]` + `handoverCandidates[]`），**绝不编索引**。'
-      + '\n★ **`preflight[]`：投递前的可判定自检清单**（7 项 `{item,ok,why}`，`ok:null` = 判不了、**不猜**）。`op=vfx-lua` 的 **`container` 与 `templateIndex` 同等必填**'
-      + '（真机实测：漏 `container` 时 `deploy`/`lint`/`模拟器` **三环全绿、只有真机 `OnStart` 报 `缺少交接值 CONFIG.CONTAINER_INDEX` ⇒ 整屏没有粒子**）；产物顶部带**运行时依赖清单**。'
-      + '\n★ **未验证**（回执恒带 `unverified[]`）：`<size=N>`、4bit、24 个 ParamType 是否等于 7.1 **完整**类型集、特效的**真机渲染/帧率**。`summaryOnly` **只去正文**，统计与 `nextStep` 必留。'
+      TITLE + '：**离线生成器** —— 一次调用就出**可直接部署的 Lua**（不是数据模型、不是半成品）。'
+      + '\nop=text-gradient：文本 → 色标 → **逐帧刷字**客户端 Lua（`EnableUpdate` + `OnUpdate` 换帧）。'
+      + '\nop=struct-json：结构体/字典 → 可直接导入千星的变量 JSON（默认 `struct_ype`）。'
+      + '\nop=pixel-art：图片 → 可部署**像素画 Lua**（图片控件**矩形块拼图**，非「一个像素一个控件」；行程+跨行合并，可选 4bit）；要 `cols`/`rows`/`maxSide` + `pixelSize`；**静态不加 EnableUpdate**。'
+      + '\nop=vfx-lua：**UI 粒子特效** → 可部署客户端 Lua（13 预设；`preset:"list"` 列清单、**不进 schema**；驱动层逐字取真机定稿件；贝塞尔用 `path` 三手柄）。'
+      + '\n★ 粒子贴图 `imageId` 真机可用**全部 1543 素材号**（`op=catalog` 挑）；**模拟器只画 `100001~100006`** ⇒ 预览传 `previewImageId`。'
+      + '\n★ **硬规则**：结构体 ID 必须 **10 位数字**、单条文本 **≤500 字符**（放行传 `allowLongText:true`）—— 生成前校验。'
+      + '\n★ **交接值**（模板索引/控件名/容器索引）AI 拿不到：**先自动读当前关卡 `.gil`**（唯一候选才采用），拿不到就**报错点名**（`needsHandover[]` + `handoverCandidates[]`），**绝不编**。'
+      + '\n★ **`preflight[]` 投递前自检**（`ok:null` = 判不了、**不猜**）；`op=vfx-lua` 的 **`container` 与 `templateIndex` 同等必填**（真机实测：漏 `container` 时离线三环全绿、只有真机 `OnStart` 报缺值 ⇒ 整屏没粒子）；产物顶部带**运行时依赖清单**。'
+      + '\n★ **未验证**（恒带 `unverified[]`）：`<size=N>`、4bit、ParamType 是否 = 7.1 全集、特效真机渲染/帧率。`summaryOnly` 只去正文、结论必留。'
+      + '\n\n'
       + '\n\n**典型调用**：`{"op":"text-gradient","text":"原神千星","colors":["#FFCC33","#37FFFF"],"colorStyle":"flow-forward","controlName":"标题"}`（**一次调用 → 可直接部署的逐帧刷字 Lua**）｜'
       + '`{"op":"struct-json","structId":"1077936165","fields":[{"key":"id","param_type":"Int32","value":1}]}`｜'
       + '`{"op":"pixel-art","assetId":"a1b2c3d4e5f60718","cols":32,"pixelSize":8,"templateIndex":1073741900,"container":1073741866}`｜'
