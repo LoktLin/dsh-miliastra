@@ -1120,6 +1120,9 @@ const TOOLS = [
         if (unmountedNames.length) notes.push('不在挂载集合里: ' + listNames(unmountedNames));
         return {
           ok: true, brief: true,
+          /* ★ `version` 必须给（2026-09-30）：面板顶栏要显示版本号，而旧版 **brief 档没这个字段**
+           *   ⇒ 面板只能绕道 `miliastra_echo` 去取（多一次调用，还得解释为什么）。工具该给的字段就给。 */
+          version: VERSION,
           current: cur ? { brand: cur.brand, accountId: cur.accountId, levelId: cur.levelId } : null,
           luaFiles,
           note: notes.length ? notes.join('；') : null,

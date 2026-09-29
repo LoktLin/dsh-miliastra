@@ -158,9 +158,23 @@
   let lastTimeline = 0
 
   function showError(error) {
+    const msg = String(error?.message || error)
+    /*
+     * ★★ "还没有会话"是**中性状态**，不是错误（2026-09-30 从头梳理）。
+     *   实测服务端对该情形的回执是 `{"ok":false,"error":"play session has not started"}` ——
+     *   语义上等于"你还没投任何效果进来"。旧代码把它当失败 ⇒ 红条 + 「● 出错」，
+     *   看起来就像"渲染失败"（作者为此绕了好几轮）。这里**显式分流**：中性空态，不弹错误条。
+     */
+    if (/not started/i.test(msg)) {
+      const box0 = $('fatal')
+      if (box0) box0.classList.remove('show')
+      const st0 = $('state')
+      if (st0) { st0.className = 'tag'; st0.textContent = '● 未开始' }
+      return
+    }
     const box = $('fatal')
     box.classList.add('show')
-    box.textContent = '⚠ ' + (error?.message || String(error))
+    box.textContent = '⚠ ' + msg
     $('state').className = 'tag err'
     $('state').textContent = '● 出错'
   }
