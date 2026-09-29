@@ -1929,6 +1929,18 @@ const TOOLS = [
           errors: found.errors,
           summaryOnly: slim,
         };
+        /*
+         * ★ E5（2026-09-29 实战反馈）：`staleLog` 时 `errors: []` **长得像结论**（"本局零报错"），
+         *   实际含义是「这份日志根本不属于本局」—— 在「零首错」是验收判据的场景下误读代价很高。
+         *   ⇒ 置 `null` + `errorsMeaningless`，并照抄已有 `staleLog` 那套口径。
+         */
+        if (out.staleLog === true) {
+          out.errors = null;
+          out.returned = null;
+          out.errorsMeaningless = true;
+          out.errorsNote = '本局没有可用的 `.gia` —— 上面的 `errors` 曾被当成"零报错"，其实没有意义。'
+            + ' 要看本局报错：确认日志面板勾了客户端脚本，且**这一局结束后**再读（`.gia` 一局结束才落盘）。';
+        }
         if (found.count === 0) {
           out.hint = staleFields.landingHint
             ? NO_ERRORS_HINT + ' ' + staleFields.landingHint
