@@ -2994,6 +2994,7 @@ const TOOLS = [
         createAfterFrames: { type: 'number', description: 'op=vfx-lua：晚建帧数（默认 30；**别设 0**，会被全屏背景盖住）。' },
         diagSteadyAt: { type: 'number', description: 'op=vfx-lua：稳态诊断时刻（秒，默认 2）。' },
         parentName: { type: 'string', description: 'op=vfx-lua：一个**屏幕上看得见的控件名**（借它的容器当父节点）；不给就用 `script.object`。' },
+        varPrefix: { type: 'string', description: 'op=vfx-lua：给生成物两个数据块改名（CONFIG/DATA ⇒ <varPrefix>_CONFIG/<varPrefix>_DATA），默认不改名。用途：同一脚本里放两套外观（主技能 + 副技能），否则全局名会撞。' },
       },
       additionalProperties: false,
     },
