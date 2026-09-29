@@ -697,7 +697,15 @@ function runLintUiOp({ dir, scope, args, level = null }) {
     summaryOnly,
     usedConfig: r.usedConfig,
     counts: r.counts,
-    passed: r.passed,
+    /* ★ E3（2026-09-29 实战反馈）：**零输入不许绿**。
+     *   `files` 是相对**关卡目录**解析的，传了错路径 ⇒ 该文件进 `skipped`、`fileCount: 0`，
+     *   而旧实现仍回 `passed: true` ⇒ 「绿了但一个文件都没查」是**最危险的回执**（差点让人以为 UI 契约验过了）。
+     *   ⇒ 零输入时 `passed: null` + `noInput: true` + 一句可执行提示。 */
+    passed: rows.length === 0 ? null : r.passed,
+    noInput: rows.length === 0 ? true : undefined,
+    noInputHint: rows.length === 0
+      ? '0 个文件参与检查，`passed` 无意义。`files` 是相对**关卡目录**解析的 —— 请传**绝对路径**（看 `skipped[]` 里那条 `读不动` 的实际路径）。'
+      : undefined,
     checks,
     checksOmitted: summaryOnly ? checksOmitted : undefined,
     unresolved: r.unresolved,
@@ -743,6 +751,11 @@ function runRectsOp({ dir, scope, args, level = null }) {
     ok: true, op: 'rects',
     dir, scope,
     level: level ? { levelId: level.levelId } : null,
+    /* ★ E3 同理（rects）：零输入时也要一眼看出"什么都没查" */
+    noInput: fileRows.length === 0 ? true : undefined,
+    noInputHint: fileRows.length === 0
+      ? '0 个文件参与检查 —— `files` 是相对**关卡目录**解析的，请传**绝对路径**。'
+      : undefined,
     fileCount: fileRows.length,
     files: fileRows,
     skipped: scan.skipped,
