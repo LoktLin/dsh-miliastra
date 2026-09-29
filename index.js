@@ -2023,17 +2023,16 @@ const TOOLS = [
       + '结束 = `StartQuickSwitchSceneAction … QuickSwitchToBeyondSettleSceneNormally`。'
       + '**实测延迟 0.07~0.18 秒**（真机：日志 21:46:02.420 写下、21:46:02.600 已读到）；它是**平台级**标记：脚本一行都不 print 的局它照样记。'
       + '⚠️ **别用 `.gia` 判开跑** —— `.gia` 不是实时的（实测那局 21:46:58 结束，`.gia` 到 **21:47:07** 才落盘；**局在跑的时候磁盘上根本没有这个文件**）。'
-      + 'op=status 看当前状态 + 最近几局；op=wait 等下一次开跑（`backSec` 回扫刚过去那局、`afterSec` 要「开跑 N 秒后」）—— 命中后接着调 `miliastra_shot` 截一张；op=wait 超时**不报错**，如实回 `hit:false`。'
-      + '\n★ **`op=arm`（武装后台截图）**：一次调用完成**「等新局开跑 → 按秒点抓拍 → 落盘」**（如 `afterSec:[8,12,16,20]`，等**下一次**开跑、默认不回扫）；每个秒点各拍一张，'
-      + '**这一局一结束就停**（剩余秒点标 `skipped`），回执逐张给路径 + `inRun`。人点完「试玩」后 AI 不用再参与。'
+      + 'op=status 看状态 + 最近几局；op=wait 等下一次开跑（`afterSec` 要「开跑 N 秒后」）；op=wait 超时**不报错**，如实回 `hit:false`。'
+      + '\n★ **`op=arm`（武装后台截图）**：一次调用完成**「等开跑 → 按秒点抓拍 → 落盘」**（秒点用 **`afterSecPoints`**；`wait:false` = 只回计划）。这一局一结束就停（余下标 `skipped`），逐张给路径 + `inRun`。'
       + '\n★ **`op=status` 的 `localGia`**：直接回答「**本局 `.gia` 落盘了没有**」（`landed`/`missing`/`running`/`none`）——`missing` 时 `miliastra_log` 取到的是**更早那一局**，别当本局证据。'
-      + '（信号来源与「试玩了却没日志」的排查见 `docs/功能详解.md` §试玩开跑侦测。）'
+      + '（排查见 `docs/功能详解.md`。）'
       + '\n\n**典型调用**：`{"op":"status"}`（现在在不在试玩 + 本局 `.gia` 落盘没有）｜'
-      + '`{"op":"arm","afterSec":[8,12,16,20],"timeoutSec":300}`（等下一次开跑、按秒点各拍一张）',
+      + '`{"op":"arm","afterSecPoints":[8,12,16,20]}`（按秒点各拍一张）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['status', 'wait', 'arm'], description: '默认 status。**arm = 武装后台截图**：等新局开跑后按 `afterSec` 秒点各拍一张（局结束就停），回执给每张路径 + `inRun`。' },
+        op: { type: 'string', enum: ['status', 'wait', 'arm'], description: '默认 status。**arm = 武装后台截图**：按 `afterSecPoints` 秒点各拍一张（局结束就停），回执逐张给路径 + `inRun`。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用来定位该品牌的 output_log.txt）。' },
         backSec: { type: 'number', description: 'op=wait/arm：回扫窗口秒数（默认 0）。⚠️ op=arm 回扫会命中**已结束**的旧局（拍到的是局外画面），所以默认 0。' },
         timeoutSec: { type: 'number', description: 'op=wait：最多等多少秒（默认 90，上限 300）；op=arm：默认 300（上限 3600）。' },
@@ -2045,11 +2044,17 @@ const TOOLS = [
          */
         afterSec: {
           oneOf: [
-            { type: 'number', description: 'op=wait：命中后再等 N 秒才返回（默认 0，上限 120）。' },
-            { type: 'array', items: { type: 'number' }, description: 'op=arm：**秒点数组**（默认 `[8,12,16,20]`，≤12 个）。' },
+            { type: 'number' },
+            { type: 'array', items: { type: 'number' } },
           ],
-          description: 'op=wait 传**数字**；**op=arm 传秒点数组**（到每个秒点各拍一张）。',
+          description: 'op=wait 的等待秒数；op=arm 用 `afterSecPoints`。',
         },
+        /* ★ arm 的秒点单开一个参数（2026-09-30 反馈 A9）：数组走 `oneOf` 那一层会被吃掉并**静默回落默认值**。 */
+        afterSecPoints: {
+          type: 'array', items: { type: 'number' },
+          description: 'op=arm 的秒点数组（≤12，如 `[8,12,16,20]`）—— arm 请用它。',
+        },
+        wait: { type: 'boolean', description: 'op=arm：`false` = 非阻塞（只回计划，不等不拍）。' },
         target: { type: 'string', enum: Object.keys(SHOT_TARGETS), description: 'op=arm：截哪个窗口（默认 game=游戏客户端）。' },
         process: { type: 'string', description: 'op=arm：直接指定进程名（覆盖 target）。' },
         label: { type: 'string', description: 'op=arm：文件名里的用途标签（默认用 `arm-<秒点>s`）。' },
@@ -3339,14 +3344,36 @@ async function armPlaytestShots(args, lv) {
   const processName = String(args.process || (tgt ? tgt.process : targetKey) || '').replace(/\.exe$/i, '');
   const dir = shotsDir();
   const timeoutSec = clampNum(args.timeoutSec, 300, 5, 3600);
-  const rawPoints = Array.isArray(args.afterSec) ? args.afterSec : null;
-  const points = [...new Set((rawPoints && rawPoints.length ? rawPoints : [8, 12, 16, 20])
+  /*
+   * ★★ 秒点取值（2026-09-30 反馈 A9）：**不许静默降级**。
+   *   `afterSec` 是 `oneOf`（wait 数字 / arm 数组）—— 实测数组会被参数校验吃掉，
+   *   于是**静默回落默认值**，调用方以为自己的秒点生效了（它就是按默认值拍的）。
+   *   ⇒ ① 专用参数 `afterSecPoints`（arm 请用它）；② `afterSec` 仍兼容（数组照用、单个数字当一点）；
+   *      ③ **用了默认值必须自己说出来**（`pointsFromDefault:true` + note），把"静默"变成"有据可查"。
+   */
+  const rawPoints = Array.isArray(args.afterSecPoints) ? args.afterSecPoints
+    : (Array.isArray(args.afterSec) ? args.afterSec
+      : (typeof args.afterSec === 'number' && Number.isFinite(args.afterSec) ? [args.afterSec] : null));
+  const pointsFromDefault = !(rawPoints && rawPoints.length);
+  const points = [...new Set((pointsFromDefault ? [8, 12, 16, 20] : rawPoints)
     .map((x) => Math.round(Number(x)))
     .filter((x) => Number.isFinite(x) && x >= 0 && x <= 600))]
     .sort((a, b) => a - b)
     .slice(0, 12);
-  if (!points.length) throw new Error('op=arm 的 `afterSec` 至少要有一个 0~600 的秒点，例如 afterSec:[8,12,16,20]');
+  if (!points.length) throw new Error('op=arm 的秒点至少要有一个 0~600 的数字，例如 `afterSecPoints:[8,12,16,20]`');
   if (!processName) throw new Error('op=arm 没给出要截哪个进程（target/process 都是空的）。');
+
+  /* ★ 非阻塞（A9 第 2 条）：只回"计划"，不等开跑、不拍 —— 长阻塞调用不该拖死会话节奏。 */
+  if (args.wait === false) {
+    return {
+      ok: true, op: 'arm', blocking: false, armed: false,
+      level: { brand: lv.brand, levelId: lv.levelId },
+      target: targetKey, process: processName, dir,
+      points, pointsFromDefault, timeoutSec, waitedSec: 0, shots: [], inRunCount: 0,
+      note: '⚠️ `wait:false` ⇒ **这次没有等、也没有拍**（只把计划回给你）。要真抓拍就再调一次（省略 `wait`）。',
+      nextSteps: '要抓拍：直接再调一次 `op=arm`（不传 `wait`）；或先 `op=status` 看现在在不在试玩。',
+    };
+  }
 
   const w = await waitForPlaytestStart(lv, {
     timeoutSec,
@@ -3357,7 +3384,10 @@ async function armPlaytestShots(args, lv) {
   const baseOut = {
     ok: true, op: 'arm', level: { brand: lv.brand, levelId: lv.levelId },
     target: targetKey, process: processName, dir,
-    points, timeoutSec, waitedSec: w.waitedSec,
+    points, pointsFromDefault, timeoutSec, waitedSec: w.waitedSec,
+    note: pointsFromDefault
+      ? '⚠️ 没收到秒点 ⇒ 用的是**默认** `[8,12,16,20]`。arm 请传 `afterSecPoints:[…]`（数组走 `afterSec` 可能在参数校验那一层被吃掉）。'
+      : undefined,
   };
   if (!w.hit) {
     return Object.assign(baseOut, {
