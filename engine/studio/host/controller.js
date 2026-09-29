@@ -136,7 +136,17 @@ export class SimulatorController {
       }
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        const error = new Error(`play worker timed out after ${timeoutMs}ms`)
+        /*
+         * ★ E9（2026-09-29 实战反馈）：超时要**区分"8 秒墙钟预算用尽"与"脚本崩了"** ——
+         *   两者给同一条 `play worker terminated` 时，调用方不知道该**降载**还是该**查 bug**。
+         *   ⇒ 消息写清"预算用尽"、带上预算值与本次 action，并挂结构化字段（不改判据、只加信息）。
+         */
+        const error = new Error(`play worker timed out after ${timeoutMs}ms（**墙钟预算用尽**，不是"脚本崩了"）`
+          + `：单次 play 请求的预算是 ${timeoutMs}ms（默认 8000，可用环境变量 QXQY_PLAY_TIMEOUT_MS 调）；`
+          + `本次 action=${action}。判"是慢还是崩"看日志/op=state：崩溃有栈，慢只会到点被杀。`)
+        error.reason = 'budget-exhausted'
+        error.budgetMs = timeoutMs
+        error.action = action
         finish(reject, error)
         void this.terminateWorker(error)
       }, timeoutMs)
