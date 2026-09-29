@@ -652,7 +652,12 @@ t('★ 生成的 Lua 遵本仓铁律：EnableUpdate / OnUpdate / CONFIG / error 
 });
 
 t('★ 交接值缺失 ⇒ **报错点名要求交接**（绝不编造索引），并给 .gil 候选', async () => {
-  const out = await gen.execute({ op: 'text-gradient', text: '标题', controlName: '' }, {});
+  /*
+   * ★ hermetic（2026-09-29）：**显式传一个不存在的 `level`** 让 `.gil` 读取失败 ⇒ 候选为空 ⇒ 稳定走"缺交接值"。
+   *   不传 `level` 时工具会读**当前关卡**的 `.gil`，而本机那张图恰好有唯一候选（文本框模板 + 名字）⇒ 自动采用 ⇒ 回 `ok:true`，
+   *   于是这条用例在"机器状态不同"时红绿不定（实测：干净树也会红）—— 这是**用例不 hermetic**，不是工具错。
+   */
+  const out = await gen.execute({ op: 'text-gradient', text: '标题', controlName: '', level: '999999999' }, {});
   eq(out.ok, false, '缺交接值必须 ok:false（不许回一段运行时必崩的 Lua）');
   assert(/controlName/.test(out.error) && /templateIndex/.test(out.error), '错误要点名这两个交接值：' + out.error);
   assert(/别自己编|绝不编|别编/.test(out.error), '要明确说「别自己编」');
