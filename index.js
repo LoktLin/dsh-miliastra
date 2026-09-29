@@ -39,7 +39,7 @@ import pathMod from 'node:path';
 import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
-import { scanLevels, pickCurrent, findLevel, localLowRoot } from './lib/locate.mjs';
+import { scanLevels, pickCurrent, findLevel, localLowRoot, currentLevelDecision } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt, pickLiveFile, compareLiveSources, normalizeLiveName } from './lib/codefile.mjs';
 import { scanRects, compareRects, expandDriverRefs } from './lib/rects.mjs';
 import { snapshotFreshness } from './lib/freshness.mjs';
@@ -353,6 +353,7 @@ function gilScriptInfo(lv) {
           bytes: m.sourceBytes,
           sha256: m.sourceSha256,
           mountedOn: (mounts.byId && mounts.byId[m.mappingId]) || null,
+          mountedOnNote: MOUNTED_ON_NOTE,
           mounted: mountedIds.indexOf(m.mappingId) >= 0,
         })),
         allNames: pick(mappings),
@@ -615,6 +616,14 @@ const RECT_SKIP_FILE = /(^_)|(_备份\.lua$)|(\.bak$)|(\.engine\.lua$)|(\.save\.
 /** 一次扫多少个 `.lua`（超过就如实报 `truncated`，不静默截断）。 */
 const RECT_MAX_FILES = 60;
 /** 回执里最多列多少条矩形（`summaryOnly` 时更多信息被折叠）。 */
+/*
+ * ★ E8（2026-09-29 实战反馈）：`mountedOn` 是「存档里离这条挂载记录最近的那层 `#1` 字符串」——
+ *   它可能是**占位名**（如 `未分类页签`）⇒ 既不能证实、也不能证伪「挂在客户端控件容器的容器节点上」；
+ *   从没在编辑器里挂过时恒为 null。⇒ 把这层边界写进回执，别让人拿它当判据。
+ */
+const MOUNTED_ON_NOTE = '`mountedOn` = 存档里「离这条挂载记录最近的那层 #1 字符串」（挂载归属名）。'
+  + '⚠️ 边界：① 可能是占位名（如 `未分类页签`）⇒ **既不能证实也不能证伪**「挂在客户端控件容器的容器节点上」；'
+  + '② 从没在编辑器里挂过 ⇒ 恒为 null。真机硬要求是「挂客户容器的容器节点」，这条只能当**线索**，以编辑器里的挂载点为准。';
 const RECT_MAX_LIST = 400;
 
 /** 递归收集目录里的 `.lua`（跳过 `_*` / `.*` 目录；返回跳过了什么，别静默）。 */
@@ -1136,6 +1145,7 @@ const TOOLS = [
        *   所以这一档只保留**每次都要看**的那几项，其余（每个关卡的 .gil、最近日志、ErrorLog）一律不带。
        */
       if (args.brief === true) {
+        const curDecision = currentLevelDecision(levels);
         const proc = clientProcesses();
         /*
          * ★ P1-4（2026-09-26）：`luaFiles` 从**字符串数组**改成 `[{name, bytes}]`，并标出两种"看着像有、其实没用"的活文件：
@@ -1167,6 +1177,11 @@ const TOOLS = [
            *   ⇒ 面板只能绕道 `miliastra_echo` 去取（多一次调用，还得解释为什么）。工具该给的字段就给。 */
           version: VERSION,
           current: cur ? { brand: cur.brand, accountId: cur.accountId, levelId: cur.levelId } : null,
+          /* ★ E7：「当前关卡」是猜的 —— 判据 / 证据 / 备选 / 歧义警告都摆出来（写盘前请显式传 `level`） */
+          currentDecidedBy: curDecision.decidedBy,
+          currentEvidence: curDecision.evidence,
+          currentAlternatives: curDecision.alternatives,
+          currentWarning: curDecision.warning,
           luaFiles,
           note: notes.length ? notes.join('；') : null,
           mountKnown,
@@ -1717,6 +1732,7 @@ const TOOLS = [
           sha256: m.sourceSha256,
           mounted: Array.isArray(mounts.ids) && mounts.ids.indexOf(m.mappingId) >= 0,
           mountedOn: (mounts.byId && mounts.byId[m.mappingId]) || null,
+          mountedOnNote: MOUNTED_ON_NOTE,
         }));
         const picked = liveInfo ? pickScriptMapping(all, liveInfo.name) : { mapping: null, matchedBy: null };
         // ② 同名才比哈希（名字对不上就是**另一个脚本**）；挑不到本次那一份时**退回第一条**并如实说明
@@ -1749,6 +1765,7 @@ const TOOLS = [
           sha256: embedded.sourceSha256,
           mounted: isMounted(embedded),
           mountedOn: (mounts.byId && mounts.byId[embedded.mappingId]) || null,
+          mountedOnNote: MOUNTED_ON_NOTE,
         } : null;
         const candidates = cur
           ? (pick && pick.candidates ? pick.candidates : []).map((c) => {
