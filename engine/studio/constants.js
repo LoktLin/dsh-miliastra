@@ -124,6 +124,27 @@ export const IMAGE_PRIMITIVES = Object.freeze({
   100006: 'ring',
 })
 
+/**
+ * 一个「图片」控件该按什么画 —— **四处调用点共用这一条规则**（session / inspector / 两个渲染器）。
+ *
+ * 三档（E1③，2026-09-30）：
+ *   · `100001~100006` ⇒ 几何形状（模拟器画得出来）
+ *   · **没给贴图**（`imageId` 空 / 0）⇒ `'missing'` ⇒ 画成 **`?` 占位符**，
+ *     **与真机一致**：创作者「图片」模板若没指定贴图，真机就是满屏 `?`。
+ *     ⚠️ 以前作者层默认 `imageId = 100001`（方块）⇒ 模拟器**自己补一张方块**，
+ *     把「真机满屏 `?`」这个症状**完全盖住**（真机白跑一轮换来的教训，见 E1）。
+ *   · **有号但模拟器画不出来**（平台素材号，如 101023）⇒ `'unsupported'`：
+ *     真机有图、我们只能画占位符 —— 与上一档**分开**，免得冤枉"缺贴图"。
+ */
+export function imagePrimitiveOf(imageId) {
+  const id = Number(imageId) || 0
+  if (id === 0) return 'missing'
+  return IMAGE_PRIMITIVES[id] || 'unsupported'
+}
+
+/** 渲染器画占位符用的两档（`'missing'` = 真机也是 `?`；`'unsupported'` = 真机有图、模拟器画不出）。 */
+export const PLACEHOLDER_PRIMITIVES = Object.freeze(['missing', 'unsupported'])
+
 export const DEFAULT_CLICK_AUDIO_ID = 50888
 
 export const COLOR = Object.freeze({

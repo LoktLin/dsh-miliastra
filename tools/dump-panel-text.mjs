@@ -2,10 +2,10 @@
  * tools/dump-panel-text.mjs — 把侧边栏面板**渲染后的纯文字**打出来。
  *
  * 用途：改面板文案时，先自己读一遍「用户会看到的字」。
- * 作者的原话是「gui 界面也没看懂探针作用」—— 那次就是因为没人以使用者视角读过一遍。
+ * 作者的原话是「gui 界面也没看懂试玩探针作用」—— 那次就是因为没人以使用者视角读过一遍。
  *
  * 环境与 client-render-test.mjs 一致：最小 window/document + 真 react 的 SSR。
- * 用法: node tools/dump-panel-text.mjs [关键字，默认「探针」]
+ * 用法: node tools/dump-panel-text.mjs [关键字，默认「试玩探针」]
  */
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -105,7 +105,7 @@ const lines = html
   .map((s) => s.trim())
   .filter(Boolean);
 
-const kw = process.argv[2] || '探针';
+const kw = process.argv[2] || '试玩探针';
 const i = lines.findIndex((s) => s.includes(kw));
 console.log(i >= 0 ? lines.slice(i).join('\n') : lines.join('\n'));
 console.log('\n—— 以上是渲染后的纯文字（' + lines.length + ' 行，面板 HTML ' + html.length + ' 字符）——');

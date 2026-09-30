@@ -123,15 +123,15 @@ await check('rankLuaFiles：GIL 的 name 不带 .lua 后缀也认（实测 name:
   return '两个候选（双相 / 双相.lua）都试，命中即用';
 });
 
-await check('rankLuaFiles：附属文件（探针源码 / 备份 / 隐藏文件）一律不参选', () => {
+await check('rankLuaFiles：附属文件（试玩探针源码 / 备份 / 隐藏文件）一律不参选', () => {
   const files = [
     ...threeFiles(),
-    fileOf('_探针_ping_P1_20260903-120000.lua', 999, T_NEW + 1000),
+    fileOf('_试玩探针_ping_P1_20260903-120000.lua', 999, T_NEW + 1000),
     fileOf('双相.20260903-120000_备份.lua', 998, T_NEW + 2000),
     fileOf('双相.bak', 997, T_NEW + 3000),
     fileOf('.hidden.lua', 996, T_NEW + 4000),
   ];
-  for (const n of ['_探针_x.lua', '双相.bak', '双相.20260101-000000_备份.lua', '.hidden.lua']) {
+  for (const n of ['_试玩探针_x.lua', '双相.bak', '双相.20260101-000000_备份.lua', '.hidden.lua']) {
     assert(isAuxiliaryLuaName(n), '前置条件不成立：' + n + ' 没被判成附属文件');
   }
   const r = rankLuaFiles(files, { mountedName: 'game_01.lua' });
@@ -139,7 +139,7 @@ await check('rankLuaFiles：附属文件（探针源码 / 备份 / 隐藏文件�
   assert(r.candidates.length === 3, '候选里混进了附属文件：' + r.candidates.map((c) => c.name).join(','));
   const latest = rankLuaFiles(files, { mountedName: null });
   assert(latest.picked.name === '背景图片.lua', '附属文件抢走了「最近改动」：' + latest.picked.name);
-  return '4 个附属文件都不参选（探针 / 历史备份 / 固定名备份 / 隐藏文件）';
+  return '4 个附属文件都不参选（试玩探针 / 历史备份 / 固定名备份 / 隐藏文件）';
 });
 
 await check('★ pickLuaFile 与 rankLuaFiles **同源**：同一目录、同一结果（两套「当前活文件」不再各说各话）', () => {

@@ -117,7 +117,11 @@ export class SimulatorController {
     if (worker) await worker.terminate().catch(() => {})
   }
 
-  request(action, args, signal, timeoutMs = PLAY_TIMEOUT_MS) {
+  /*
+   * ★ P2-10（2026-09-30 扩展规划）：单次 play 的墙钟预算**可由调用方覆盖** ——
+   *   以前只有环境变量 QXQY_PLAY_TIMEOUT_MS（AI 改不了）⇒ 30 秒的长用例间歇超时（同一条用例先过后超时）。
+   */
+  request(action, args, signal, timeoutMs = (this.defaultTimeoutMs || PLAY_TIMEOUT_MS)) {
     const worker = this.worker || this.createWorker()
     const id = this.sequence++
     return new Promise((resolve, reject) => {

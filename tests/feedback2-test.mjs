@@ -458,6 +458,20 @@ await check('⑥ 过滤 → 再取尾（tag/pattern 先过滤，last 取过滤�
   return 'tag=L1 命中 ' + msgs(r).join(',') + '；last:1 → ' + msgs(r2).join(',');
 });
 
+await check('⑥ `matched` = **命中总数**（截断前），`returned` = 返回条数（2026-09-30 修）', async () => {
+  /*
+   * 为什么会有这条：`matched` 以前写的是 `records.length`，而 `records` **已经是截断后的窗口** ——
+   * 于是它恒等于「返回几条」。实测：用 `limit:1` 查「命中」回 `matched: 1`，改成 `limit:3` 回 3。
+   * 名字骗人、后果实际（想问"一共命中多少次"的调用方会拿到 1）。现在两个数分开，并给 `truncated`。
+   */
+  const one = await logTool.execute({ op: 'tail', file: LOG_FILE, tag: 'L1', limit: 1 }, {});
+  assert(one.matched === 2, '`matched` 不是命中总数：' + JSON.stringify({ m: one.matched, r: one.returned }));
+  assert(one.returned === 1 && one.truncated === true, '`returned`/`truncated` 不对：' + JSON.stringify(one).slice(0, 160));
+  const all = await logTool.execute({ op: 'tail', file: LOG_FILE, tag: 'L1', limit: 10 }, {});
+  assert(all.matched === 2 && all.returned === 2 && all.truncated === false, '不截断时三个数应一致：' + JSON.stringify({ m: all.matched, r: all.returned, t: all.truncated }));
+  return 'tag=L1：matched=2 恒为总数（limit:1 → returned=1/truncated=true）';
+});
+
 await check('⑥ from 传了不认识的取值 → 明确报错（不静默当默认）', async () => {
   const r = await logTool.execute({ op: 'tail', file: LOG_FILE, from: 'tail' }, {});
   assert(r.ok === false && /from 只能是/.test(r.error || ''), '没报错：' + JSON.stringify(r).slice(0, 160));
@@ -467,11 +481,11 @@ await check('⑥ from 传了不认识的取值 → 明确报错（不静默当�
   return '错误：' + r.error.slice(0, 40) + '…；schema 有 last + from(end/head)';
 });
 
-/* ================================================================== ⑦ 自定义探针 template:"custom" */
+/* ================================================================== ⑦ 自定义试玩探针 template:"custom" */
 
 /*
  * 修之前为什么红：只有 5 个固定模板，两个「只有真机才能答」的问题（OnInit/OnEnable 期能不能
- * InstantiateClientUIControl、锚点是不是归一化 0..1）**一个都答不了**；而手写探针又要自己拼前后缀。
+ * InstantiateClientUIControl、锚点是不是归一化 0..1）**一个都答不了**；而手写试玩探针又要自己拼前后缀。
  */
 const probeLow = fakeLevel({ levelId: '1073741904', luas: { 'main.lua': '-- 原脚本\nlocal a = 1\n' } });
 process.env.MILIASTRA_LOCALLOW = probeLow.root;
@@ -498,7 +512,7 @@ await check('⑦ render custom：产出的 Lua 合法（含前后缀），并提
   const r = await probeTool.execute({ op: 'render', template: 'custom', tag: 'FB2', lua: CUSTOM_LUA }, {});
   assert(r.ok, 'render 失败：' + JSON.stringify(r).slice(0, 240));
   assert(r.custom === true && r.savedTo === null, '回执没标 custom / savedTo 应当为 null：' + JSON.stringify({ c: r.custom, s: r.savedTo }));
-  assert(/EnableUpdate\(true\)/.test(r.lua) && /local function pChunked\(/.test(r.lua), '没套上探针前后缀（EnableUpdate / 分片打印）');
+  assert(/EnableUpdate\(true\)/.test(r.lua) && /local function pChunked\(/.test(r.lua), '没套上试玩探针前后缀（EnableUpdate / 分片打印）');
   assert(r.lua.includes('canvas='), '正文没进产物');
   assert(/临时覆盖活文件/.test(r.note) && /op=restore/.test(r.note), '没提示「会覆盖活文件 / 记得还原」：' + r.note);
   assert(!('probeSource' in r), 'render 不该有 probeSource（那说明它部署了）');
@@ -532,14 +546,14 @@ await check('⑦ deploy custom：走**同一条流水线**（先备份 → 覆�
   const r = await probeTool.execute({ op: 'deploy', template: 'custom', tag: 'FB2', lua: CUSTOM_LUA }, {});
   assert(r.ok, '部署失败：' + JSON.stringify(r).slice(0, 240));
   assert(r.template === 'custom' && r.label === '自己写', '回执没认出 custom：' + JSON.stringify({ t: r.template, l: r.label }));
-  assert(fs.readFileSync(live, 'utf8').includes('canvas='), '活文件没被探针覆盖（流水线断了）');
-  assert(/临时覆盖|探针/.test(r.nextStep || ''), 'nextStep 没说清现在的处境：' + r.nextStep);
+  assert(fs.readFileSync(live, 'utf8').includes('canvas='), '活文件没被试玩探针覆盖（流水线断了）');
+  assert(/临时覆盖|试玩探针/.test(r.nextStep || ''), 'nextStep 没说清现在的处境：' + r.nextStep);
   assert(/op=restore/.test(r.restoreWith || '') || /op=restore/.test(r.nextStep || ''), '没给还原命令');
   // 还原（用固定名那份）→ 原脚本回来
   const back = await codeTool.execute({ op: 'restore', file: 'main.lua' }, {});
   assert(back.ok, '还原失败：' + JSON.stringify(back).slice(0, 200));
   assert(fs.readFileSync(live, 'utf8') === '-- 原脚本\nlocal a = 1\n', '还原后不是原脚本：' + JSON.stringify(fs.readFileSync(live, 'utf8')));
-  return 'deploy → 活文件=探针；op=restore → 原脚本回来（' + back.usedFixedBackup + ' 用固定名那份）';
+  return 'deploy → 活文件=试玩探针；op=restore → 原脚本回来（' + back.usedFixedBackup + ' 用固定名那份）';
 });
 
 /* ================================================================== ⑧ op=bind：kind auto + mount 真实层级 */
@@ -622,7 +636,11 @@ await check('⑧ kindHint 文案（纯函数）：两种情形都点出该做什
 });
 
 await check('⑧ mount 回执给**真实层级** + assetType 的语境说明', async () => {
-  const r = await simOp({ op: 'bind', source: bindLua, run: false, templates: [{ guid: 1073741868, kind: 'image', name: 'T' }] });
+  // ★ 反馈第 5 条起 `op=bind` **默认精简档**（`mount.assetTypeNote` 这类长段落被省掉）⇒ 断言全文要显式 withMeta
+  const r = await simOp({
+    op: 'bind', source: bindLua, run: false, withMeta: true,
+    templates: [{ guid: 1073741868, kind: 'image', name: 'T' }],
+  });
   assert(r.mount.parent && r.mount.parent.name === '客户端控件容器' && r.mount.parent.kind === 'server-container',
     'mount.parent 不是真实层级：' + JSON.stringify(r.mount.parent));
   assert(r.mount.isClientUI === true && r.mount.clientUIRoot && r.mount.clientUIRoot.kind === 'server-container',

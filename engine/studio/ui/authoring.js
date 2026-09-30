@@ -120,7 +120,10 @@ export function createNode(kind, extras = {}) {
   }
   if (kind === 'image') {
     node.imageSource = extras.imageSource || 'StaticReference'
-    node.imageId = extras.imageId ?? 100001
+    // E1③（2026-09-30）：**默认 0 = 未指定贴图**，不再默认 100001（方块）。
+    // 以前那个默认值让模拟器**自己补一张方块**，把「模板没贴图 ⇒ 真机满屏 `?`」完全盖住
+    // （真机白跑一轮）。现在未指定就画 `?` —— 与真机同一个症状。
+    node.imageId = extras.imageId ?? 0
     node.imageColor = extras.imageColor ?? COLOR.image
     node.enableMask = extras.enableMask === true
     node.enableSoftEdge = extras.enableSoftEdge === true

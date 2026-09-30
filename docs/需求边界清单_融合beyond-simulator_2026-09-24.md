@@ -53,7 +53,7 @@ R5/R7 已在上一轮完成（对比文档 + 许可结论）；R6 已产出 `dev
 | **FP3 融合引擎代码**（studio 的 `gia/` `ui/` `play/` `host-png.js` `autotest/` `log/`＋`client/lua-runtime`＋`server`＋`editor-ui`） | R2,R4 | ❌ 我们完全没有：`lib/` 15 个文件全部是"读盘/取证/截图"（`gil.mjs` 10 395 B 只读、`gia.mjs` 8 624 B 日志解析）；对方 `studio/gia/codec.js` 71 649 B **双向**编解码 | 形态（vendored 源码 / 预构建产物 / 拆散重写）→ **Q1** | 本仓（宿主侧）+ 复核走 `yuan-code` 的 API 纪律 |
 | **FP4 融合 Host 半边**（`/qxqy-simulator/api/*` 路由 + Controller/Worker + 6 个 `qxqy_studio_*` 工具） | R2 | 🟡 我们已有 8 个 `miliastra_*` 工具（`index.js` TOOLS）与自己的路由；对方 6 工具（`skill/SKILL.md:135-140`） | **工具命名空间**：保留 `qxqy_studio_*` 并存 / 并入 `miliastra_*` 前缀（Q5 轮） | 本仓 |
 | **FP5 Client 半边注册 `conversation.view` 三个 tab** | R3 | 🟡 我们目前只注册 `sidebar.footer.action` + 浮层面板（`lib/client.js:4`、`1995+`）；对方注册 `conversation.view`（`dsh-plugin/lib/client.js:21`，`label: () => '模拟器'`，`order: 20`） | **承载方式** → **Q2** | 本仓 |
-| **FP6 现有面板拆成「初级功能 / 高级功能」** | R3 | ✅ 素材齐备：现面板 = 10 张卡片 —— 关卡(`client.js:1195`)、关卡与文件(`1196`)、地图体检(`1197`)、活文件(`1345`)、活文件体检(`1346`)、脚本一致性(`1348`)、试玩开跑(`1854`)、运行时日志(`1856`)、游戏截图(`1857`)、高级诊断(`1871`)；后者已内含「读界面控件 + 探针」，且代码注释里留着作者原话：「折腾探针对人没啥用啊」「关键 ui 读取……做到高级功能里面做个样子」 | 哪些进初级/哪些进高级 → **Q2** | 本仓 |
+| **FP6 现有面板拆成「初级功能 / 高级功能」** | R3 | ✅ 素材齐备：现面板 = 10 张卡片 —— 关卡(`client.js:1195`)、关卡与文件(`1196`)、地图体检(`1197`)、活文件(`1345`)、活文件体检(`1346`)、脚本一致性(`1348`)、试玩开跑(`1854`)、运行时日志(`1856`)、游戏截图(`1857`)、高级诊断(`1871`)；后者已内含「读界面控件 + 试玩探针」，且代码注释里留着作者原话：「折腾试玩探针对人没啥用啊」「关键 ui 读取……做到高级功能里面做个样子」 | 哪些进初级/哪些进高级 → **Q2** | 本仓 |
 | **FP7 「模拟器」tab 承载对方 `editor-ui`** | R3,R2 | ❌ 没有；对方 `editor-ui/index.js` 93 932 B（三栏：控件树 / 画布 / 检视器），需 React + 其 API 与 `playUrl`；我们面板是浮层窄栏 | 形态绑定 Q1；承载绑定 Q2 | 本仓 |
 | **FP8 独立试玩页 `/qxqy-simulator/play`（PixiJS v8 WebGL）** | R2 | ❌ 没有；对方 `dsh-plugin/lib/play.html` 23 562 B + `studio/play/pixi-renderer.js` 15 087 B | 要不要一并融合（Q6 轮） | 本仓 |
 | **FP9 融合对方的 skill（`qxqy-simulator`）与 agent 预设（`wonderland-lua-builder`）** | R2 | 🟡 我们的知识在 workspace `AGENTS.md` + `docs/` + 宿主技能 `yuan-code`；对方把 skill 打进插件（`skill/SKILL.md` 14 507 B，经独立 bundle 行 `ctx.skills.register`）、预设 `agent/wonderland-lua-builder/` | 要不要一并融合（Q6 轮） | 本仓 + workspace 文档 |
@@ -229,7 +229,7 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 > 原话「未拍板前不进实现」在实操中已经被"边做边定"取代，所以这里不再挂着"待确认"的样子误导人。
 > **真正还开着的只有 QT4 的后半截**（对方 skill / agent 预设要不要搬）。
 
-- **QT1**（边界）：初级功能 / 高级功能 的**卡片归属**逐张确认。建议：初级 = 关卡 · 关卡与文件 · 地图体检 · 活文件 · 脚本一致性 · 试玩开跑 · 运行时日志 · 游戏截图；高级 = 读界面控件 · 探针 · 活文件体检明细。
+- **QT1**（边界）：初级功能 / 高级功能 的**卡片归属**逐张确认。建议：初级 = 关卡 · 关卡与文件 · 地图体检 · 活文件 · 脚本一致性 · 试玩开跑 · 运行时日志 · 游戏截图；高级 = 读界面控件 · 试玩探针 · 活文件体检明细。
   → **✅ 已落定**（W5：`Panel` 的 `inline`+`group`，basic/advanced/all 三分）。
 - **QT2**（许可）：GPL 落地清单（`LICENSE` 替换 / `package.json` / 新增 `NOTICE` 保留对方版权与来源 / README 声明 / 版本号取 `0.1.0` 还是 `0.0.12`）。
   → **✅ 已落定**（W1：GPL-3.0-only 三处一致；版本号走 `0.1.0`，现为 `0.2.0`）。
@@ -330,7 +330,7 @@ R2 原文是「**全量**融合」，但 Q1 选 C（独立重写）之后，"全
 | 2026-09-24 | ★ **W2 真正的 AI 收益点**：`op=verify fromHistory:true` —— **人玩的那一局直接变成回归用例**（AI 不用手抄 events）；因此试玩页 `pagehide` **故意不停局**（一关就 stop 的话 history 归零，这条路就断了） | `sim-play-test` 里两条 ★ 断言（fromHistory 跑通 / 没活会话时明确报错）；页面侧栏把这个调用样例写在明面上 |
 | 2026-09-24 | ★ **顺手修掉一个会让页面黑屏的真 bug**：`slimPlay` **无条件**丢 `scene`/`paint`（与「`summaryOnly` 只去体积、`false` 给全量」矛盾）⇒ 浏览器页永远拿不到场景。现在 `summaryOnly:false` 原样给，默认仍只回计数 | `sim-play-test` 两条对照断言（`false` 带 `scene.format==='tree-v1'` / 缺省仍是 `sceneOmitted`） |
 | 2026-09-24 | ★ **叠层口径修对（真机证据）**：`instantiate` 原来 `addChild` append ⇒ 新控件落在**最底层**（内部 children 是「前→后」），真机是**后建的在上**。双相先铺满屏背景、后摆平台，所以模拟器里只剩背景色。改成**挪到最前** | 最小实验（两满屏图，先红后绿）中心像素 `rgba(50,104,207)` → `rgba(0,255,0)`；双相平台中心 `#9696a0` / `#ff7638` 与期望一致；`sim-test` 新增 ★ 像素断言 |
-| 2026-09-24 | ★ **`op=bind`：把真机工程搬进模拟器（一条命令）** —— 原来那 4 步手写探针（建模板→存盘→手改 guid→挂脚本）变成工具；`templates` 的 guid 一律用**交接值**，并交叉核对源码里的真机 id（`handover.missing/extra`）。两个坑各一条断言：① 引擎另编号 ⇒ `InstantiateClientUIControl` **静默什么都不建**；② 起完会话要**先走 `settleSec` 再读控件数**（脚本构建在进 RUNNING 之后，停在 frame 0 只读到容器自己） | 真机实测（双相，370ms）：`run.logs` 出现 `就绪（3 关，控件 31，画布 1600x900）`（与真机 `.gia` 同句）、`run.controlCount=32`、渲染图 `shots/sim-play-双相-bind-第1关-20260924-110733.png`；`sim-test` 117/0；引擎 `addTemplate` 支持显式 guid（合法性与重号校验） |
+| 2026-09-24 | ★ **`op=bind`：把真机工程搬进模拟器（一条命令）** —— 原来那 4 步手写试玩探针（建模板→存盘→手改 guid→挂脚本）变成工具；`templates` 的 guid 一律用**交接值**，并交叉核对源码里的真机 id（`handover.missing/extra`）。两个坑各一条断言：① 引擎另编号 ⇒ `InstantiateClientUIControl` **静默什么都不建**；② 起完会话要**先走 `settleSec` 再读控件数**（脚本构建在进 RUNNING 之后，停在 frame 0 只读到容器自己） | 真机实测（双相，370ms）：`run.logs` 出现 `就绪（3 关，控件 31，画布 1600x900）`（与真机 `.gia` 同句）、`run.controlCount=32`、渲染图 `shots/sim-play-双相-bind-第1关-20260924-110733.png`；`sim-test` 117/0；引擎 `addTemplate` 支持显式 guid（合法性与重号校验） |
 | 2026-09-24 | ★ **`op=cases` 验收单（人/AI 读同一份）**：`add/list/show/run/remove`；自动项（events+asserts）确定性重放，**人工项**（`manual:true`+note）工具**不代跑也不代判**，只列进 `manual[]`；`autoPassed` ≠ 验收通过；`remove` 默认 dryRun 要 `confirm:true` | `sim-test` 新增 14 条（含「人工项不写 note 就报错」「指名不存在的组报错并列出已有的」）；`op=verify caseSet=<名字>` 走同一份 |
 | 2026-09-24 | **模拟器面板分区（作者批注：画面与日志横排、下面大长方形=AI 试玩区域）**：试玩画面（大、可点）＋传输控制＋按键/设备/人数/视角＋**这一局的操作时间线**；顺带修「看得到点不到」的布局陷阱（`-simbody` 变成整体滚动容器） | `client-render-test` 45/0（新增两条 ★：`simrow` 的 CSS 必须是横向网格、`simai` 必须在 `simrow` 之后且含传输控制与时间线）；`npm test` 退出码 0 **567 项** |
 

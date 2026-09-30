@@ -436,7 +436,8 @@ await check('B4 集成：一次 bind 挂 3 个脚本 —— run.logs 里出现 3
   });
   await simOp({ op: 'reset' });
   const r = await simOp({
-    op: 'bind', run: true, settleSec: 1, scripts: files,
+    // ★ 反馈第 5 条起 `op=bind` 默认精简档（`sources[]` / `scripts[]` 逐条被省掉）⇒ 要断言逐条就显式 withMeta
+    op: 'bind', run: true, settleSec: 1, scripts: files, withMeta: true,
     templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
   });
   assert(r.scriptCount === 3 && (r.sources || []).length === 3, '没挂到 3 份：' + JSON.stringify({ c: r.scriptCount }));
@@ -560,7 +561,7 @@ await check('B3 回归：`op=shot target=play` 的 PNG **画得到脚本建的�
     'function OnStart()',
     '  print("FB3_B3_SERVER")',
     '  local a = game.InstantiateClientUIControl(1073741868, script.object)',
-    '  if a then a:SetSizeDelta(900, 500); a:SetAnchoredPosition(0, 0); a.imageColor = Color.FromRGBA(255, 0, 0, 255) end',
+    '  if a then a:SetSizeDelta(900, 500); a:SetAnchoredPosition(0, 0); a:SetImage(Enum.ImageSource.StaticReference, 100001); a.imageColor = Color.FromRGBA(255, 0, 0, 255) end',
     'end',
     '',
   ].join('\n'), 'utf8');

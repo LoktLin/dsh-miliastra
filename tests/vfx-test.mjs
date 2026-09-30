@@ -19,13 +19,26 @@
  *   ⑥ 模拟器端到端：`op=bind` 把产物投进模拟器 → `op=frames` 比帧间像素差。这是唯一能证明
  *      "脚本真的跑起来了、控件真的建出来了、画面真的在动"的一步（**≠ 真机通过**）。
  *
- * ⚠️ 端到端会改**模拟器工作区**（`~/.dsh/miliastra/simulator`），不碰游戏存档、不碰活文件；
- *    产物 PNG 落在 `~/.dsh/miliastra/shots/`（**不删**）。想跳过端到端：`VFX_TEST_NO_SIM=1`。
+ * ⚠️ 端到端会改**模拟器工作区**、并写 PNG —— 但**默认写在临时数据目录**里，绝不碰用户的真实数据目录。
+ *    为什么改成这样（2026-09-30 实测发现）：它原来直接写 `~/.dsh/miliastra/`，于是一次 `npm test`
+ *    就会 ① 往用户的 `shots/` 里塞 8 张测试图，② **覆盖 `simulator/last-bind.json`** ——
+ *    那正是面板「一键重搭上次」用的配方（跑完测试，配方就变成测试用的 hit-spark 了）。
+ *    ⇒ 想看那几张图就显式开：`VFX_TEST_KEEP_SHOTS=1 node tests/vfx-test.mjs`（写真实目录、不删）；
+ *      想跳过端到端：`VFX_TEST_NO_SIM=1`。
  * 用法：`node tests/vfx-test.mjs`
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+/*
+ * ★ 数据目录隔离必须在 import `lib/sim.mjs`（经由 ../index.js）**之前**设好 —— 它在模块初始化时读这个变量。
+ *   默认指到临时目录；只有显式 `VFX_TEST_KEEP_SHOTS=1` 才用真实目录（那时产物是留给人的证据，不删）。
+ */
+const KEEP_SHOTS = process.env.VFX_TEST_KEEP_SHOTS === '1';
+const tmpDataRoot = KEEP_SHOTS ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-miliastra-vfx-test-'));
+const savedDataDir = process.env.MILIASTRA_DATA_DIR;
+if (tmpDataRoot) process.env.MILIASTRA_DATA_DIR = tmpDataRoot;
 
 let pass = 0;
 const failures = [];
@@ -443,12 +456,20 @@ t('③e 缺交接值：ok:false + needsHandover（文案含"别自己编"）', a
   return '缺 ' + JSON.stringify(missing) + '（+ 空 handover 时两个都报）';
 });
 
-t('③f preset:"list"：第 2 层按需枚举（13 条 + 关键参数 + 控件核算），summaryOnly 只留 id/中文名', async () => {
+t('③f preset:"list"：第 2 层按需枚举（13 粒子 + 3 图元 = 16 条 + 关键参数 + 控件核算），summaryOnly 只留 id/中文名', async () => {
   const gen = TOOLS.find((x) => x.name === 'miliastra_gen');
   const full = await gen.execute({ op: 'vfx-lua', preset: 'list' });
   assert(full.ok === true && full.listMode === true, 'list 模式');
-  eq(full.count, 13, '数量');
-  eq(full.presets.length, 13, '条目数');
+  /*
+   * ★ 2026-09-30（轨迹图元工单）：清单里多了 **3 个图元预设**（`ring-arc` / `slash-arc` / `crescent-arc`）。
+   *   粒子表本身**一个字段没动**（仍是 13 个）⇒ 这里同时钉「总数 16」与「两边各自的数」，
+   *   免得将来有人把图元预设混进粒子表、却以为数量没变（那会让 `UGCTools.UIParticles@1` 的字段契约失效）。
+   */
+  eq(full.count, 16, '数量（13 粒子 + 3 图元）');
+  eq(full.emitterPresetCount, 13, '粒子预设数');
+  eq(full.spritePresetCount, 3, '图元预设数');
+  eq(full.presets.length, 16, '条目数');
+  eq(full.presets.filter((p) => p.shapeKind === 'sprite').length, 3, '带 shapeKind=sprite 的条目数');
   for (const p of full.presets) {
     assert(p.id && p.nameZh && p.oneLiner, '每条要有 id / 中文名 / 一句话');
     assert(p.budget && typeof p.budget.controls === 'number', '每条要有控件核算');
@@ -456,7 +477,7 @@ t('③f preset:"list"：第 2 层按需枚举（13 条 + 关键参数 + 控件�
   }
   const slim = await gen.execute({ op: 'vfx-lua', preset: 'list', summaryOnly: true });
   assert(slim.presetsOmitted === true, 'summaryOnly 要标 presetsOmitted');
-  assert(slim.presets.length === 13 && slim.presets[0].keyParams === undefined, 'summaryOnly 只留 id/中文名');
+  assert(slim.presets.length === 16 && slim.presets[0].keyParams === undefined, 'summaryOnly 只留 id/中文名');
   assert(JSON.stringify(slim).length < JSON.stringify(full).length / 3, 'summaryOnly 要真的省体积');
 });
 
@@ -464,7 +485,7 @@ t('③g 没传 preset：不默默用默认，回 needsPreset + 简版清单', as
   const gen = TOOLS.find((x) => x.name === 'miliastra_gen');
   const r = await gen.execute({ op: 'vfx-lua' });
   assert(r.ok === true && r.needsPreset === true, '要标 needsPreset');
-  eq(r.count, 13, '要给简版清单');
+  eq(r.count, 16, '要给简版清单（13 粒子 + 3 图元）');
   assert(r.nextStep.includes('preset'), '要指路下一步');
 });
 
@@ -531,4 +552,8 @@ if (failures.length) {
   for (const f of failures) console.log(' ✗ ' + f);
 }
 console.log(`结果：通过 ${pass}，失败 ${failures.length}`);
+/* 数据目录隔离的收尾：还原环境变量，删掉我们自己建的临时目录（**只删自己造的**）。
+ * ⚠️ `process.exit` 会跳过它 ⇒ 用 exitCode + 显式退出顺序，保证临时目录不残留。 */
+if (savedDataDir === undefined) delete process.env.MILIASTRA_DATA_DIR; else process.env.MILIASTRA_DATA_DIR = savedDataDir;
+if (tmpDataRoot) { try { fs.rmSync(tmpDataRoot, { recursive: true, force: true }); } catch { /* 删不掉就留着 */ } }
 process.exit(failures.length ? 1 : 0);

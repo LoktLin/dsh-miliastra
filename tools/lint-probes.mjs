@@ -1,4 +1,4 @@
-// tools/lint-probes.mjs — 把所有探针模板渲染出来逐个结构校验，出错时打印上下文
+// tools/lint-probes.mjs — 把所有试玩探针模板渲染出来逐个结构校验，出错时打印上下文
 // 用法: node tools/lint-probes.mjs [模板名...]
 import { PROBE_TEMPLATES, renderProbe } from '../lib/probes.mjs';
 import { lintLua, lintSummary } from '../lib/lualint.mjs';

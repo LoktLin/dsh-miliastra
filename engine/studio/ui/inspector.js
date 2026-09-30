@@ -1,4 +1,4 @@
-import { CORE_KINDS, IMAGE_PRIMITIVES, KIND_LABELS } from '../constants.js'
+import { CORE_KINDS, imagePrimitiveOf, KIND_LABELS } from '../constants.js'
 import {
   applyMatrix,
   canvasBox,
@@ -51,7 +51,7 @@ export function layoutTree(root, canvasId) {
       renderHeight: render.height,
       renderRotationZ: render.rotationZ,
       renderMatrix: matrix,
-      primitive: node.kind === 'image' ? (IMAGE_PRIMITIVES[node.imageId] || 'missing') : null,
+      primitive: node.kind === 'image' ? imagePrimitiveOf(node.imageId) : null,
       ...((node.kind === 'textbox' || node.kind === 'textwindow') ? {
         text: node.text ?? '',
         fontSize: node.fontSize,

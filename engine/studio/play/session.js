@@ -2,7 +2,7 @@ import { createRuntime, walkControls as walk } from '../../lua-runtime/src/index
 import { createServer, normalizePlayerCount, normalizePlayerIndex } from '../../server/index.js'
 import { compileProject } from './compile.js'
 import { assertLosslessJson } from '../json.js'
-import { CANVAS_PRESETS, IMAGE_PRIMITIVES } from '../constants.js'
+import { CANVAS_PRESETS, imagePrimitiveOf } from '../constants.js'
 import {
   applyMatrix,
   canvasBox,
@@ -87,7 +87,7 @@ export function controlSnapshot(control, boxes) {
     enableOutline: control.kind === 'textbox' || control.kind === 'textwindow' ? control.enableOutline === true : null,
     outlineColor: control.kind === 'textbox' || control.kind === 'textwindow' ? control.outlineColor : null,
     imageId: control.kind === 'image' ? (control.imageId ?? 0) : null,
-    primitive: control.kind === 'image' ? (IMAGE_PRIMITIVES[control.imageId] || 'missing') : null,
+    primitive: control.kind === 'image' ? imagePrimitiveOf(control.imageId) : null,
     imageColor: control.kind === 'image' ? control.imageColor : null,
     enableMask: control.kind === 'image' ? control.enableMask === true : null,
     enableSoftEdge: control.kind === 'image' ? control.enableSoftEdge === true : null,
@@ -280,7 +280,7 @@ function compactPaint(control, box, transform) {
     pressed: control.pressed === true,
   }
   if (control.kind === 'image') {
-    item.primitive = IMAGE_PRIMITIVES[control.imageId] || 'missing'
+    item.primitive = imagePrimitiveOf(control.imageId)
     item.imageColor = control.imageColor
     item.imageId = control.imageId
     Object.assign(item, imageFillFields(control))
@@ -324,7 +324,7 @@ function visualFields(control, box) {
     pressed: control.pressed === true,
   }
   if (control.kind === 'image') {
-    fields.primitive = IMAGE_PRIMITIVES[control.imageId] || 'missing'
+    fields.primitive = imagePrimitiveOf(control.imageId)
     fields.imageColor = control.imageColor
     fields.imageId = control.imageId
     Object.assign(fields, imageFillFields(control))

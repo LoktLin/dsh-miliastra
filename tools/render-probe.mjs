@@ -1,5 +1,5 @@
 /**
- * tools/render-probe.mjs — 从**磁盘上的** lib/probes.mjs 渲染一个探针模板，
+ * tools/render-probe.mjs — 从**磁盘上的** lib/probes.mjs 渲染一个试玩探针模板，
  * 落到工作区 `code/<玩法>/` 下并当场结构校验。
  *
  * 为什么不用 `miliastra_probe op=render`：Host 代码是启动时 import 的，
@@ -26,7 +26,7 @@ const r = renderProbe(tpl, { tag });
 if (!r.ok) { console.log('❌ ' + r.error); process.exit(1); }
 
 const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-const out = path.join(outDir, '_探针_' + tpl + '_' + stamp + '.lua');
+const out = path.join(outDir, '_试玩探针_' + tpl + '_' + stamp + '.lua');
 
 const lr = lintLua(r.lua);
 if (!lr.ok) {

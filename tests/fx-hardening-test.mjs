@@ -38,6 +38,20 @@ function t(name, fn) { queue.push([name, fn]); }
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 const eq = (a, b, msg) => assert(JSON.stringify(a) === JSON.stringify(b), `${msg || '不相等'}：期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}`);
 
+/*
+ * ★★ 2026-09-30：**先隔离台账与根目录**，再 import `index.js`。
+ *
+ * 为什么必须隔离（本轮实测踩到）：P2-8 的**交接值台账**会在 `container` 缺席时**自动补上**
+ * （`handoverFrom:"arg+ledger"`）—— 于是第 ① 条「只给 templateIndex、漏 container ⇒ 必须 ok:false」
+ * 在本机**变成了 ok:true**（因为本机台账里确实有一条 container，是创作者交接过的真值）。
+ * 那不是产品回归，而是**这条断言的前提被改变了**：它要验的是「**哪儿都没有**交接值时必须拦住」。
+ * ⇒ 与 `tests/handover-ledger-test.mjs` 同一套隔离法，但**只隔离 `MILIASTRA_DATA_DIR`**（台账住在那儿）。
+ *   ⚠️ 第一版我连 `MILIASTRA_LOCALLOW` 一起改了 ⇒ 依赖**真实沙箱**的那 6 条（日志夹具 / deploy 集成）全红：
+ *   「在 temp 下没扫到任何关卡目录」。隔离要**只隔住你要隔的那一样**。
+ */
+const tmpIsolate = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-fxhard-'));
+process.env.MILIASTRA_DATA_DIR = path.join(tmpIsolate, 'data');
+
 const { TOOLS, genOp } = await import('../index.js');
 const giaMod = await import('../lib/gia.mjs');
 const { findErrorRecords, parseFileLine, landingMisleadingHint, giaLandingState, ERROR_KIND_LABELS } = giaMod;

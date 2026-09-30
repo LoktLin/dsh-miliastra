@@ -173,12 +173,21 @@ function drawButtonItem(ctx, item, width, height) {
 
 function drawPrimitive(ctx, item, width, height) {
   const color = argb(item.imageColor, 0xffffffff)
-  if (item.primitive === 'missing') {
-    ctx.fillStyle = 'rgba(72,34,40,0.36)'
+  if (item.primitive === 'missing' || item.primitive === 'unsupported') {
+    // E1③：占位符与真机对齐（`?`），不再画一块实心方块把真机症状盖住。
+    // 红框 = 模板没给贴图（真机同样是 `?`）；蓝框 = 真机有图、模拟器画不出来。
+    const border = item.primitive === 'missing' ? '#ff7481' : '#8ab4ff'
+    ctx.fillStyle = '#3a3a3a'
     ctx.fillRect(-width / 2, -height / 2, width, height)
-    ctx.strokeStyle = '#ff7481'
+    ctx.strokeStyle = border
     ctx.lineWidth = 1
     ctx.strokeRect(-width / 2 + 0.5, -height / 2 + 0.5, Math.max(0, width - 1), Math.max(0, height - 1))
+    const font = Math.max(8, Math.min(width, height) * 0.62)
+    ctx.font = font + 'px Inter, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText('?', 0, 0)
     return
   }
   if (item.primitive === 'circle') {

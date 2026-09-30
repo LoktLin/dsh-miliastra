@@ -33,7 +33,7 @@ const CALLS = [
   ['miliastra_gen', { op: 'vfx-lua', preset: 'list', summaryOnly: true }, '特效预设清单'],
   ['miliastra_sim', { op: 'state' }, '模拟器状态'],
   ['miliastra_sim', { op: 'hud' }, '无会话读 HUD（必须回执不抛栈）'],
-  ['miliastra_probe', { op: 'list' }, '探针模板清单'],
+  ['miliastra_probe', { op: 'list' }, '试玩探针模板清单'],
   ['miliastra_echo', { text: 'receipt-contract' }, '回显'],
 ];
 

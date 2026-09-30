@@ -31,7 +31,9 @@ process.env.MILIASTRA_DATA_DIR = tmpData;
 // 让失控脚本那条别真等 8 秒
 process.env.QXQY_PLAY_TIMEOUT_MS = '1500';
 
-const { simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments, hudTexts, sceneNodes } = await import('../lib/sim.mjs');
+const {
+  simOp, disposeSimAll, simRuntimeInfo, scanScriptKeys, stripLuaComments, hudTexts, sceneNodes, normalizeRunForMs,
+} = await import('../lib/sim.mjs');
 
 const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -646,15 +648,17 @@ ok('op=frames 要推进的步数过大：报错并给出「换更大的 dt」这
  * 这条不通，双相那种"先铺背景再摆东西"的写法在模拟器里就只剩背景色（实测踩到）。
  */
 await simOp({ op: 'reset' });
-// 这里原来要「建模板 → 存盘 → 手改 JSON 里的 guid → 读回 → 挂脚本」四步（手写探针）。
+// 这里原来要「建模板 → 存盘 → 手改 JSON 里的 guid → 读回 → 挂脚本」四步（手写试玩探针）。
 // 现在直接用 op=bind —— 模板索引由交接值给，脚本从文件读，一个调用搭好。
 const layerLua = path.join(tmpData, 'layer-selftest.lua');
+// ★ E1③（2026-09-30）：模拟器**不再**替图片控件补方块 ⇒ 要一块**有色方块**就必须自己指定图源。
+//   （这正是真机上的正确写法：模板没贴图时真机画 `?`，只有 SetImage 才有图。）
 fs.writeFileSync(layerLua, [
   'function OnStart()',
   '  local a = game.InstantiateClientUIControl(1073741868, script.object)',
   '  local b = game.InstantiateClientUIControl(1073741868, script.object)',
-  '  a:SetSizeDelta(1600, 900); a:SetAnchoredPosition(0, 0); a.imageColor = Color.FromRGBA(255, 0, 0, 255)',
-  '  b:SetSizeDelta(1600, 900); b:SetAnchoredPosition(0, 0); b.imageColor = Color.FromRGBA(0, 255, 0, 255)',
+  '  a:SetSizeDelta(1600, 900); a:SetAnchoredPosition(0, 0); a:SetImage(Enum.ImageSource.StaticReference, 100001); a.imageColor = Color.FromRGBA(255, 0, 0, 255)',
+  '  b:SetSizeDelta(1600, 900); b:SetAnchoredPosition(0, 0); b:SetImage(Enum.ImageSource.StaticReference, 100001); b.imageColor = Color.FromRGBA(0, 255, 0, 255)',
   'end',
   '',
 ].join('\n'), 'utf8');
@@ -682,7 +686,7 @@ await simOp({ op: 'play', action: 'stop' });
 /* ------------------------------- op=bind：真机工程搬进模拟器（一条命令） */
 
 /*
- * 为什么要有这条：双相那次预测试是**手写探针**跑通的（建模板 → 存盘改 guid → 挂脚本 → 起会话）。
+ * 为什么要有这条：双相那次预测试是**手写试玩探针**跑通的（建模板 → 存盘改 guid → 挂脚本 → 起会话）。
  * 那套流程里最容易出错的不是技术，是**交接值**：模板索引错了，脚本 `InstantiateClientUIControl`
  * 静默什么也不建 —— 看起来"跑起来了"，其实全是空的。所以 bind 要做两件事：
  *   ① 模板 guid 一律用交接值（缺就报错，不许编造）；② 把"源码里出现的真机 id"和交接值摆在一起核对。
@@ -697,6 +701,7 @@ fs.writeFileSync(bindLua, [
   '  local a = game.InstantiateClientUIControl(IMAGE_TEMPLATE, script.object)',
   '  a:SetSizeDelta(120, 60)',
   '  a.imageColor = Color.FromRGBA(0, 128, 255, 255)',
+  '  a:SetImage(Enum.ImageSource.StaticReference, 100001)',
   'end',
   '',
 ].join('\n'), 'utf8');
@@ -704,6 +709,12 @@ fs.writeFileSync(bindLua, [
 const bound = await simOp({
   op: 'bind',
   source: bindLua,
+  /*
+   * ★ 反馈第 5 条（2026-09-30）起 `op=bind` **默认走精简档**（每次 ≈15KB → 只留核心几样）。
+   * 这一段要断言 `templates` / `scripts` / `source` 这些**全文才有**的字段 ⇒ 显式 `withMeta:true`。
+   * 精简档本身由下面「bind 两种档」那一段单独钉住。
+   */
+  withMeta: true,
   templates: [
     { guid: 1073741868, kind: 'image', name: '图片模板' },
     { guid: 1073741867, kind: 'textbox', name: '文本框模板' },
@@ -773,6 +784,216 @@ ok('op=state 的 `lastBind` 能报出配方是谁（面板写「一键重搭上�
   const noRecipe = await err(() => simOp({ op: 'bind', last: true }));
   ok('op=bind last:true 但没有配方：明确报错并说怎么产生配方', !!noRecipe && /还没有可重搭的配方/.test(noRecipe), noRecipe);
   fs.writeFileSync(recipeFile, keep, 'utf8');
+}
+
+/* ------------------------------- op=bind 的 runForMs（反馈第 2 条：长流程验不了） */
+
+/*
+ * 为什么要有这一段：作者要验「120 血、10~15 秒才出一次死亡」，而 `settleSec` 只够看 3~8 秒 ⇒
+ * 他**改了玩法数值**（HP=8）去凑时长，把整轮模拟跑歪了（"7 人全部就位"始终没出现、开赛后 6.3 秒零命中）。
+ * 所以 `runForMs` 要证明的不是"返回 ok"，而是**真的跑**：脚本的 `OnUpdate` 必须**逐帧**被调到 ——
+ * 只跳时钟的话它总共只会被调 1 次（这正是反馈第 3 条那个坑）。
+ */
+const rfLua = path.join(tmpData, 'runfor-selftest.lua');
+fs.writeFileSync(rfLua, [
+  'local n = 0',
+  'function OnStart()',
+  // ⚠️ 不开 EnableUpdate 的话 OnUpdate **一次都不会跑**（引擎按 updateEnabled 过滤）—— 这条正好也是"真跑"的判据
+  '  script:EnableUpdate(true)',
+  'end',
+  'function OnUpdate(dt)',
+  '  n = n + 1',
+  '  if n % 30 == 0 then print("[runfor] ticks=" .. tostring(n)) end',
+  'end',
+  '',
+].join('\n'), 'utf8');
+const rf = await simOp({
+  op: 'bind', source: rfLua, runForMs: 2000, settleSec: 3,
+  templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+});
+ok('★ op=bind runForMs：按引擎固定步长折算成帧（2000ms → 60 帧，每帧 1/30s）',
+  rf.run.runForMs === 2000 && rf.run.framesAdvanced === 60,
+  JSON.stringify({ ms: rf.run.runForMs, frames: rf.run.framesAdvanced }));
+ok('★ op=bind runForMs：模拟时刻真的走到 2 秒级（不是只把时钟跳过去）',
+  rf.run.time >= 2 && rf.run.time < 2.6, 'time=' + rf.run.time);
+ok('★ op=bind runForMs：脚本的 OnUpdate **逐帧**跑到了（60 帧 ⇒ 第 30/60 帧各一行）—— 这就是"真跑"的证据',
+  (rf.run.logs || []).filter((l) => /runfor\] ticks=(30|60)$/.test(String(l.text))).length === 2,
+  JSON.stringify((rf.run.logs || []).map((l) => l.text)));
+ok('★ op=bind 两个都给时**以 runForMs 为准**，且回执里写明 settleSec 本次没生效',
+  /以 runForMs 为准/.test(String(rf.run.runMode)) && /settleSec:3/.test(String(rf.run.runMode)),
+  rf.run.runMode);
+ok('op=bind runForMs 在范围内：不标 runForMsClamped',
+  rf.run.runForMsClamped === undefined, JSON.stringify({ clamped: rf.run.runForMsClamped }));
+
+const rfSettle = await simOp({
+  op: 'bind', source: rfLua, settleSec: 1,
+  templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+});
+ok('op=bind 不给 runForMs：行为与以前一样（settleSec 那条路，不出现 framesAdvanced）',
+  rfSettle.run.settleSec === 1 && rfSettle.run.framesAdvanced === undefined
+  && !/runForMs/.test(String(rfSettle.run.runMode)),
+  JSON.stringify(rfSettle.run.runMode));
+ok('★ 纯函数 normalizeRunForMs：夹紧边界（60000 上限 / 下限 1 / 未给）与帧数折算',
+  normalizeRunForMs(60000).clamped === 60000 && normalizeRunForMs(60000).clampedFlag === false
+  && normalizeRunForMs(60001).clamped === 60000 && normalizeRunForMs(60001).clampedFlag === true
+  && normalizeRunForMs(999999).requested === 999999 && normalizeRunForMs(999999).frames === 1800
+  && normalizeRunForMs(0).clamped === 1 && normalizeRunForMs(0).clampedFlag === true
+  && normalizeRunForMs(-5).clamped === 1 && normalizeRunForMs(-5).clampedFlag === true
+  && normalizeRunForMs(undefined).clamped === 0 && normalizeRunForMs(undefined).frames === 0
+  && normalizeRunForMs(2000).frames === 60 && normalizeRunForMs(1).frames === 1,
+  JSON.stringify([normalizeRunForMs(60001), normalizeRunForMs(0), normalizeRunForMs(undefined)]));
+
+/*
+ * 夹紧**在回执里也要如实标**（不只纯函数对）：实测推满 1800 帧（= 60 秒模拟时间）墙钟只要 ≈1.2 秒，
+ * 所以这条真跑得起（不是靠纯函数糊过去的）。
+ */
+const rfClamp = await simOp({
+  op: 'bind', source: rfLua, runForMs: 999999,
+  templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+});
+ok('★ op=bind runForMs 超上限：夹到 60000（1800 帧）并在回执里标 runForMsClamped + runForMsRequested',
+  rfClamp.run.runForMs === 60000 && rfClamp.run.runForMsClamped === true
+  && rfClamp.run.runForMsRequested === 999999 && rfClamp.run.framesAdvanced === 1800,
+  JSON.stringify({ ms: rfClamp.run.runForMs, f: rfClamp.run.framesAdvanced, req: rfClamp.run.runForMsRequested }));
+ok('★ op=bind runForMs 跑满 60 秒：脚本被逐帧推到 1800 帧（OnUpdate 计数到 1800）',
+  (rfClamp.run.logs || []).some((l) => /runfor\] ticks=1800$/.test(String(l.text))),
+  JSON.stringify((rfClamp.run.logs || []).slice(-2).map((l) => l.text)));
+
+/* ------------------------------- op=bind 默认走精简档（反馈第 5 条） */
+
+/*
+ * 为什么要有这一段：作者这一轮 bind 20+ 次、**每次 ≈15KB**，而他在 bind 时真正要的只有三样：
+ * `controlCount` + `logs` + 有没有 `lua-error`。默认档必须**只去体积、不去结论**。
+ */
+const slimBindRes = await simOp({
+  op: 'bind', source: rfLua, run: false,
+  templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+});
+const fullBindRes = await simOp({
+  op: 'bind', source: rfLua, run: false, withMeta: true,
+  templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+});
+const slimBytes = Buffer.byteLength(JSON.stringify(slimBindRes));
+const fullBytes = Buffer.byteLength(JSON.stringify(fullBindRes));
+ok('★ op=bind 默认精简档：明显小于全文（省下的正是"每次一样"的那些长段落）',
+  slimBytes < fullBytes, slimBytes + 'B vs ' + fullBytes + 'B');
+ok('★ op=bind 精简档**只去体积、不去结论**：bound / templates / handover / source / nextStep / recipe 都在',
+  slimBindRes.bound === true && Array.isArray(slimBindRes.templates) && !!slimBindRes.handover
+  && Array.isArray(slimBindRes.handover.missing) && !!slimBindRes.source
+  && /^[0-9a-f]{12}$/.test(String(slimBindRes.source.sha1_12))
+  && !!slimBindRes.nextStep && !!slimBindRes.recipe,
+  JSON.stringify(Object.keys(slimBindRes)));
+ok('★ op=bind 精简档去掉的是 sources[] / scripts[] / simAssumptions 正文（各留计数与指针）',
+  slimBindRes.sources === undefined && slimBindRes.scripts === undefined
+  && slimBindRes.simAssumptions === undefined && slimBindRes.simAssumptionsCount === 1
+  && Array.isArray(slimBindRes.omitted) && !!slimBindRes.slimNote,
+  JSON.stringify({ omitted: slimBindRes.omitted, count: slimBindRes.simAssumptionsCount }));
+ok('op=bind `withMeta:true` 拿回全文：sources[] / scripts[] / simAssumptions 正文 / mount.assetTypeNote 都在',
+  Array.isArray(fullBindRes.sources) && fullBindRes.sources.length === 1 && fullBindRes.sources[0].sha1_12
+  && Array.isArray(fullBindRes.scripts) && fullBindRes.scripts.length === 1
+  && Array.isArray(fullBindRes.simAssumptions) && fullBindRes.simAssumptions.length === 1
+  && /控件模板资源/.test(String(fullBindRes.mount && fullBindRes.mount.assetTypeNote)),
+  JSON.stringify({ sources: fullBindRes.sources.length, scripts: fullBindRes.scripts.length }));
+const explicitFull = await simOp({
+  op: 'bind', source: rfLua, run: false, summaryOnly: false,
+  templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+});
+ok('op=bind `summaryOnly:false` 与 `withMeta:true` 等价（两条路都回全文，不让人记两套名字）',
+  Array.isArray(explicitFull.sources) && Array.isArray(explicitFull.scripts),
+  JSON.stringify(Object.keys(explicitFull)));
+
+/* ------------------------------- 会话日志的取证路径（反馈第 11 条） */
+
+ok('★ op=bind 回执点明"你看的是模拟器日志"（真机 .gia 要等一局结束、局中只能截图）',
+  /模拟器日志/.test(String(slimBindRes.logScopeNote)) && /\.gia/.test(String(slimBindRes.logScopeNote))
+  && /miliastra_shot/.test(String(slimBindRes.logScopeNote)),
+  String(slimBindRes.logScopeNote));
+
+await simOp({ op: 'play', action: 'start', args: { canvasId: 'pc-16-9' } });
+{
+  const p0 = await simOp({ op: 'play', action: 'get', args: { light: true } });
+  /*
+   * ★ 反馈第 3 条（作者为它试了 4 次调用）：`step{dt:16}` 只跳时钟 —— `time` 到 18.13s 而 `frame` 只 +65。
+   * 这里先钉住**老语义真的是"不补跑"**（帧数远小于 16×30），再钉 `frames` 那条新路。
+   */
+  const jumpOnly = await simOp({ op: 'play', action: 'step', args: { dt: 4 } });
+  const jumpFrames = Number(jumpOnly.frame) - Number(p0.frame);
+  ok('★ op=play step 只给 dt：**不补跑中间逻辑**（4 秒 ≠ 120 帧，回执 note 直说）',
+    jumpFrames < 60 && /不补跑中间逻辑/.test(String(jumpOnly.note)),
+    'frames=' + jumpFrames + ' note=' + String(jumpOnly.note).slice(0, 60));
+  ok('★ op=play step 回执带 note：跑了 N 帧、时钟跳到 T（N/T 是真实数字）',
+    /跑了 \d+ 帧/.test(String(jumpOnly.note)) && /时钟跳到 \d+\.\d+s/.test(String(jumpOnly.note)),
+    String(jumpOnly.note).slice(0, 120));
+  ok('★ op=play step 回执也点明是模拟器日志（两种模式来回切时不用记两套）',
+    /模拟器日志/.test(String(jumpOnly.logScopeNote)), String(jumpOnly.logScopeNote));
+
+  const p1 = await simOp({ op: 'play', action: 'get', args: { light: true } });
+  const byFrames = await simOp({ op: 'play', action: 'step', args: { frames: 15 } });
+  ok('★ op=play step 给 frames:15：**真推 15 帧**（帧号 +15，时钟 +0.5s）',
+    Number(byFrames.frame) - Number(p1.frame) === 15 && /frames:15/.test(String(byFrames.note)),
+    JSON.stringify({ d: Number(byFrames.frame) - Number(p1.frame), note: String(byFrames.note).slice(0, 80) }));
+  ok('★ op=play step frames 那条路：时钟增量 = 15 × 1/30s（与帧数自洽）',
+    Math.abs((Number(byFrames.time) - Number(p1.time)) - 0.5) < 0.02,
+    JSON.stringify({ dt: Number(byFrames.time) - Number(p1.time) }));
+
+  const p2 = await simOp({ op: 'play', action: 'get', args: { light: true } });
+  const both = await simOp({ op: 'play', action: 'step', args: { frames: 15, dt: 2 } });
+  ok('★ op=play step 两个都给：**先按 frames 跑帧、再按 dt 跳钟**（顺序写在 note 里）',
+    Number(both.frame) - Number(p2.frame) >= 15 && Math.abs((Number(both.time) - Number(p2.time)) - 2.5) < 0.6
+    && /先按 15 帧真跑、再按 dt=2 跳钟/.test(String(both.note)),
+    JSON.stringify({ df: Number(both.frame) - Number(p2.frame), dtime: Number(both.time) - Number(p2.time) }));
+  await simOp({ op: 'play', action: 'stop' });
+}
+
+/* ------------------------------- op=bind 的 containerId 也走台账（P2-9 后半） */
+
+/*
+ * 作者这条的痛点：台账里已经确认过 `container:1073741846`，bind 还要他手抄一遍。
+ * 这里造一棵**假 LocalLow**（`MILIASTRA_LOCALLOW`）+ 一本临时台账（`MILIASTRA_DATA_DIR`），
+ * 全是"显式 set 过"的那种值 —— 正好也复核了"工具**绝不自动学**"这条边界。
+ */
+{
+  const savedLow = process.env.MILIASTRA_LOCALLOW;
+  const fakeLow = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-sim-low-'));
+  const fakeLua = path.join(
+    fakeLow, 'miHoYo', '原神', 'BeyondLocal', '900001', 'Beyond_Local_Save_Level', '1073741901', 'external_lua_file',
+  );
+  fs.mkdirSync(fakeLua, { recursive: true });
+  fs.writeFileSync(path.join(fakeLua, '台账自检.lua'), '-- 台账自检\nfunction OnStart() end\n', 'utf8');
+  process.env.MILIASTRA_LOCALLOW = path.join(fakeLow, 'miHoYo');
+  try {
+    const { setHandover } = await import('../lib/handover-ledger.mjs');
+    const wrote = setHandover({ levelId: 1073741901, role: 'container', value: 1073741866, confirmedBy: '自检' });
+    ok('（夹具）台账里显式记下 container=1073741866', wrote.ok === true, JSON.stringify(wrote));
+
+    const fromLedger = await simOp({
+      op: 'bind', source: rfLua, run: false,
+      templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+    });
+    ok('★ op=bind 不给 containerId：从**台账**取（`handoverFrom:"ledger"` + 回执照会谁确认的）',
+      fromLedger.containerId === 1073741866 && fromLedger.handoverFrom === 'ledger'
+      && fromLedger.containerIdLedger && String(fromLedger.containerIdLedger.confirmedBy) === '自检'
+      && fromLedger.handover.containerId === 1073741866,
+      JSON.stringify({ c: fromLedger.containerId, from: fromLedger.handoverFrom, l: fromLedger.containerIdLedger }));
+    ok('op=bind 台账命中时不再啰嗦"没给 containerId"（hint 只在真的没有时出现）',
+      fromLedger.containerIdHint === undefined || fromLedger.containerIdHint === null,
+      JSON.stringify(fromLedger.containerIdHint));
+
+    const explicitArg = await simOp({
+      op: 'bind', source: rfLua, run: false, containerId: 1073741999,
+      templates: [{ guid: 1073741868, kind: 'image', name: '图片模板' }],
+    });
+    ok('★ op=bind 显式 containerId **优先于**台账（`handoverFrom:"arg"`，台账不覆盖人给的）',
+      explicitArg.containerId === 1073741999 && explicitArg.handoverFrom === 'arg',
+      JSON.stringify({ c: explicitArg.containerId, from: explicitArg.handoverFrom }));
+  } finally {
+    // 台账是"显式动作"才写的东西：这一段用完**显式抹掉**，免得影响后面的 bind（也复核了 clear 这条路）
+    const { clearHandover } = await import('../lib/handover-ledger.mjs');
+    clearHandover({ levelId: 1073741901 });
+    if (savedLow === undefined) delete process.env.MILIASTRA_LOCALLOW;
+    else process.env.MILIASTRA_LOCALLOW = savedLow;
+    fs.rmSync(fakeLow, { recursive: true, force: true });
+  }
 }
 
 /* ------------------------------- op=handover：交接值从哪来（别靠人抄） */
@@ -909,6 +1130,41 @@ ok('op=load 无参：列出工作区存档', Array.isArray(listed.archives) && l
   JSON.stringify(listed.archives).slice(0, 200));
 const loaded = await simOp({ op: 'load', archive: 'sim-selftest.save.json' });
 ok('op=load 带参：读回工程', !!loaded.loaded && Array.isArray(loaded.tree), JSON.stringify(loaded).slice(0, 120));
+
+/* ★ 2026-09-30 修：`load` 原来无视 `summaryOnly`，一次回执 1.0 MB（实测连吃两发）。
+   两档都要在：`summaryOnly:true` 只回结论、默认档照旧给正文（谁都不少功能）。 */
+{
+  const slim = await simOp({ op: 'load', archive: 'sim-selftest.save.json', summaryOnly: true });
+  const slimBytes = JSON.stringify(slim).length;
+  ok('★ op=load summaryOnly:true：不带头等舱（整份快照 result.snapshot 被省掉）',
+    slim.loaded === 'sim-selftest.save.json' && slim.result === undefined && slim.resultSummary && slim.resultSummary.hasSnapshot === true,
+    'bytes=' + slimBytes);
+  ok('★ op=load summaryOnly:true：回执从 1.0 MB 量级掉到 10 KB 以内', slimBytes < 10 * 1024, slimBytes + ' bytes');
+  ok('★ op=load 默认档**照旧**给整份快照（不许为了省体积把默认行为也改掉）',
+    loaded.result !== undefined && !!loaded.result.snapshot, 'result.snapshot 没了');
+}
+
+/* ★ 2026-09-30：`patch add` 现在能直接给 `imageId`（E1③ 之后"显式要一块方块"的唯一入口） */
+{
+  const fieldOf = (st, key) => {
+    const f = ((st && st.inspector && st.inspector.fields) || []).find((x) => x.key === key);
+    return f ? f.value : undefined;
+  };
+  await simOp({ op: 'patch', patch: { op: 'add', parentId: 'n1', kind: 'image', name: '无图源' } });
+  const stNo = await simOp({ op: 'state', summaryOnly: true });
+  ok('★ patch add 不给 imageId ⇒ 仍是"未指定"（0，与真机一样画 `?`）', fieldOf(stNo, 'imageId') === 0,
+    'imageId=' + JSON.stringify(fieldOf(stNo, 'imageId')));
+
+  const withImg = await simOp({ op: 'patch', patch: { op: 'add', parentId: 'n1', kind: 'image', name: '方块图', imageId: 100001 } });
+  const stWith = await simOp({ op: 'state', summaryOnly: true });
+  ok('★ patch add kind=image：`imageId` 真被写进去了（建好之后补一次 set）',
+    !!withImg.imageIdApplied && withImg.imageIdApplied.imageId === 100001 && fieldOf(stWith, 'imageId') === 100001,
+    JSON.stringify({ applied: withImg.imageIdApplied, got: fieldOf(stWith, 'imageId') }));
+
+  let imgErr = '';
+  try { await simOp({ op: 'patch', patch: { op: 'add', parentId: 'n1', kind: 'textbox', name: 'x', imageId: 100001 } }); } catch (e) { imgErr = e.message; }
+  ok('★ patch add 的 `imageId` 只给「图片」用（textbox 传它要明确报错，不静默忽略）', /imageId/.test(imgErr) && /image/.test(imgErr), imgErr.slice(0, 120));
+}
 
 /* ---------------------------------------------------------------- 边界 */
 

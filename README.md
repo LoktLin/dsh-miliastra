@@ -1,9 +1,9 @@
 # dsh-miliastra
 
 > 原神 · **千星奇域**（Miliastra Wonderland）UGC 的 DSH 插件：把「文件层」的开发闭环做成原生工具 ——
-> 让 AI Agent 自己定位活文件、读地图存档、跑探针、取运行时日志、看画面，不用你手动复制粘贴。
+> 让 AI Agent 自己定位活文件、读地图存档、跑试玩探针、取运行时日志、看画面，不用你手动复制粘贴。
 
-**版本 `0.5.1`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
+**版本 `0.6.0`**（见 [CHANGELOG](CHANGELOG.md)） · GPL-3.0-only · 适用于
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）0.1.2-rc.1+ · Windows。
 
 > 🎯 **目标是让 AI 更好用。** 这个插件是**一个 AI 写给其它 AI 用的**：不是"替人省点击"，
@@ -53,7 +53,7 @@ miliastra_health {}
 **方式一：npm（推荐）**
 
 ```powershell
-dsh plugin --profile web add dsh-miliastra@0.5.1
+dsh plugin --profile web add dsh-miliastra@0.6.0
 ```
 
 装完**重启 `dsh web`**（插件在启动时加载）。包页：<https://www.npmjs.com/package/dsh-miliastra>
@@ -79,7 +79,7 @@ dsh plugin --profile web add dsh-miliastra@0.5.1
 | **`miliastra_map`** | 读 `<关卡ID>.gil`（4 个 op：`summary` 概况 / `clientui` **客户端控件谱系**（控件模板索引 / 名字 / 父 / 子） / `script` 脚本源码快照比对 / `strings` 提可读字符串，存盘前后 diff 用） | 判断「哪些控件能被脚本动态创建」、判断「跑的是不是本地这版代码」 |
 | **`miliastra_log`** | 读 `.gia` 运行时日志：`sessions` 列局面、`tail` 结构化读正文、`grep` 按 TAG / 正则过滤、`tags` 汇总标签、**`runs` 按「局」切分 + 局间 diff**、**`metrics` 指标汇总**（见下）。可用 `run=<epoch>` 只看某一局 | **运行时取证**（Lua 里 `print`，别靠猜）。比让人手动贴日志可靠得多 |
 | **`miliastra_playtest`** | **试玩开跑 / 结束的实时侦测**（见下）：`status` 看现在在不在试玩、开了几秒；`wait` 等下一次开跑（可 `afterSec` 要「开跑 N 秒后」） | 想知道「开跑那一刻」时 —— 这是**唯一**能看到开跑的通道，`.gia` 不行 |
-| **`miliastra_probe`** | 探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档（`list` 先看每个模板的白话说明）。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
+| **`miliastra_probe`** | 试玩探针模板化：**5 个只读诊断脚本** —— `ping` 探活 / `tree` 看控件 / `instantiate` 试钥匙 / `api-surface` 翻字典 / `api-check` 核文档（`list` 先看每个模板的白话说明）。渲染 → 部署 → 试玩后 `collect` 回收结论 | 需要运行时真相时 |
 | **`miliastra_sim`** | **内置模拟器**：`bind` 把真机工程搬进来（活文件 + 控件模板索引 —— **优先自动拿**：`op=handover` 从源码抽（可带 `source` 读任意本地 .lua）/ `miliastra_map op=clientui` 从 `.gil` 读，都拿不到才问创作者 → 回「脚本跑没跑、控件建了几个」）、`state` 看工程/控件树/属性、`patch` 改工程（加控件/改字段/挂脚本）、`play` 控制试玩（`start`/`step`/`pointer`/`key`/`click`/`serverSet`…）、`verify` 一条调用 = 操作+断言+判定、`cases` 验收单（自动项重放 / **人工项只列出等人打勾**）、`frames` 动画证据、`shot` 出 PNG（`ui` 编辑器视图 / `play` 试玩画面）、`load`/`save` 模拟器工作区存档 | **想在游戏之外先跑一遍**（搭界面 / 改控件 / 跑 levelScript / 看画面 / 自测逻辑）时。⚠️ 引擎吸收自 `miliastra-beyond-simulator`；**模拟器通过 ≠ 真机通过** |
 | **`miliastra_shot`** | **截图**（5 个 op）：`capture` 截游戏/编辑器窗口、**`burst` 连拍**（`awaitPlaytest:true` 可「等开跑 → 等 N 秒 → 连拍」，**一次调用**；`dryRun` 先看计划）、`list` 看截到哪了、`clean` 清理（默认只报告）、`targets` 列出当前**能截哪些窗口** | 需要「看画面对不对」时 —— 日志回答不了观感 |
 | **`miliastra_asset`** | **插件级素材库 + 两个平台目录通道**（10 个 op）：`add` 入库（绝对路径 / base64 / data URL，可带 `tags`）、`list`（`tag`/`limit`/`summaryOnly`）、`get`（回 `dataUrl` 或写到 `out`）、`remove`、`rebuild`（索引丢了从目录重建）、`prune`（默认只报告）、`stats`。**按内容寻址**：文件名 = `sha256` 前 16 位 + 原扩展名，同图只存一份。★ **`op=catalog`** = 查**平台图片资源库**（离线快照 1543 条 / 14 类）：按分类 / 颜色档 / `simOnly` / **`imgExists`**（21 条"目录里有、图却缺"）筛，回 id + 分类 + 有没有图 + 模拟器认不认（**单图没名字 ⇒ 不编名字**）。★ **`op=sound-search` / `op=sound-get`** = 平台音效库（1997 条 / 7 类）按中英文名模糊搜（五档相关性 + `weak` 标记；**不支持拼音**）。★ **回执体积**：**发现调用给全表、过滤调用只给结论** —— 只有 `op=catalog` 没给收窄条件、或 `op=sound-search` 没给 `q`（发现调用，只回分类表、不回 1997 条）时才带完整分类表；其余只带 `categoriesOmitted` / `catalogOmitted`，要全表或 sha256 就传 `withMeta:true` | 要把**图片素材**存下来反复引用时（UI 动画 / 粒子 / 像素画的图源）—— ⚠️ 只写**插件数据目录**，不进游戏存档、不碰活文件；**素材绝不自动删**（`remove` 要显式 `confirm`，删字节再加 `deleteFile`）。要**挑平台素材 / 配音效**时用后三个 op（离线快照、运行时零联网、**不下载素材本体**） |
@@ -101,7 +101,7 @@ dsh plugin --profile web add dsh-miliastra@0.5.1
 | [`docs/模拟器与视图.md`](docs/模拟器与视图.md) | 要用内置模拟器：三档（看 / 玩 / 判）在流程里的位置、画面怎么来的、AI 怎么自测（`verify` / `frames` / `cases`）、哪些还没验证 |
 | [`docs/面板与活文件安全.md`](docs/面板与活文件安全.md) | 用人眼看面板：三栏怎么用、自动跟随换图、多活文件、一键还原，以及活文件「宁可失败不许损坏」的约定 |
 | [`docs/关键知识与能力边界.md`](docs/关键知识与能力边界.md) | 动手前先认清边界：哪些控件能被脚本动态创建、`prefabIndex` 的坑、为什么试玩没有自动化通道 |
-| [`docs/配置与开发.md`](docs/配置与开发.md) | 要改这个插件 / 改环境变量与数据目录时要看：改代码后的验证阶梯、生效边界（Host 是启动快照）、探针硬边界、排障 |
+| [`docs/配置与开发.md`](docs/配置与开发.md) | 要改这个插件 / 改环境变量与数据目录时要看：改代码后的验证阶梯、生效边界（Host 是启动快照）、试玩探针硬边界、排障 |
 | [`docs/需求边界清单_融合beyond-simulator_2026-09-24.md`](docs/需求边界清单_融合beyond-simulator_2026-09-24.md) | 要追溯模拟器是怎么融进来的：R↔FP 追溯、六轮决策、W1–W7 工单 |
 | [`docs/上游源码索引与吸收地图.md`](docs/上游源码索引与吸收地图.md) | 要找上游源码在哪 / 搬了什么 / 没搬的读哪篇（含 esbuild 构建脚本、他们的 DSH 插件与 agent 预设） |
 | [`CHANGELOG.md`](CHANGELOG.md) | 每个版本加了什么、修了什么、怎么验的 |

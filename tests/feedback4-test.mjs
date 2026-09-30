@@ -134,7 +134,7 @@ await check('P0-1 pickLiveFile：source 名对不上 + 多个候选 → **抛错
 });
 
 await check('P0-1 pickLiveFile：目录里只有 1 个非附属活文件 → 允许但标 basenameMismatch + warning', async () => {
-  const live = [{ name: '唯一.lua', path: 'X:\\唯一.lua' }, { name: '_探针_x.lua', auxiliary: true }, { name: '旧_备份.lua' }];
+  const live = [{ name: '唯一.lua', path: 'X:\\唯一.lua' }, { name: '_试玩探针_x.lua', auxiliary: true }, { name: '旧_备份.lua' }];
   const r = pickLiveFile({ levelId: 2, liveFiles: live, source: 'D:\\code\\别的名字.lua' });
   assert(r.picked.name === '唯一.lua', '没选中唯一候选：' + r.picked.name);
   assert(r.basenameMismatch === true && r.destBasenameMatchesSource === false, '没标 basenameMismatch：' + JSON.stringify(r).slice(0, 160));
@@ -460,6 +460,9 @@ await check('P2-3 回归：sibling 顺序在 PNG 里真的生效（patch add 沉
     await put(id, 'width', 400); await put(id, 'height', 200);
     await put(id, 'posX', 250); await put(id, 'posY', 120);
     await put(id, id === tId ? 'bgColor' : 'imageColor', color);
+    // ★ E1③（2026-09-30）：图片控件**不再**被模拟器补一张方块 ⇒ 要蓝色方块就得显式给图源
+    //   （100001 = 平台「方块」素材；这也是真机上唯一能让它不画 `?` 的写法）
+    if (id === iId) await put(id, 'imageId', 100001);
   }
   const tree = (await simOp({ op: 'controls' })).controls.filter((c) => ['Z文字', 'Z图'].includes(c.name)).map((c) => c.name);
   await simOp({ op: 'play', action: 'start', args: { canvasId: 'pc-16-9' } });
@@ -504,7 +507,7 @@ await check('P2-3 回归：脚本 `InstantiateClientUIControl` **后建的在上
     source: [
       'function OnStart()',
       '  local img = game.InstantiateClientUIControl(1073741868, script.object)',
-      '  if img then img:SetSizeDelta(400, 200); img:SetAnchoredPosition(0, 0); img.imageColor = Color.FromRGBA(0, 0, 255, 255) end',
+      '  if img then img:SetSizeDelta(400, 200); img:SetAnchoredPosition(0, 0); img:SetImage(Enum.ImageSource.StaticReference, 100001); img.imageColor = Color.FromRGBA(0, 0, 255, 255) end',
       '  local txt = game.InstantiateClientUIControl(1073741867, script.object)',
       '  if txt then txt:SetSizeDelta(400, 200); txt:SetAnchoredPosition(0, 0); txt.text = "ZZ"; txt.bgColor = Color.FromRGBA(255, 0, 0, 255) end',
       '  print("FB4_INST_OK")',
@@ -795,10 +798,17 @@ await check('N-3 契约（实测）：lua 断言**只看报不报错** —— `r
 });
 
 await check('N-3 schema：契约写进 miliastra_sim 的说明（返回值被忽略 + 要失败得自己 assert/error）', async () => {
-  const d = String(simTool.description || '');
+  /*
+   * ★ 2026-09-30：这条契约从**工具 description** 挪到了 **`expect` 参数的 description** ——
+   *   理由只有一个：工具 schema 有 32KB 硬棘轮（smoke），description 已挤到极限。
+   *   契约本身一个字没改（AI 照样只看得到 schema、照样看得见这两条），所以这里改成在
+   *   「description + 参数说明」这份**完整的 AI 可见面**上断言，而不是把这条绊线删掉。
+   */
+  const d = String(simTool.description || '')
+    + String((simTool.parameters.properties.expect || {}).description || '');
   assert(/返回值被忽略/.test(d), '没说清返回值契约：' + d.slice(-500));
   assert(/assert\(false/.test(d), '没给「要失败得自己 assert」的例子');
-  return '说明里有「返回值被忽略 / assert(false, …)」';
+  return '说明里有「返回值被忽略 / assert(false, …)」（在 description + expect 参数说明上）';
 });
 
 /* ================================================================== 「确认好用的」6 条（保持，别改） */

@@ -210,9 +210,24 @@ export class PixiPlayRenderer {
     } else {
       const graphic = new Graphics()
       const color = argb(item.imageColor, 0xffffffff)
-      if (item.primitive === 'missing') {
-        graphic.rect(-width / 2, -height / 2, width, height).fill({ color: 0x482228, alpha: 0.36 })
-        graphic.rect(-width / 2 + 0.5, -height / 2 + 0.5, Math.max(0, width - 1), Math.max(0, height - 1)).stroke({ color: 0xff7481, alpha: 1, width: 1 })
+      let overlay = null
+      if (item.primitive === 'missing' || item.primitive === 'unsupported') {
+        // E1③：占位符**与真机对齐** —— 模板没给贴图时真机就是 `?`；
+        // 以前这里画一块实心方块，把「真机满屏 `?`」盖成了"看起来没事"。
+        // 两档分开配色：`missing`（真机也是 `?`，红框）/ `unsupported`（真机有图、模拟器画不出，蓝框）。
+        const border = item.primitive === 'missing' ? 0xff7481 : 0x8ab4ff
+        graphic.rect(-width / 2, -height / 2, width, height).fill({ color: 0x3a3a3a, alpha: 1 })
+        graphic.rect(-width / 2 + 0.5, -height / 2 + 0.5, Math.max(0, width - 1), Math.max(0, height - 1)).stroke({ color: border, alpha: 1, width: 1 })
+        overlay = new Text({
+          text: '?',
+          style: new TextStyle({
+            fontFamily: 'Inter, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
+            fontSize: Math.max(8, Math.min(width, height) * 0.62),
+            fill: 0xffffff,
+            align: 'center',
+          }),
+        })
+        overlay.anchor.set(0.5)
       } else if (item.primitive === 'circle') {
         graphic.circle(0, 0, Math.min(width, height) / 2).fill(color)
       } else if (item.primitive === 'ring') {
@@ -234,6 +249,7 @@ export class PixiPlayRenderer {
         }
       }
       visual.addChild(graphic)
+      if (overlay) visual.addChild(overlay)
     }
     visual.scale.set(item.pressed ? 0.98 : 1)
     root.addChildAt(visual, 0)

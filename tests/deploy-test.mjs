@@ -38,7 +38,7 @@ fs.mkdirSync(sandbox, { recursive: true });
 const dest = path.join(sandbox, '双相.lua');
 
 const OLD = '-- 旧版本\r\nlocal a = 1\r\n';
-const NEW = '-- 新版本\r\nlocal 中文注释 = "保持编码"\r\nreturn 1\r\n';
+const NEW = '-- 新版本（中文注释不能被转码）\r\nlocal note = "保持编码"\r\nreturn 1\r\n';
 fs.writeFileSync(dest, OLD, 'utf8');
 
 const src = path.join(tmp, 'new.lua');
@@ -55,6 +55,32 @@ check('正常部署：拷贝成功 + 哈希一致 + 无 BOM + UTF-8 合法', () 
   assert(r.utf8Ok === true, 'utf8Ok 不为 true');
   firstBackup = r.backup;
   return `${r.bytes} 字节  sha=${String(r.sha256).slice(0, 12)}…  备份=${r.backup ? path.basename(r.backup) : '（无）'}`;
+});
+
+/*
+ * ★★ 2026-09-30（AI 易用性反馈第 1/12 条）：**`lint` 以前不查语法**，而回执里没有任何限定语 ⇒
+ *   使用者把「deploy 成功」当成了「语法正确」，一轮里 3 次语法错全部漏到真机前才发现。
+ *   这两条把「真语法检查」与「自述边界」钉住：缺任何一个，将来都会再犯同一件事。
+ */
+check('★ 语法错误必须被 deploy 拦住（缺逗号 ⇒ 报错带行号）', () => {
+  const broken = 'local CFG = {\n  A = 1\n  B = 2\n}\n';
+  const p = path.join(tmp, 'broken.lua');
+  fs.writeFileSync(p, broken, 'utf8');
+  const r = deploy(p, dest, {});
+  assert(r.ok === false, '语法错却部署成功了：' + JSON.stringify(r.ok));
+  assert(r.syntax && r.syntax.ok === false, '没带 syntax 结论：' + JSON.stringify(r.syntax));
+  assert(r.syntax.line === 3, '行号不对（期望 3，实际 ' + r.syntax.line + '）');
+  assert(r.errors.some((e) => /语法/.test(e)), 'errors 里没有"语法"字样：' + JSON.stringify(r.errors));
+  return '拦住了：' + String(r.errors[0]).slice(0, 60);
+});
+
+check('★ lint 自述边界：`lintChecks` / `lintSkips` 都在（别再让人从名字猜）', () => {
+  const r = deploy(src, dest, {});
+  assert(r.ok, 'ok=false：' + JSON.stringify(r.errors));
+  assert(Array.isArray(r.lintChecks) && r.lintChecks.some((x) => /语法/.test(x)), 'lintChecks 没写"语法"：' + JSON.stringify(r.lintChecks));
+  assert(Array.isArray(r.lintSkips) && r.lintSkips.some((x) => /作用域/.test(x)), 'lintSkips 没写"作用域"：' + JSON.stringify(r.lintSkips));
+  assert(r.syntax && r.syntax.ok === true, '成功时也该带 syntax:ok');
+  return 'lintChecks=' + r.lintChecks.length + ' 条 / lintSkips=' + r.lintSkips.length + ' 条';
 });
 
 check('旧文件被备份，且备份 == 原内容（字节级）', () => {
@@ -131,7 +157,7 @@ check('★ 🔴 备份失败时**不覆盖**活文件（这是「把用户 lua �
 
 check('★ 原子写：不留 .tmp 残留，且目标内容完整（断电安全的前提）', () => {
   const src4 = path.join(tmp, 'new4.lua');
-  const body = '-- 原子写\r\nlocal 中文 = "注释不能被转码"\r\nreturn 1\r\n';
+  const body = '-- 原子写（中文注释不能被转码）\r\nlocal note = "中文" \r\nreturn 1\r\n';
   fs.writeFileSync(src4, body, 'utf8');
   const r = deploy(src4, dest, { backupDir: path.join(tmp, 'atomic-backup') });
   assert(r.ok === true, '部署失败：' + JSON.stringify(r.errors));
@@ -379,13 +405,13 @@ check('★ 🔴 deploy() 拒绝「源文件就是目标活文件」（自覆盖�
   return '拒绝并说明';
 });
 
-check('★ pickLuaFile() 跳过探针源码与备份（否则会把探针当成「当前活文件」）', () => {
+check('★ pickLuaFile() 跳过试玩探针源码与备份（否则会把试玩探针当成「当前活文件」）', () => {
   const dir = path.join(tmp, 'pick-dir');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '双相.lua'), '-- 用户的脚本\r\n', 'utf8');
-  // 探针和备份都是「更新的」—— 旧实现按 mtime 取最新就会选中它们
-  const probe = path.join(dir, '_探针_api-surface_P1_20260923-190000.lua');
-  fs.writeFileSync(probe, '-- 探针\r\n', 'utf8');
+  // 试玩探针和备份都是「更新的」—— 旧实现按 mtime 取最新就会选中它们
+  const probe = path.join(dir, '_试玩探针_api-surface_P1_20260923-190000.lua');
+  fs.writeFileSync(probe, '-- 试玩探针\r\n', 'utf8');
   const bak = path.join(dir, '双相_20260101-000000_备份.lua');
   fs.writeFileSync(bak, '-- 备份\r\n', 'utf8');
   const now = new Date();
@@ -395,7 +421,7 @@ check('★ pickLuaFile() 跳过探针源码与备份（否则会把探针当成�
   const picked = pickLuaFile(dir);
   assert(picked && picked.name === '双相.lua', '选错了文件：' + (picked && picked.name));
   assert(picked.skippedAuxiliary.length === 2, '没报告跳过了几个附属文件：' + JSON.stringify(picked.skippedAuxiliary));
-  for (const n of ['_探针_x.lua', '双相.bak', '双相_20260101-000000_备份.lua', '.hidden.lua']) {
+  for (const n of ['_试玩探针_x.lua', '双相.bak', '双相_20260101-000000_备份.lua', '.hidden.lua']) {
     assert(isAuxiliaryLuaName(n), '没被识别为附属文件：' + n);
   }
   assert(!isAuxiliaryLuaName('双相.lua') && !isAuxiliaryLuaName('测试.lua'), '正常活文件名被误判成附属文件');
@@ -520,7 +546,7 @@ check('★ fixbom：只去那 3 个字节，且本来没有 BOM 就什么都不�
   fs.mkdirSync(d, { recursive: true });
   const live = path.join(d, 'bom.lua');
   const bd = path.join(d, '_backup');
-  const body = Buffer.from('-- 带 BOM 的脚本\nlocal 中文 = "编码不能坏"\n', 'utf8');
+  const body = Buffer.from('-- 带 BOM 的脚本（中文注释）\nlocal note = "编码不能坏"\n', 'utf8');
   fs.writeFileSync(live, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]));
 
   const before = fs.readFileSync(live);

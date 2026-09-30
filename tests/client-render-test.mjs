@@ -280,7 +280,7 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
     assert(html.includes(head), '缺栏目：' + head);
   }
   for (const card of ['关卡</div>', '关卡与文件', '地图体检', '活文件', '活文件体检', '脚本一致性',
-    '备份', '部署到活文件', '运行时日志', '探针', '刷新']) {
+    '备份', '部署到活文件', '运行时日志', '试玩探针', '刷新']) {
     assert(html.includes(card), '缺卡片/按钮：' + card);
   }
   assert(html.includes('dsh-miliastra-col'), '三栏容器没渲染');
@@ -309,7 +309,7 @@ check('版本行：Host / 源码对照，陈旧时才警告并给下一步', () 
 });
 
 
-// 探针现在收在「高级诊断」折叠区里（默认收起），所以下面这些断言都要显式展开它。
+// 试玩探针现在收在「高级诊断」折叠区里（默认收起），所以下面这些断言都要显式展开它。
 const openAdv = (extra) => Object.assign({
   open: true, setOpen: () => {}, rootRef: { current: null }, __advOpen: true, __panelTab: 'all',
 }, extra || {});
@@ -328,7 +328,7 @@ check('★ 日志格式化：拆出 时间 / [TAG] / 正文，且只对疑似异
   assert(p({ time: 't', message: '[X] 创建控件失败：返回 nil' }).bad === true, '「失败」没被判为疑似异常');
   assert(p({ time: 't', message: '[X] Error: bad argument count' }).bad === true, 'error 没被判为疑似异常');
   assert(p({ time: 't', message: '[X] 重试中 timeout' }).warn === true, 'timeout 没被判为警告');
-  // ⚠️ 反例：`err=nil` 是**正常**输出（探针常打），不能一见 nil 就标红
+  // ⚠️ 反例：`err=nil` 是**正常**输出（试玩探针常打），不能一见 nil 就标红
   assert(p({ time: 't', message: '[PROBE] EnableUpdate ok=true err=nil' }).bad === false,
     'err=nil 被误判为异常 —— 这会让「只看异常」全是噪音');
 
@@ -431,7 +431,7 @@ check('★ 局面名与状态图标（面板上只显示 HH:MM:SS，不铺一长
   return 'HH:MM:SS 抽取 + 4 种状态图标齐备';
 });
 
-check('★ 高级诊断默认**收起**（只读的 UI 读取 + 会覆盖脚本的探针都关在里面）', () => {
+check('★ 高级诊断默认**收起**（只读的 UI 读取 + 会覆盖脚本的试玩探针都关在里面）', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all',
     open: true, setOpen: () => {}, rootRef: { current: null },
   }));
@@ -440,16 +440,16 @@ check('★ 高级诊断默认**收起**（只读的 UI 读取 + 会覆盖脚本�
   assert(/平时不用展开/.test(flat), '收起态没说明「平时不用展开」');
   assert(/读界面控件/.test(flat), '折叠标题里没提「读界面控件」');
   // 收起时：两块内容都不该在 DOM 里（不是 width:0 藏起来，是真不渲染）
-  for (const nope of ['部署探针', '收回结论', '翻字典', '试钥匙', '全部 37 条记录']) {
+  for (const nope of ['部署试玩探针', '收回结论', '翻字典', '试钥匙', '全部 37 条记录']) {
     assert(!flat.includes(nope), '收起态却渲染了内部内容：' + nope);
   }
-  // 展开后两块都要出现，而且要分别标出风险（UI 读取 = 只读；探针 = 会覆盖）
+  // 展开后两块都要出现，而且要分别标出风险（UI 读取 = 只读；试玩探针 = 会覆盖）
   const open = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
   const openFlat = open.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert(/部署探针/.test(openFlat) && /翻字典/.test(openFlat), '展开后探针内容没出来');
+  assert(/部署试玩探针/.test(openFlat) && /翻字典/.test(openFlat), '展开后试玩探针内容没出来');
   assert(/① 读界面控件（只读/.test(openFlat), '没标出 UI 读取是只读的');
-  assert(/② 探针（⚠️ 会临时覆盖你的脚本/.test(openFlat), '没标出探针会覆盖脚本');
-  return '收起：只有标题；展开：① 只读 UI 读取 + ② 会覆盖脚本的探针，各自标了风险';
+  assert(/② 试玩探针（⚠️ 会临时覆盖你的脚本/.test(openFlat), '没标出试玩探针会覆盖脚本');
+  return '收起：只有标题；展开：① 只读 UI 读取 + ② 会覆盖脚本的试玩探针，各自标了风险';
 });
 
 check('★ 读界面控件：给出可创建模板 / 容器节点 / 全部记录，并说明「无父节点只是候选」', () => {
@@ -491,13 +491,13 @@ check('★ 读界面控件：给出可创建模板 / 容器节点 / 全部记录
   return '可创建模板 / 容器节点 / 全部记录 / 候选说明 / 空库告警 都在';
 });
 
-check('★ 探针卡片讲「人话」：说清是什么/代价/四步流程，且模板清单一个不漏', () => {
+check('★ 试玩探针卡片讲「人话」：说清是什么/代价/四步流程，且模板清单一个不漏', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, openAdv()));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
-  // ① 得先回答「探针是什么」「要付什么代价」—— 作者的原话是「没看懂探针作用」
-  assert(/探针是干嘛的/.test(flat), '没有「探针是干嘛的」这一句');
-  assert(/临时替掉你脚本/.test(flat), '没有用大白话解释探针是什么');
+  // ① 得先回答「试玩探针是什么」「要付什么代价」—— 作者的原话是「没看懂试玩探针作用」
+  assert(/试玩探针是干嘛的/.test(flat), '没有「试玩探针是干嘛的」这一句');
+  assert(/临时替掉你脚本/.test(flat), '没有用大白话解释试玩探针是什么');
   assert(/什么时候用/.test(flat), '没有说什么时候该用它');
   assert(/要付什么代价/.test(flat) && /玩法不会跑/.test(flat), '没说清「试玩那一局玩法不会跑」这个代价');
   // ② 四步流程要能看到，且最后一步是还原脚本
@@ -541,17 +541,17 @@ check('★ 部署后（已部署状态）渲染出「第 4 步：还原我的脚
     __probeBackup: 'C:\\x\\_backup\\双相_20260923104427_备份.lua',
   })));
   const flat = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert(/探针已部署/.test(flat), '已部署状态没给出提示');
+  assert(/试玩探针已部署/.test(flat), '已部署状态没给出提示');
   assert(/重新试玩一局/.test(flat), '已部署状态没提醒「重新试玩」');
   // 认按钮元素本身，别认字面 —— 收起态的提示语里也含「还原我的脚本」这几个字
-  assert(/④ 还原我的脚本<\/button>/.test(html), '缺「④ 还原我的脚本」按钮 —— 用户会忘记把探针换回去');
+  assert(/④ 还原我的脚本<\/button>/.test(html), '缺「④ 还原我的脚本」按钮 —— 用户会忘记把试玩探针换回去');
   // 只有「已部署」才出现，别一上来就摆一个会误点的按钮
   const clean = renderToStaticMarkup(React.createElement(PanelComp, openAdv()));
   assert(!/④ 还原我的脚本<\/button>/.test(clean), '未部署时不该出现「还原我的脚本」按钮');
   return '已部署：提示 + 重新试玩提醒 + 还原按钮；未部署：按钮不出现';
 });
 
-check('★ Host 清单比磁盘少时，探针卡片提示「Host 是旧版 + 重启 dsh web」', () => {
+check('★ Host 清单比磁盘少时，试玩探针卡片提示「Host 是旧版 + 重启 dsh web」', () => {
   // 用 Host 的**真实**模板清单构造两种情形 —— 写死清单会在加模板时变成假失败（踩过）
   const missingTpl = PROBE_TEMPLATES[PROBE_TEMPLATES.length - 1];
   const partial = PROBE_TEMPLATES.filter((t) => t !== missingTpl);

@@ -1,9 +1,9 @@
 /**
- * tools/live-render-check.mjs — 向**运行中的 Host** 要探针模板渲染结果，并当场结构校验。
+ * tools/live-render-check.mjs — 向**运行中的 Host** 要试玩探针模板渲染结果，并当场结构校验。
  *
  * 为什么需要：`patchReload: live` **不会重新 import Host 模块**（实测），
  * 所以「磁盘上的模板是对的」不等于「跑着的 Host 发的模板是对的」。
- * 部署探针前先问一遍，避免把一段带语法错的模板投进沙箱（那会整段静默失效）。
+ * 部署试玩探针前先问一遍，避免把一段带语法错的模板投进沙箱（那会整段静默失效）。
  *
  * 用法: node tools/live-render-check.mjs [baseUrl] [模板名...]
  *   默认 http://127.0.0.1:3080
@@ -66,7 +66,7 @@ for (const t of list) {
         }
       }
     }
-    // 关键内容抽查：探针必须开 EnableUpdate，否则只会打三行空壳
+    // 关键内容抽查：试玩探针必须开 EnableUpdate，否则只会打三行空壳
     if (lr.ok && !/EnableUpdate\(true\)/.test(r.lua)) {
       console.log('  ⚠️ ' + t + ' 没有 EnableUpdate(true) —— OnUpdate 不会触发，只会打 OnInit/OnEnable/OnStart 三行空壳');
       fail += 1;

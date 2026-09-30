@@ -1,5 +1,5 @@
 /**
- * 探针部署路径自测：用 **MILIASTRA_LOCALLOW 指向一个假存档根**，
+ * 试玩探针部署路径自测：用 **MILIASTRA_LOCALLOW 指向一个假存档根**，
  * 完整走一遍 `miliastra_probe op=deploy` 与 `op=collect` —— 不碰真实活文件。
  *
  * 为什么能这么测：locate.mjs 的存档根是在**调用时**读环境变量的，
@@ -32,6 +32,7 @@ async function check(label, fn) {
   }
 }
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+const eq = (a, b, m) => assert(a === b, (m || '') + ` 期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}`);
 
 // ---------- 造一个假存档根 ----------
 const fakeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-fake-localow-'));
@@ -58,10 +59,10 @@ await check('miliastra_health 认得这个假存档根（证明 MILIASTRA_LOCALL
   return `${d.localLow}；当前=${d.current.brand}/${d.current.levelId}`;
 });
 
-await check('miliastra_probe op=render 能生成探针源码（不写盘）', async () => {
+await check('miliastra_probe op=render 能生成试玩探针源码（不写盘）', async () => {
   const d = await probe.execute({ op: 'render', template: 'ping', tag: 'FAKE' }, {});
   assert(d.ok === true, 'render 失败：' + d.error);
-  assert(/script:EnableUpdate\(true\)/.test(d.lua), '探针里缺 EnableUpdate(true) —— 会只打三行空壳');
+  assert(/script:EnableUpdate\(true\)/.test(d.lua), '试玩探针里缺 EnableUpdate(true) —— 会只打三行空壳');
   assert(d.lua.includes('"FAKE"'), '标签没写进 TAG 常量');
   return `${d.bytes} 字节，含 EnableUpdate`;
 });
@@ -75,16 +76,16 @@ await check('miliastra_probe op=deploy 落到假沙箱：备份 + 哈希 + 无 B
   assert(d.backup && fs.existsSync(d.backup), '没有产生备份');
   assert(Buffer.compare(fs.readFileSync(d.backup), before) === 0, '备份内容 != 部署前的活文件');
   const now = fs.readFileSync(livePath, 'utf8');
-  assert(now.includes('script:EnableUpdate(true)'), '活文件没被换成探针');
+  assert(now.includes('script:EnableUpdate(true)'), '活文件没被换成试玩探针');
   deployed = d;
   return `活文件 ${d.bytes} 字节  sha=${String(d.sha256).slice(0, 12)}…  备份=${path.basename(d.backup)}`;
 });
 
-await check('探针源码另存一份在沙箱目录里（便于事后复查）', async () => {
+await check('试玩探针源码另存一份在沙箱目录里（便于事后复查）', async () => {
   assert(deployed && deployed.probeSource, 'probeSource 缺失');
   assert(fs.existsSync(deployed.probeSource), 'probeSource 文件不存在：' + deployed.probeSource);
   const src = fs.readFileSync(deployed.probeSource, 'utf8');
-  assert(fs.readFileSync(livePath, 'utf8') === src, '活文件与另存的探针源码不一致');
+  assert(fs.readFileSync(livePath, 'utf8') === src, '活文件与另存的试玩探针源码不一致');
   return path.basename(deployed.probeSource);
 });
 
@@ -175,7 +176,7 @@ await check('一个关卡多个活文件：全部列出 / 可按名字选 / 选�
   }
 });
 
-await check('★ 每个探针模板生成出来的 Lua 都通过结构校验（模板写错会静默不生效）', async () => {
+await check('★ 每个试玩探针模板生成出来的 Lua 都通过结构校验（模板写错会静默不生效）', async () => {
   const { PROBE_TEMPLATES, renderProbe } = await import('../lib/probes.mjs');
   const { lintLua, lintSummary } = await import('../lib/lualint.mjs');
   assert(PROBE_TEMPLATES.length >= 4, '模板数不对：' + PROBE_TEMPLATES.join(', '));
@@ -201,6 +202,45 @@ await check('★ 每个探针模板生成出来的 Lua 都通过结构校验（�
     assert(Number(m[1]) > 0 && Number(m[1]) < 10000, `模板 ${t} 的 CHUNK=${m[1]} 必须小于日志上限 10000`);
   }
   return `${PROBE_TEMPLATES.length} 个模板全通过（${sizes.join(' / ')}；均为 ${/local CHUNK = (\d+)/.exec(renderProbe(PROBE_TEMPLATES[0], { tag: 'SELFTEST' }).lua)[1]} 字符分片）`;
+});
+
+/* ---------------- P3-12：帧率探针（perf）在**真机**上才有意义，这里只钉「接线正确」 ---------------- */
+
+await check('★ perf 模板：OnUpdate 里挂了逐帧钩子（onFrame），且采样秒数可传 + 夹紧', async () => {
+  const { renderProbe } = await import('../lib/probes.mjs');
+  const r = renderProbe('perf', { tag: 'SELFTEST', perfSeconds: 3 });
+  assert(r.ok, '渲染失败：' + r.error);
+  // ① 钩子必须在 OnUpdate 里被调用（写在 EPILOGUE 里），否则采不到任何一帧
+  assert(/if onFrame ~= nil then/.test(r.lua), 'OnUpdate 里没有调用 onFrame');
+  assert(/function onFrame\(dt\)/.test(r.lua), '没有定义 onFrame');
+  // ② 续帧模板**不许**真的打"之后不再输出"那句（它对 perf 是假话）⇒ 那句必须**带 onFrame 守卫**
+  assert(/if onFrame == nil then p\("（之后不再输出）"\) end/.test(r.lua),
+    '「之后不再输出」没有 onFrame 守卫 —— perf 会打出这句假话');
+  const quietLines = r.lua.split(/\r?\n/).filter((l) => l.includes('之后不再输出'));
+  eq(quietLines.length, 1, '「之后不再输出」出现次数');
+  // ③ 秒数：默认 8、可传、夹在 2~120
+  const secs = (o) => /local PERF_SECONDS = (\d+)/.exec(renderProbe('perf', o).lua)[1];
+  eq(secs({ tag: 'X' }), '8', '默认秒数');
+  eq(secs({ tag: 'X', perfSeconds: 5 }), '5', '传 5');
+  eq(secs({ tag: 'X', perfSeconds: 999 }), '120', '上限夹紧');
+  eq(secs({ tag: 'X', perfSeconds: 0 }), '2', '下限夹紧');
+  // ④ 单位不许猜：两种读法都要打出来
+  assert(/若 dt=秒/.test(r.lua) && /若 dt=毫秒/.test(r.lua), 'dt 单位的两种读法没都打出来');
+  // ⑤ 中途快照：试玩常被提前掐掉，只打最终结果会一份数据都拿不到
+  assert(/\[中途 /.test(r.lua) && /\[最终\]/.test(r.lua), '缺中途/最终两档快照');
+  /*
+   * ★★ 2026-09-30 真机实测换来的三条（代价：一局刷出 13 983 行 / 2.8 MB 日志）：
+   *   第一版用 `onFrame = nil`（**给全局赋值**）停采样 —— 真机上**不生效**，探针报了一整局；
+   *   同一份脚本在模拟器里却是好的 ⇒ 两个运行时的全局语义不一致。
+   *   ⇒ 停止闸必须是 **local**（upvalue 两边都可靠），外加**兜底条数上限**。
+   */
+  assert(/local finished = false/.test(r.lua), '停止闸不是 local（真机上给全局赋值不可靠）');
+  assert(/if finished then return end/.test(r.lua), 'onFrame 开头没有 local 停止闸');
+  assert(/finished = true/.test(r.lua), '没看到置位 finished = true');
+  assert(/local REPORT_CAP = \d+/.test(r.lua), '缺兜底条数上限 REPORT_CAP');
+  assert(/if reports > REPORT_CAP then finished = true return end/.test(r.lua), 'report 里没有兜底闸');
+  eq((r.lua.match(/onFrame = nil/g) || []).length, 1, '`onFrame = nil` 出现次数（全文只该剩 EPILOGUE 异常分支那一次）');
+  return 'onFrame 挂上了、8/5/120/2 秒都对、两种单位读法都在、中途+最终两档、停止闸是 local + 兜底上限';
 });
 
 /* ---------------- 0.0.4：miliastra_code 的 fixbom 与部署指纹（假存档根，工具层端到端） ---------------- */
@@ -249,7 +289,7 @@ await check('op=fixbom：**本来没有 BOM 就什么都不做**（真机上最�
 });
 
 await check('op=fixbom：带 BOM 时只去 3 字节（工具层端到端）', async () => {
-  const body = Buffer.from('-- 带 BOM\r\nlocal 中文 = "编码"\r\n', 'utf8');
+  const body = Buffer.from('-- 带 BOM（中文注释）\r\nlocal note = "编码"\r\n', 'utf8');
   fs.writeFileSync(livePath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]));
   const d = await code.execute({ op: 'fixbom' }, {});
   assert(d.ok === true, '去 BOM 失败：' + JSON.stringify(d.error || d));

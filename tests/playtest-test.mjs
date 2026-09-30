@@ -161,6 +161,24 @@ ok('摘要：跑完给最后局的时长', done.inPlaytest === false && done.las
 const multi = playtestSummary(feed(createPlaytestState(), [L_SCENE_1, L_START_1, L_END_1, L_SCENE_2, L_START_2, L_END_2]), NOW);
 ok('摘要：recentRuns 按喂入（真实日志即时间）序给全', multi.recentRuns.length === 2 && multi.recentRuns[0].startedAt === '21:46:02.420', JSON.stringify(multi.recentRuns.map((r) => r.startedAt)));
 
+/*
+ * ★ 2026-09-30 加：`durationSec` 在「没看到结束标记」时是**反推的上界**，必须标出来。
+ *   实测踩到：上一局报 `durationSec: 1203`（20 分钟），而它早就停了（`.gia` 在更早时刻就写完）。
+ *   判据：`closed:"implicit"` ⇒ `durationInferred:true` + 一句 `durationNote`；
+ *        `closed:"seen"`（真看到结束标记）⇒ `durationInferred:false` + `durationNote:null`。
+ */
+{
+  const implicit = playtestSummary(feed(createPlaytestState(), [L_SCENE_1, L_START_1, L_SCENE_2, L_START_2]), NOW);
+  const im = implicit.recentRuns[0];
+  ok('★ closed:implicit ⇒ durationInferred:true + durationNote（时长只是上界）',
+    im && im.closed === 'implicit' && im.durationInferred === true && /上界/.test(im.durationNote || ''),
+    JSON.stringify(im));
+  const seen = playtestSummary(s1e, NOW).lastRun;
+  ok('★ closed:seen ⇒ durationInferred:false + durationNote:null（真看到结束标记，时长是真的）',
+    seen && seen.closed === 'seen' && seen.durationInferred === false && seen.durationNote === null,
+    JSON.stringify(seen));
+}
+
 /* ------------------------------------------------- ② IO（临时目录，不碰存档） */
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-playtest-'));

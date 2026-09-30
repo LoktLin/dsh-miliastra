@@ -298,6 +298,38 @@ ok('humanSize 非数字当 0', humanSize(undefined) === '0 B', humanSize(undefin
   ok('空 frames 不炸', burstSummary([], {}).count === 0 && burstSummary(null, {}).count === 0);
 }
 
+/* ─────────────── 工具层：`op=clean` 的两档回执体积（2026-09-30 加） ───────────────
+ * 为什么要有这组：`clean` 原来**无视 `summaryOnly`** —— 要删 1600 多张时把每条文件名都列出来（≈90 KB）。
+ * 实测后果是**我自己绕开工具改用 PowerShell 删**：一个不存在的"省 token 开关"会把人逼到不安全的路上。
+ * ⚠️ 全程在**临时数据目录**里（绝不碰真实截图目录）：`shotsDir()` 是**调用时**读环境变量的。 */
+{
+  const tmpShotsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-miliastra-shot-clean-'));
+  const savedDir = process.env.MILIASTRA_DATA_DIR;
+  process.env.MILIASTRA_DATA_DIR = tmpShotsRoot;
+  const { TOOLS } = await import('../index.js');
+  const shotTool = TOOLS.find((t) => t.name === 'miliastra_shot');
+  const tmpShots = path.join(tmpShotsRoot, 'shots');
+  fs.mkdirSync(tmpShots, { recursive: true });
+  for (const n of ['a.png', 'b.png', 'c.png']) fs.writeFileSync(path.join(tmpShots, n), Buffer.alloc(32, 7));
+
+  const slim = await shotTool.execute({ op: 'clean', all: true, summaryOnly: true });
+  ok('★ op=clean summaryOnly:true：只给条数 + 前 5 条样例（不逐条列名）',
+    slim.plannedCount === 3 && Array.isArray(slim.plannedSample) && slim.plannedSample.length === 3
+      && slim.planned === undefined && slim.plannedOmitted === 0,
+    JSON.stringify(slim).slice(0, 220));
+  const full = await shotTool.execute({ op: 'clean', all: true });
+  ok('★ op=clean 默认档：**照旧**逐条列出（不许为了省体积改掉默认行为）',
+    Array.isArray(full.planned) && full.planned.length === 3, JSON.stringify(full).slice(0, 160));
+  const real = await shotTool.execute({ op: 'clean', all: true, dryRun: false, confirm: true, summaryOnly: true });
+  ok('★ op=clean 真删：`removedCount`/`removedSample` 在、`removed` 不列全',
+    real.removedCount === 3 && real.removed === undefined && Array.isArray(real.removedSample),
+    JSON.stringify(real).slice(0, 220));
+  ok('★ op=clean 真删后目录真的空了', fs.readdirSync(tmpShots).length === 0, tmpShots);
+
+  if (savedDir === undefined) delete process.env.MILIASTRA_DATA_DIR; else process.env.MILIASTRA_DATA_DIR = savedDir;
+  fs.rmSync(tmpShotsRoot, { recursive: true, force: true });
+}
+
 console.log('');
 if (failures.length) {
   console.log('====== 失败明细 ======');
