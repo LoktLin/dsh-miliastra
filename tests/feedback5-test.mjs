@@ -343,8 +343,9 @@ await check('P1-3 ④ 纯函数：**没有**模板表的普通循环（遍历子
 });
 
 /** 工作区那两份「改造前 / 恢复白名单后」的样例：优先用真文件；不在就用上面的合成夹具并**如实说明**。 */
-const SAMPLE_BOARD_BEFORE = 'C:/Users/Administrator/Desktop/yuanshen/code/侦探1/_snapshots/20260926-200607/project/调查板 board.lua';
-const SAMPLE_BOARD_AFTER = 'C:/Users/Administrator/Desktop/yuanshen/sources/侦探1/board_body.lua';
+// ★ 2026-10-04 B 方案：工作区把 code/ + sources/ 迁进了 案子/<地图>/2.代码/ ⇒ 夹具跟着改（只改路径）。
+const SAMPLE_BOARD_BEFORE = 'C:/Users/Administrator/Desktop/yuanshen/案子/侦探1/2.代码/_snapshots/20260926-200607/project/调查板 board.lua';
+const SAMPLE_BOARD_AFTER = 'C:/Users/Administrator/Desktop/yuanshen/案子/侦探1/2.代码/board_body.lua';
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 const beforeExists = isFile(SAMPLE_BOARD_BEFORE);
 const afterExists = isFile(SAMPLE_BOARD_AFTER);

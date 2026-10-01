@@ -43,9 +43,9 @@ const { TOOLS } = await import('../index.js');
 const { lintUiFiles, resolveUiConfig, UI_LINT_DEFAULTS } = await import('../lib/uilint.mjs');
 const codeTool = TOOLS.find((t) => t.name === 'miliastra_code');
 
-/** 工作区那份基线工具覆盖的工程（验收样例）。 */
+/** 工作区那份基线工具覆盖的工程（验收样例）。★ 2026-10-04：工作区已迁到 案子/<地图>/2.代码/。 */
 const SAMPLE_DIR = process.env.MILIASTRA_UI_SAMPLE_DIR
-  || 'C:/Users/Administrator/Desktop/yuanshen/code/侦探1';
+  || 'C:/Users/Administrator/Desktop/yuanshen/案子/侦探1/2.代码';
 /** 工作区基线里那份**硬编码的对照表**（异名控件：名字不同、其实是同一个）。带文件限定，
  *  因为《侦探杀》里 `btnNext` 在 `调查板 board.lua` 与 `图鉴 codex.lua` 里是**两个不同的按钮**。 */
 const SAMPLE_PAIRS = [
