@@ -51,7 +51,9 @@ import { lintLua, lintSummary } from './lib/lualint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
 import { readGilNodeFacts } from './lib/gilnodes.mjs';
+import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS } from './lib/nodegraph.mjs';
 import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
+import { kbSearch, kbCatalog, kbEntry, kbSources, KB_ENTRIES } from './lib/kbqa.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
   findErrorRecords, parseFileLine, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
 import {
@@ -1531,11 +1533,11 @@ async function pixelArtOp(args = {}) {
  *    别复述参数/返回值/op 列表（那些工具 schema 里已经有了，抄一遍等于重复付费 + 多个会过期的副本）。
  */
 export const PROMPT_SKIP = new Set(['miliastra_echo']);   // 纯调试工具：不需要在开场提示里指路
-
 export const PROMPT_GUIDE = [
   { tool: 'miliastra_health', when: '先用它定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）' },
   { tool: 'miliastra_code', when: '改完本地 lua 用 op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM；还会跑 Lua 结构校验）；op=inspect 看有没有被编辑器写回旧版；op=read 给 source=<绝对路径> 就只读看任意本地 .lua（不在沙箱里也行）' },
-  { tool: 'miliastra_map', when: '判断「哪些控件能被脚本动态创建」用 op=clientui（只看无父节点的独立模板）' },
+  { tool: 'miliastra_map', when: '判断「哪些控件能被脚本动态创建」用 op=clientui（只看无父节点的独立模板）；**"这张节点图在做什么"用 `op=anatomy`** —— 各类型节点多少个（事件/执行/查询/运算/分支）、入口事件、引用到的实体、关键词都能直接读（类型只覆盖随包词典命中的节点，未命中的如实计 Unknown）；要节点明细与引脚连线用 `op=nodes`' },
+  { tool: 'miliastra_kb', when: '**遇到"为什么不生效/不触发/收不到"先用它**：`op=qa` 给症状关键词就回**离线蒸馏**的排查清单（先问哪几个问题 + 有序排查 + 常见误判 + 出处）；`op=node` 离线查节点说明与端口；`op=list/doc/search` 才是在线问第三方知识库（会把 query 发出去）。它**只给排查路径、不下结论**' },
   { tool: 'miliastra_log', when: '运行时结果一律用它取证（Lua 里 print，别靠猜）；**怀疑有报错就先跑 `op=errors`**（按**形态**捞、不看标签 —— 真机的报错行可能没有任何 `[...]` 前缀，按 tag grep 一条都捞不到），它还能把 `文件:行号` 解析出来' },
   { tool: 'miliastra_playtest', when: '想知道「开跑那一刻 / 现在在不在试玩」用它 —— 开跑信号在 output_log.txt（实测延迟 0.07~0.18 秒），**`.gia` 里没有**（它是一局结束后才落盘）' },
   { tool: 'miliastra_shot', when: '要看「画面对不对」用它（日志只能回答「代码跑了没」）；「等开跑 → 等 N 秒 → 连拍」是**一次调用**（op=burst awaitPlaytest:true，可先 dryRun 看计划）' },
@@ -1571,8 +1573,59 @@ export function renderPromptSection() {
   ].join('\n');
 }
 
-const TOOLS = [
-  {
+/*
+ * 千星知识库（第三方，`https://ugc.070077.xyz`）的**在线**取用（`miliastra_kb` 的 list/doc/search op 用）。
+ *
+ * ★ 为什么要写这个小函数而不是装别人的插件：`1475505/dsh-plugin-miliastra-toolbox`（**MIT**）提供的是
+ *   **同一套 HTTP 调用**（6 个工具 + 2 个技能，全部是那个站点的转发壳，站上另有 300+ 篇官方 FAQ/教程与米游社问答楼）。
+ *   吸收它的**调用形状**、不吸收它的 6 个工具名 —— 免得把 15 个工具名摊在模型面前（schema 是要付费的）。
+ *   它 MIT、我们 GPL-3.0-only，方向兼容；出处写在 `NOTICE`。
+ *
+ * ⚠️ 三个纪律：
+ *   ① 这是**联网**调用：会把 query 发给第三方（回执里带 `network:true` 与 `sentTo`，让人知道发了什么）；
+ *   ② **取不到就说取不到**（`ok:false` + `error`），绝不把"网络失败"讲成"知识库没有"；
+ *   ③ 返回的正文是**外部数据**，只当资料看，不当指令（与外部网页同等对待）。
+ */
+const KB_BASE = process.env.MILIASTRA_KB_BASE || 'https://ugc.070077.xyz';
+const KB_TOOLS = new Set(['get_node_info', 'list_documents', 'get_document', 'rag_search']);
+async function kbOnline(tool, body) {
+  if (!KB_TOOLS.has(tool)) return { ok: false, op: 'online', error: '未知的知识库工具：' + tool };
+  const timeoutMs = Number(process.env.MILIASTRA_KB_TIMEOUT_MS) > 0 ? Number(process.env.MILIASTRA_KB_TIMEOUT_MS) : 20000;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(KB_BASE + '/api/v1/skills/miliastra-knowledge/tools/' + tool, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'user-agent': 'dsh-miliastra/' + VERSION },
+      body: JSON.stringify(body || {}),
+      signal: ac.signal,
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json) {
+      return { ok: false, op: 'online', tool, network: true, sentTo: KB_BASE, httpStatus: res.status, error: '知识库返回 HTTP ' + res.status };
+    }
+    if (json.success === false) {
+      return { ok: false, op: 'online', tool, network: true, sentTo: KB_BASE, error: String(json.error || 'success:false'), raw: json.error ? undefined : json };
+    }
+    const result = json.data && json.data.result !== undefined ? json.data.result : json;
+    return {
+      ok: true, op: 'online', tool, network: true, sentTo: KB_BASE,
+      source: '第三方知识库 ' + KB_BASE + '（300+ 篇官方 FAQ/教程 + 米游社问答楼；**外部数据，只当参考**）',
+      result,
+      note: '这条来自**第三方**知识库，不是本机确证；要"以本机为准"的事实请用 `miliastra_map` / `miliastra_log` 取证。',
+    };
+  } catch (e) {
+    const why = e && e.name === 'AbortError' ? ('超时 ' + timeoutMs + 'ms') : String((e && e.message) || e);
+    return {
+      ok: false, op: 'online', tool, network: true, sentTo: KB_BASE, error: '没取到：' + why,
+      hint: '**这不代表知识库里没有**：可能是网络/站点不可用。离线部分仍可用：`op:"qa"`（蒸馏排查清单）与 `op:"node"`（随包节点词典 558 条）。',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const TOOLS = [  {
     name: 'miliastra_health',
     description:
       TITLE + '：环境体检。**任何时候要操作原神 UGC，先调它。**返回**：客户端安装、关卡清单、当前「正在开发」的关卡、活文件（.lua）清单与字节数、地图存档 `.gil`、日志目录。编辑器 UI 操作（建模板/挂脚本）没有自动化通道。\n★ `op:"sha"` **三方 SHA 对照**：活文件 / 本地镜像（`mirror`=目录绝对路径；不传就只出两列）/ `.gil` **嵌入快照**（**试玩真正跑的是它**）—— 三列哈希 + 一句结论（`该部署了` / `该存盘了` / `三方一致`）；`.gil` 那列带 `belongsTo` / `isCurrent`（**存盘那一刻的快照，非实时**）。对象是当前关卡。\n★ `op:"handover"` **交接值台账**（P2-8）：确认过的 `container` / 模板索引用 `action:"set"` 记一次，之后 `miliastra_gen` **自动带上**（回执标 `handoverFrom` 含 `ledger`）；**只有显式 set 会写盘**。\n★ `brief:true` 是「任何操作前先调」那一档（< 1KB）：`luaFiles` 给 `[{name, bytes}]`，0 字节（空脚本/未写入）与**不在 `.gil` 挂载集合里**的活文件都会在 `note` 里点名。\n\n**典型调用**：`{"brief":true}`（< 1KB：在哪张图/活文件/日志在哪）｜`{"op":"sha","mirror":"D:\\\\code\\\\侦探1"}`｜`{"op":"handover","action":"set","handover":{"container":1073741846,"imageTemplate":1073741849}}`',
@@ -1706,7 +1759,7 @@ const TOOLS = [
   {
     name: 'miliastra_code',
     description:
-      TITLE + '：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。**部署一律：先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**（带 BOM 原神会报 Lua 错）。\nop=read 读沙箱活文件正文（**给了 `source` 绝对路径就读那个文件**，只读不写）；op=deploy 投进去（**覆盖前自动备份** + Lua 结构校验，默认 `lintMode:"strict"` 直接拒绝）；op=inspect 只体检；op=backup / op=backups / op=restore（**backup 可不传** = 固定名 `<原名>.bak`）；op=fixbom。\n⚠️ 部署**不会热加载**正在进行的试玩：要 **停试玩 → 部署 → 重开试玩**。\n★ **安全约定**：活文件是**唯一副本** ⇒ 备份失败就中止、原子写、写完校验 SHA（不过**自动回滚**）、备份两份**永不自动删**、跳过备份要 `allowNoBackup:true`。\n★ **`op=deploy` 选目标只用名字、不按「最近改动」猜**：`file` > `source` 同名活文件 > 目录里只有 1 个 > 拒绝并列候选；回执恒带 `dest`。\n★ **部署指纹**：成功后记 `.miliastra-deploy.<脚本名>.json`；`op=inspect` 对不上就直说「多半是编辑器把内存版存回了磁盘」，并给字节/行数差。\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：①画在哪=点哪算 ②坐标/尺寸是 **8 的倍数** ③字号只许 **64/52/28/22** ④**h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**，模拟器不模拟）；`passed` **只代表判据全满足，不代表 UI 合格**。\n★ 另见 `docs/功能详解.md`（各 op 的配对口径 / 已知坑 / 下沉说明）。\n\n\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜`{"op":"read","source":"C:/me/背景图片.lua","head":60}`（只读看任意本地 .lua）｜`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua","file":"双相.lua"}`（**多脚本工程必须带 `file`**）｜`{"op":"lint-ui","dir":"D:\\\\code\\\\侦探1","summaryOnly":true}`（其余请求体见 `docs/功能详解.md`）',
+      TITLE + '：活文件（沙箱里的 .lua）的读 / 部署 / 体检 / 还原。**部署一律：先备份 → 二进制拷贝 → 比对 SHA-256 → 校验无 UTF-8 BOM**（带 BOM 原神会报 Lua 错）。\nop=read 读沙箱活文件正文（**给了 `source` 绝对路径就读那个文件**，只读不写）；op=deploy 投进去（**覆盖前自动备份** + Lua 结构校验，默认 `lintMode:"strict"` 直接拒绝）；op=inspect 只体检；op=backup / op=backups / op=restore（**backup 可不传** = 固定名 `<原名>.bak`）；op=fixbom。\n⚠️ 部署**不会热加载**正在进行的试玩：要 **停试玩 → 部署 → 重开试玩**。\n★ **安全约定**：活文件是**唯一副本** ⇒ 备份失败就中止、原子写、写完校验 SHA（不过**自动回滚**）、备份两份**永不自动删**、跳过备份要 `allowNoBackup:true`。\n★ **`op=deploy` 选目标只用名字、不按「最近改动」猜**：`file` > `source` 同名活文件 > 目录里只有 1 个 > 拒绝并列候选；回执恒带 `dest`。\n★ **部署指纹**：成功后记 `.miliastra-deploy.<脚本名>.json`；`op=inspect` 对不上就直说「多半是编辑器把内存版存回了磁盘」。\n★ **`op=lint-ui`（平台级 UI 门禁，只报数字与位置）**：画在哪=点哪算 · 坐标/尺寸 8 的倍数 · 字号只许 64/52/28/22 · **h ≥ 字号×1.4 且 h ≥ 字号+16**（真机铁律：高度不够 ⇒ 该控件**一个像素都不画**）；`passed` 不代表 UI 合格。\n★ 另见 `docs/功能详解.md`（各 op 的配对口径 / 已知坑 / 下沉说明）。\n\n\n\n**典型调用**：`{"op":"inspect"}`（体检 + 看有没有被编辑器写回旧版）｜`{"op":"read","source":"C:/me/背景图片.lua","head":60}`（只读看任意本地 .lua）｜`{"op":"deploy","source":"D:\\\\code\\\\双相\\\\双相_v9.lua","file":"双相.lua"}`（**多脚本工程必须带 `file`**）｜`{"op":"lint-ui","dir":"D:\\\\code\\\\侦探1","summaryOnly":true}`（其余请求体见 `docs/功能详解.md`）',
     parameters: {
       type: 'object',
       properties: {
@@ -2128,11 +2181,15 @@ const TOOLS = [
   {
     name: 'miliastra_map',
     description:
-      TITLE + '：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**（每条控件的「控件模板索引 / 名字 / 父 / 子」）——判断「哪些控件能被脚本动态创建」的唯一正解：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**，画布上摆的实例、以及模板控件的子节点，一律返回 nil。op=script 比对地图里嵌的脚本源码与本地活文件（并给 `belongsTo`/`isCurrent`：**`.gil` 是存盘那一刻的快照**，不是实时的）；op=strings 提取可读字符串（存盘前后 diff 用）。\n★ **op=nodedb**：查**官方节点词典**（558 节点：中英名字 / 标识 / 服务端·客户端 / 分类 / 端口；来源 = 参考项目 Pack `node_data`，MIT）—— 写节点图时的知识库。⚠️ 词典 id 与 `.gil` 里**关卡内分配的声明号不是一套**（对不上），所以它回答「官方有哪些节点、叫什么」，不能把地图里的号翻成名字。\n★ **op=nodes**：读**服务端节点图**与**实体自定义变量**（回答「节点图/原件有没有正确挂载」）。每条图给 类型/节点数/连线数/id；实体给 变量名/类型/是否公开。默认**粗略档**（计数 + 一行 `brief`），要明细传 `graph`/`entity`。⚠️ 字段号有出处**但未逐个真机确证**，不确定的原样回数字并进 `unverified`。\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列出全部映射（含 `mappingId` / `mounted`）；`embedded` = **按名字挑中本次那一份**（`embeddedPickedBy` 说明凭什么）。\n\n**典型调用**：`{"op":"summary"}`｜`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）｜`{"op":"nodes","graph":"关卡实体信号"}`（这张图挂上了没）｜`{"op":"nodes","entity":"关卡实体"}`（它的自定义变量）',
+      TITLE + '：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**（控件模板索引 / 名字 / 父 / 子）——判断「哪些控件能被脚本动态创建」的唯一正解：**只有「无父节点」的独立控件（存为模板）才可能被 InstantiateClientUIControl 创建**，画布上摆的实例与模板控件的子节点一律 nil。op=script 比对地图里嵌的源码与本地活文件（`belongsTo`/`isCurrent`：**`.gil` 是存盘那一刻的快照**）；op=strings 提可读字符串。\n★ **op=nodedb**：查**官方节点词典**（558 节点：中英名 / 标识 / 服务端·客户端 / 分类 / 端口，来源 = 参考项目 Pack，MIT）。⚠️ 词典 id 与 `.gil` 里的**声明号不是一套**（不能互翻）。\n★ **op=nodes**：读**节点图**与**实体自定义变量**（回答「节点图/原件有没有正确挂载」）；默认粗略档（计数 + 一行 `brief`），要明细传 `graph`/`entity`。⚠️ 字段号有出处**但未逐个真机确证**，不确定的原样回数字并进 `unverified`。\n★ **op=anatomy**：节点图**能力画像** —— 各类型节点多少个（事件/执行/查询/运算/分支；词典没收录但 id 命中**本关声明**的归「复合/自定义节点」，都不中才算 Unknown）+ 每张图的**入口事件** + **引用了哪些实体·声明** + 关键词。\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列全部映射；`embedded` = 按名字挑中本次那一份。\n\n**典型调用**：`{"op":"summary"}`｜`{"op":"clientui","summaryOnly":true}`｜`{"op":"nodes","graph":"关卡实体信号"}`｜`{"op":"anatomy","summaryOnly":true}`',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'nodedb'], description: '默认 summary。' },
+        op: {
+          type: 'string',
+          enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'anatomy', 'nodedb'],
+          description: '默认 summary。`nodes`=节点图/实体/元件明细；`anatomy`=节点图的**能力画像**（各类型节点多少个 + 入口事件 + 引用 + 关键词）。',
+        },
         q: { type: 'string', description: 'op=nodedb：搜节点关键词（中/英/标识符；空格=AND）。不给 q 只回分类清单与计数。' },
         nodeId: { type: 'number', description: 'op=nodedb：按**官方节点 id** 取一条（注意：与 .gil 里那种关卡内分配的声明号**不是一套**）。' },
         system: { type: 'string', enum: ['Server', 'Client'], description: 'op=nodedb：只看服务端 / 客户端节点。' },
@@ -2192,6 +2249,82 @@ const TOOLS = [
         const filtered = args.match ? rows.filter((r) => r.text.includes(String(args.match))) : rows;
         const limit = Number.isFinite(args.limit) ? args.limit : 200;
         return { ok: true, op, path: gilPath, total: rows.length, returned: Math.min(limit, filtered.length), rows: filtered.slice(0, limit) };
+      }
+      if (op === 'anatomy') {
+        /*
+         * ★ 2026-10-02 新增（作者：「希望读取到有多少的各类型节点（事件 x 个 / 执行 x 个）」+
+         *   「做个快速判断当前节点图用来做啥的能力：入口 / 关键词 / 引用」）。
+         *   只读：一次 readGilNodeFacts + 纯函数（`lib/nodegraph.mjs`，吃随包节点词典 558 条）。
+         *   ⚠️ 类型分布**只覆盖词典命中的节点**（本机恐怖-V3：1119 个节点里命中 548）—— 未命中的按 `Unknown`
+         *   如实计数，`coverage` 里写清，别把它读成"这张图就这么点节点"。
+         */
+        const gq = args.graph ? String(args.graph) : '';
+        const facts = readGilNodeFacts(gilPath, { graphLimit: 400, entityLimit: 1 });
+        if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
+        const graphNames = Object.keys(facts.graphNodeLists || {});
+        const picked = gq ? graphNames.filter((n) => n.includes(gq)) : graphNames;
+        if (gq && !picked.length) {
+          return {
+            ok: false, op, path: gilPath,
+            error: '没有图名含「' + gq + '」的节点图',
+            candidates: graphNames.slice(0, 40),
+          };
+        }
+        const anatomies = picked.map((name) => {
+          const g = (facts.graphs || []).find((x) => x.name === name) || { name };
+          const nodes = (facts.graphNodeLists || {})[name] || [];
+          const edges = nodes.reduce((s, nd) => s + ((nd.outEdges || []).length), 0);
+          // 传本关声明表：词典命不中但 id 命中本关声明的节点会被归成「复合节点 / 自定义节点」（能确证的归属）
+          return graphAnatomy(g, nodes, { edges: new Array(edges), declarations: facts.declarations || [] });
+        });
+        const totals = anatomyTotals(anatomies);
+        let known = 0;
+        for (const a of anatomies) known += a.typeStats.known;
+        const out = {
+          ok: true, op, path: gilPath, size: facts.size,
+          filter: { graph: gq || null },
+          graphCount: anatomies.length,
+          totals,
+          coverage: {
+            nodes: totals.nodes, typedNodes: known, untypedNodes: totals.nodes - known,
+            note: '类型来自**随包节点词典**（`lib/nodedb.json`，558 条）里 `identifier` 的第一段；'
+              + '词典没收录的节点再看它的 id **是不是本关卡内的声明**（是 ⇒ 归「复合节点 / 自定义节点」，这是能确证的归属）；'
+              + '两边都命不中的才计 `Unknown` —— **想提高覆盖要给词典补条目，别猜类型**。',
+          },
+          customNodes: {
+            composite: totals.byType.Composite || 0, custom: totals.byType.Custom || 0,
+            fromDeclarations: (totals.byType.Composite || 0) + (totals.byType.Custom || 0),
+            declarationsInMap: (facts.declarations || []).length,
+            note: '这些节点的类型不是官方分类（一个自定义/复合节点里可能包着任意逻辑），'
+              + '只能确证到"它属于本关的哪条声明"；要展开看它内部，用 `op:"nodes"` 逐节点看。',
+          },
+          anatomyNote: graphOwnerNote(),
+          graphs: args.summaryOnly === true ? undefined : anatomies.map((a) => ({
+            name: a.graph.name,
+            id: a.graph.id == null ? null : a.graph.id,
+            type: a.graph.typeLabel || null,
+            nodeCount: a.nodeCount,
+            edgeCount: a.edgeCount,
+            byType: a.typeStats.byTypeLabel,
+            bySide: a.typeStats.bySide,
+            sideUnknown: a.typeStats.unknown,
+            triggers: a.triggers.map((t) => t.name),
+            refs: { entities: a.refs.entities, others: a.refs.others },
+            keywords: a.keywords,
+            brief: a.brief,
+          })),
+          brief: '整关 ' + totals.nodes + ' 个节点（' + totals.graphs + ' 张图）：' + totals.byTypeLabelText
+            + '　·　词典覆盖 ' + known + '/' + totals.nodes,
+          nextStep: '要整关一张表：`op:"anatomy"`；只看某张图：`+graph:"<图名子串>"`；'
+            + '要看某张图的节点明细与引脚连线：`op:"nodes", graph:"<图名>"`；'
+            + '「谁身上挂着这张图」**读不出来**（见 anatomyNote），别按图名去猜实体。',
+        };
+        out.caveats = [
+          '类型分布基于**随包节点词典**：`identifier` 第一段（`Trigger./Execution./Query./Arithmetic./Control./Others./Hidden.`）为准，'
+          + '与词典 `domain` 字段互相印证（558 条里一致 555 条）；词典没收录的节点 ⇒ `Unknown`（不明说就不算数）。',
+          '`refs` 的方向是「**这张图的节点引用到了谁**」，**不是**「谁身上挂着这张图」—— 后者 `.gil` 里读不出来（见 `anatomyNote`）。',
+        ];
+        return out;
       }
       if (op === 'nodes') {
         /*
@@ -2457,7 +2590,7 @@ const TOOLS = [
   {
     name: 'miliastra_log',
     description:
-      TITLE + '：读客户端运行时日志 `.gia`（运行时取证的唯一入口）。`sessions` 列文件；`tail` 读结构化记录；`grep` 按 tag/pattern 过滤；`tags` 汇总**开头**的 `[...]` 前缀；**`runs` 按「局」切分**（每局一行摘要 + 与上一局 diff）；`metrics` 汇总指标分布。\n★ **`op=errors`：按「形态」捞报错，不看标签**（stack traceback / attempt to index / nil value / 缺少交接值 / 文件:行号 / error）—— 真机的报错行**可能完全没有 `[...]` 前缀**，按 tag grep **一条都捞不到**（实测致命那条 `缺少交接值 CONFIG.CONTAINER_INDEX` 就这么漏掉的）；给 `errors[]{…, fileLine{file,line}, kind}` + `count` / `runsAffected`。\n★ **`staleLog:true` = 不是本局**（带 `logBelongsTo`）—— 别当本局证据；本局落没落盘看 `miliastra_playtest op=status` 的 `localGia`。\n⚠️ **「试玩了却没有新日志」有两种**：① 这一局一条 `print` 都没有；② **`.gia` 落盘会因时序失败** —— 此时**「没有日志」不能当唯一判据**（实测本局没落盘、更早的局落了，画面却正常）⇒ **判画面用 `miliastra_shot`**（完整排查见 `docs/功能详解.md` §按局读日志）。\n\n**典型调用**：`{"op":"errors"}`（**先跑这个**：不看标签捞报错行，含 `文件:行号`）｜`{"op":"runs"}`（局间 diff）｜`{"op":"metrics"}`（死亡位置分布）｜`{"op":"tail","tag":"miliastra-code","limit":30}`',
+      TITLE + '：读客户端运行时日志 `.gia`（运行时取证的唯一入口）。`sessions` 列文件；`tail` 读结构化记录；`grep` 按 tag/pattern 过滤；`tags` 汇总**开头**的 `[...]` 前缀；**`runs` 按「局」切分**（每局一行摘要 + 与上一局 diff）；`metrics` 汇总指标分布。\n★ **`op=errors`：按「形态」捞报错，不看标签**（stack traceback / attempt to index / nil value / 缺少交接值 / 文件:行号 / error）—— 真机的报错行**可能完全没有 `[...]` 前缀**，按 tag grep **一条都捞不到**（实测漏掉过一条致命报错）；给 `errors[]{…, fileLine{file,line}, kind}` + `count` / `runsAffected`。\n★ **`staleLog:true` = 不是本局**（带 `logBelongsTo`）—— 别当本局证据；本局落没落盘看 `miliastra_playtest op=status` 的 `localGia`。\n⚠️ **「试玩了却没有新日志」有两种**：① 本局一条 `print` 都没有；② **`.gia` 落盘因时序失败** —— 此时「没有日志」**不能当唯一判据** ⇒ **判画面用 `miliastra_shot`**（细节见 `docs/功能详解.md`）。\n\n**典型调用**：`{"op":"errors"}`（**先跑这个**：不看标签捞报错行，含 `文件:行号`）｜`{"op":"runs"}`（局间 diff）｜`{"op":"metrics"}`（死亡位置分布）｜`{"op":"tail","tag":"miliastra-code","limit":30}`',
     parameters: {
       type: 'object',
       properties: {
@@ -2747,7 +2880,7 @@ const TOOLS = [
   {
     name: 'miliastra_playtest',
     description:
-      TITLE + '：**试玩开跑 / 结束的实时侦测** —— 回答「现在在不在试玩 / 开跑到第几秒了」，并支持**等下一次开跑**。信号来自游戏客户端自己写的 Unity 日志 `output_log.txt`：开跑 = `BeyondLevelPlayModule SetCurLevelData … isTrial:True`，结束 = `StartQuickSwitchSceneAction … QuickSwitchToBeyondSettleSceneNormally`。**实测延迟 0.07~0.18 秒**；它是**平台级**标记：脚本一行都不 print 的局它照样记。⚠️ **别用 `.gia` 判开跑** —— `.gia` 不是实时的（实测那局 21:46:58 结束，`.gia` 到 **21:47:07** 才落盘；**局在跑的时候磁盘上根本没有这个文件**）。op=status 看状态；op=wait 等下一次开跑（`afterSec` = 开跑 N 秒后；超时**不报错**，如实回 `hit:false`）。\n★ **`op=arm`（武装后台截图）**：一次调用完成**「等开跑 → 按秒点抓拍 → 落盘」**（秒点用 **`afterSecPoints`**；`wait:false` = 只回计划）。这一局一结束就停（余下标 `skipped`），逐张给路径 + `inRun`。\n★ **`op=status` 的 `localGia`**：直接回答「**本局 `.gia` 落盘了没有**」（`landed`/`missing`/`running`/`none`）——`missing` 时 `miliastra_log` 取到的是**更早那一局**，别当本局证据。（排查见 `docs/功能详解.md`。）\n\n**典型调用**：`{"op":"status"}`（在不在试玩 + 本局 `.gia` 落盘没有）｜`{"op":"arm","afterSecPoints":[8,12,16,20]}`（按秒点各拍一张）',
+      TITLE + '：**试玩开跑 / 结束的实时侦测** —— 「在不在试玩 / 开跑到第几秒」，并能**等下一次开跑**。信号来自游戏客户端自己写的 `output_log.txt`（**实测延迟 0.07~0.18 秒**；平台级标记：脚本一行都不 print 的局照样记）。⚠️ **别用 `.gia` 判开跑** —— 它不是实时的（**局在跑的时候磁盘上根本没有这个文件**）。op=status 看状态；op=wait 等下一次开跑（`afterSec` = 开跑 N 秒后；超时**不报错**，如实回 `hit:false`）。\n★ **`op=arm`（武装后台截图）**：一次调用完成「等开跑 → 按秒点抓拍 → 落盘」（秒点用 `afterSecPoints`；`wait:false` = 只回计划），局一结束就停。\n★ **`op=status` 的 `localGia`** 直接回答「本局 `.gia` 落盘了没有」——`missing` 时 `miliastra_log` 取到的是**更早那一局**。\n\n**典型调用**：`{"op":"status"}`｜`{"op":"arm","afterSecPoints":[8,12,16,20]}`',
     parameters: {
       type: 'object',
       properties: {
@@ -3452,7 +3585,7 @@ const TOOLS = [
   {
     name: 'miliastra_asset',
     description:
-      TITLE + '：**插件素材库** + 两个平台目录通道（图片资源库 / 音效库 —— 只报目录事实，不落字节）。\n★ 插件素材库：**按内容寻址**（文件名 = sha256 前 16 位 + 扩展名，同图只存一份 ⇒ `deduped:true`），落**插件数据目录**（不进游戏存档、不碰活文件）。**磁盘是用户的**：素材**绝不自动删**（`op=remove` 要 `confirm:true`，连字节删再加 `deleteFile:true`；`op=prune` 只报告不删）。\n★ 安全：`source`/`out` 只认**绝对路径**；只收图片白名单、拒 0 字节 / >64 MiB；`get` 的 `out` **默认不覆盖**；`../` 拒。\n★ 平台图片资源库（`op=catalog`，1543 条 / 14 类，id 100001~112042）：过滤分类/色档/`simOnly`/`imgExists`；**单张图没有名字** ⇒ 只回分类名（几何号 100001~100006 例外，回 `meaning`）。\n★ 平台音效库（`op=sound-search` / `sound-get`，1997 条 / 7 类）：`q` 按**中英名**模糊搜（多词 = AND），逐条给 `matchKind`；⛔ **不支持拼音/首字母**。\n★ **回执体积**：发现调用给全表、过滤调用只给结论（`categoriesOmitted` 报省了几行）；要完整分类表或 sha256 传 `withMeta:true`。\n★ 另见 `docs/功能详解.md`。\n\n\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景"}`｜`{"op":"catalog","category":"基础形状"}`｜`{"op":"sound-search","q":"宝箱 开启","limit":5}`',
+      TITLE + '：**插件素材库** + 两个平台目录通道（图片资源库 / 音效库 —— 只报目录事实，不落字节）。\n★ 插件素材库：**按内容寻址**（文件名 = sha256 前 16 位 + 扩展名，同图只存一份 ⇒ `deduped:true`），落**插件数据目录**（不进游戏存档、不碰活文件）。**磁盘是用户的**：素材**绝不自动删**（`op=remove` 要 `confirm:true`，连字节删再加 `deleteFile:true`；`op=prune` 只报告不删）。\n★ 安全：`source`/`out` 只认**绝对路径**；只收图片白名单、拒 0 字节 / >64 MiB；`out` 默认不覆盖；`../` 拒。\n★ 平台图片资源库（`op=catalog`，1543 条 / 14 类，id 100001~112042）：过滤分类/色档/`simOnly`/`imgExists`；**单张图没有名字** ⇒ 只回分类名（几何号 100001~100006 例外，回 `meaning`）。\n★ 平台音效库（`op=sound-search` / `sound-get`，1997 条 / 7 类）：`q` 按**中英名**模糊搜（多词 = AND），逐条给 `matchKind`；⛔ **不支持拼音/首字母**。\n★ **回执体积**：发现调用给全表、过滤调用只给结论（`categoriesOmitted` 报省了几行）；要完整分类表或 sha256 传 `withMeta:true`。\n\n\n\n\n**典型调用**：`{"op":"add","source":"D:\\\\art\\\\bg.png","tags":"背景"}`｜`{"op":"catalog","category":"基础形状"}`｜`{"op":"sound-search","q":"宝箱 开启","limit":5}`',
     parameters: {
       type: 'object',
       properties: {
@@ -3540,7 +3673,7 @@ const TOOLS = [
   {
     name: 'miliastra_gen',
     description:
-      TITLE + '：**离线生成器** —— 一次调用就出**可直接部署的 Lua**（不是数据模型、不是半成品）。\nop=text-gradient：文本 → 色标 → **逐帧刷字**客户端 Lua（`EnableUpdate` + `OnUpdate` 换帧）。\nop=struct-json：结构体/字典 → 可直接导入千星的变量 JSON（默认 `struct_ype`）。\nop=pixel-art：图片 → 可部署**像素画 Lua**（图片控件**矩形块拼图**，非「一个像素一个控件」；行程+跨行合并，可选 4bit）；要 `cols`/`rows`/`maxSide` + `pixelSize`；**静态不加 EnableUpdate**。\nop=vfx-lua：**UI 粒子特效** → 可部署客户端 Lua（13 预设；`preset:"list"` 列清单、**不进 schema**；驱动层逐字取真机定稿件；贝塞尔用 `path` 三手柄）。\n★ 粒子贴图 `imageId` 真机可用**全部 1543 素材号**（`op=catalog` 挑）；**模拟器只画 `100001~100006`** ⇒ 预览传 `previewImageId`。\n★ **硬规则**：结构体 ID 必须 **10 位数字**、单条文本 **≤500 字符**（放行传 `allowLongText:true`）—— 生成前校验。\n★ **交接值**（模板索引/控件名/容器索引）AI 拿不到：**先自动读当前关卡 `.gil`**（唯一候选才采用），拿不到就**报错点名**（`needsHandover[]` + `handoverCandidates[]`），**绝不编**。\n★ **`preflight[]` 投递前自检**（`ok:null` = 判不了、**不猜**）；`op=vfx-lua` 的 **`container` 与 `templateIndex` 同等必填**（真机实测：漏 `container` 时离线三环全绿、只有真机 `OnStart` 报缺值 ⇒ 整屏没粒子）；产物顶部带**运行时依赖清单**。\n★ **未验证**（恒带 `unverified[]`）：`<size=N>`、4bit、ParamType 是否 = 7.1 全集、特效真机渲染/帧率。`summaryOnly` 只去正文、结论必留。\n\n\n\n**典型调用**：`{"op":"text-gradient","text":"原神千星","colors":["#FFCC33","#37FFFF"],"controlName":"标题"}`｜`{"op":"pixel-art","assetId":"a1b2c3d4e5f60718","cols":32,"pixelSize":8,"templateIndex":1073741900,"container":1073741866}`｜`{"op":"vfx-lua","preset":"coin-collect","imageId":101023,"previewImageId":100002}`（真机用素材号、模拟器用圆预览）',
+      TITLE + '：**离线生成器** —— 一次调用就出**可直接部署的 Lua**（不是数据模型、不是半成品）。\nop=text-gradient：文本 → 色标 → **逐帧刷字**客户端 Lua（`EnableUpdate` + `OnUpdate` 换帧）。\nop=struct-json：结构体/字典 → 可直接导入千星的变量 JSON。\nop=pixel-art：图片 → 可部署**像素画 Lua**（图片控件**矩形块拼图**，非「一个像素一个控件」；要 `cols`/`rows`/`maxSide` + `pixelSize`；**静态不加 EnableUpdate**）。\nop=vfx-lua：**UI 粒子特效** → 可部署客户端 Lua（预设用 `preset:"list"` 按需枚举；贝塞尔用 `path` 三手柄）。\n★ 粒子贴图 `imageId` 真机可用**全部 1543 素材号**（`op=catalog` 挑）；**模拟器只画 `100001~100006`** ⇒ 预览传 `previewImageId`。\n★ **硬规则**：结构体 ID 必须 **10 位数字**、单条文本 **≤500 字符**（放行传 `allowLongText:true`）—— 生成前校验。\n★ **交接值**（模板索引/控件名/容器索引）AI 拿不到：**先自动读当前关卡 `.gil`**（唯一候选才采用），拿不到就**报错点名**（`needsHandover[]`），**绝不编**；`vfx-lua` 的 `container` 与 `templateIndex` 同等必填。\n★ `preflight[]` 投递前自检（`ok:null` = 判不了、**不猜**）；`unverified[]` 记未验证项；产物顶部带**运行时依赖清单**。\n\n**典型调用**：`{"op":"text-gradient","text":"原神千星","colors":["#FFCC33","#37FFFF"],"controlName":"标题"}`｜`{"op":"pixel-art","assetId":"a1b2c3d4e5f60718","cols":32,"pixelSize":8,"templateIndex":1073741900,"container":1073741866}`｜`{"op":"vfx-lua","preset":"coin-collect","imageId":101023,"previewImageId":100002}`',
     parameters: {
       type: 'object',
       properties: {
@@ -3597,6 +3730,108 @@ const TOOLS = [
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
       return genOp(args);
+    },
+  },
+
+  {
+    name: 'miliastra_kb',
+    description:
+      TITLE + '：**节点图知识库**（排查问答 / 节点说明 / 官方文档）。'
+      + '\n★ `op:"qa"` = **离线**蒸馏的排查清单：给症状关键词（「镜头不生效」「信号收不到」…），回**先问哪几个问题** + 有序排查 + 常见误判 + 出处'
+      + ' + `evidence`（官方/社区/本机实测）。**只给排查路径，不下结论**；不给 `q` 就回目录。'
+      + '\n★ `op:"node"` = **离线**节点说明（随包词典 558 条：中英名 / 标识 / 服务端·客户端 / 分类 / 端口与类型）。'
+      + '\n★ `op:"list"/"doc"/"search"` = **在线**第三方知识库 `https://ugc.070077.xyz`（300+ 篇官方 FAQ/教程 + 米游社问答楼）：'
+      + '⚠️ 这三个 op **会把你的 query 发到那个站点**（`qa`/`node` 纯离线）；取不到就说取不到，别当成"知识库没有"。'
+      + '\n'
+      + '\n\n**典型调用**：`{"op":"qa","q":"信号 收不到"}`｜`{"op":"qa","id":"camera-not-working"}`｜`{"op":"node","q":"嘲讽目标"}`｜`{"op":"search","q":"选项卡 触发器 不触发"}`',
+    parameters: {
+      type: 'object',
+      properties: {
+        op: {
+          type: 'string',
+          enum: ['qa', 'node', 'list', 'doc', 'search'],
+          description: '默认 qa。qa/node 离线；list/doc/search 在线。',
+        },
+        q: { type: 'string', description: 'op=qa 症状关键词（空格=AND）；op=node 节点名子串；op=list/search 关键词或问题。' },
+        id: { type: 'string', description: 'op=qa：点名某条（如 `camera-not-working`），比关键词准。' },
+        tag: { type: 'string', description: 'op=qa：按标签过滤（如 `镜头`/`信号`）。' },
+        titles: { type: 'array', items: { type: 'string' }, description: 'op=doc：要取全文的标题（可多个）。' },
+        topK: { type: 'number', description: 'op=search：检索条数（1~20，默认 5）。' },
+        limit: { type: 'number', description: 'op=qa/node：最多几条（默认 5/8）。' },
+        system: { type: 'string', enum: ['Server', 'Client'], description: 'op=node：只看服务端/客户端。' },
+      },
+      additionalProperties: false,
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
+    async execute(args = {}) {
+      const op = String(args.op || 'qa');
+      const limit = Number.isFinite(args.limit) ? Number(args.limit) : null;
+      if (op === 'qa') {
+        const byId = args.id ? kbEntry(String(args.id)) : null;
+        if (args.id && !byId) {
+          return { ok: false, op, error: '没有这条：' + String(args.id), candidates: kbCatalog().map((e) => e.id) };
+        }
+        const asked = String(args.q || '').trim();
+        // 不给关键词也不给标签 ⇒ 回**完整目录**（让人/模型先挑，而不是硬塞 5 条）
+        if (!byId && !asked && !args.tag) {
+          return {
+            ok: true, op, query: null, total: KB_ENTRIES.length, catalog: kbCatalog(),
+            note: '**离线蒸馏**的排查清单目录（我们自己的话，短清单）。给 `q`（症状关键词）或 `id` 取正文；'
+              + '要官方原文用 `op:"doc"`（在线）或点 `sources[].url` 自己核。',
+            nextStep: '先按症状挑一条：`{"op":"qa","id":"<上面某个 id>"}`；或直接给关键词 `{"op":"qa","q":"镜头 不跟随"}`。',
+          };
+        }
+        const hit = byId ? [{ entry: byId, score: 999 }] : kbSearch(args.q, { limit: limit || 5, tag: args.tag });
+        const shape = (e) => ({
+          id: e.id, symptom: e.symptom, ask: e.ask, steps: e.steps, avoid: e.avoid || null,
+          evidence: e.evidence, tags: e.tags, sources: kbSources(e.src),
+        });
+        return {
+          ok: true, op, query: args.q || null, tag: args.tag || null,
+          hitCount: hit.length, total: KB_ENTRIES.length,
+          entries: hit.map((h) => shape(h.entry)),
+          catalog: hit.length ? undefined : kbCatalog(),
+          note: '离线蒸馏（我们自己的话，短清单）——**只给排查路径，不下结论**；'
+            + '要官方原文用 `op:"doc"`（在线）或点 `sources[].url` 自己核。',
+          nextStep: '把症状说得更具体会命中更准（如「镜头不生效」→「镜头 固定 不跟随」）；'
+            + '要"这一关的这些图各由什么节点组成"用 `miliastra_map` 的 `op:"anatomy"`。',
+        };
+      }
+      if (op === 'node') {
+        const r = searchNodes({ q: String(args.q || ''), system: args.system, limit: limit || 8 });
+        const out = {
+          ok: true, op, query: String(args.q || ''), source: '离线随包节点词典（lib/nodedb.json，' + r.meta.counts.total + ' 条）',
+          hitCount: r.returned, total: r.total,
+          nodes: r.rows,
+          facets: { domains: nodeDbFacets().domains, server: nodeDbFacets().server, client: nodeDbFacets().client },
+          unverified: r.unverified,
+          nextStep: '要看参数/端口就用这个（每条带 direction/label/type/shell）；要找"这个节点该配什么组件"再问 `op:"search"`（在线）。',
+        };
+        // 词典里一条都没有 ⇒ **才**去问在线知识库（作者：「你有不确定节点图功能直接对接蒸馏」）
+        if (!r.returned && String(args.q || '').trim()) {
+          const online = await kbOnline('get_node_info', { names: [String(args.q)] });
+          out.onlineFallback = online;
+          out.note = online.ok
+            ? '随包词典里没有这条 ⇒ 上面的 `onlineFallback` 是**第三方知识库**给的，请当成"参考"、不是本机确证。'
+            : '随包词典里没有这条，在线知识库也没取到（' + (online.error || '未知原因') + '）—— **别据此说"这个节点不存在"**。';
+        }
+        return out;
+      }
+      // —— 以下三个 op 走**在线**第三方知识库（会把 query 发出去；取不到就如实说取不到）——
+      if (op === 'doc') {
+        const titles = Array.isArray(args.titles) ? args.titles.map(String) : (args.q ? [String(args.q)] : []);
+        if (!titles.length) return { ok: false, op, error: 'op=doc 要给 `titles`（文档标题数组）或 `q`（单个标题）' };
+        return await kbOnline('get_document', { titles });
+      }
+      if (op === 'list') {
+        return await kbOnline('list_documents', { keywords: args.q ? [String(args.q)] : [] });
+      }
+      if (op === 'search') {
+        if (!args.q) return { ok: false, op, error: 'op=search 要给 `q`（自然语言问题）' };
+        const k = Number.isFinite(args.topK) ? Math.min(20, Math.max(1, Number(args.topK))) : 5;
+        return await kbOnline('rag_search', { queries: [String(args.q)], top_k: k });
+      }
+      return { ok: false, op, error: '不认识的 op：' + op };
     },
   },
 

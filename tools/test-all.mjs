@@ -41,6 +41,8 @@ export const SUITES = [
   { name: 'read-source-test（op=read source=<绝对路径>：只读读取）', args: ['tests/read-source-test.mjs'] },
   { name: 'gilnodes-test（节点图 / 实体自定义变量：合成 .gil 逐字段钉住 + 只读）', args: ['tests/gilnodes-test.mjs'] },
   { name: 'gilreport-test（离线节点图报告：总览/明细/连线/转义/不下判决 + 多账号不猜）', args: ['tests/gilreport-test.mjs'] },
+  { name: 'nodegraph-test（节点图能力画像：类型分布/入口/引用/关键词 + 挂载主体读不出来的证伪）', args: ['tests/nodegraph-test.mjs'] },
+  { name: 'kbqa-test（知识库问答：离线蒸馏清单结构/检索/出处 + 在线 op 的纪律与隐私披露）', args: ['tests/kbqa-test.mjs'] },
   { name: 'nodedb-test（官方节点词典：归属 / 搜索 / 与 .gil 的号对不上这条老实说清）', args: ['tests/nodedb-test.mjs'] },
   { name: 'probe-deploy-test（试玩探针渲染 / 部署）', args: ['tests/probe-deploy-test.mjs'] },
   { name: 'handover-ledger-test（P2-8 交接值台账：不 set 不放行 / set 后自动带上 / 按关卡分）', args: ['tests/handover-ledger-test.mjs'] },
