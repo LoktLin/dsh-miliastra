@@ -196,13 +196,22 @@ t('README 与 `docs/` 的「按需加载」双向可达', () => {
   assert(links.length > 0, 'README 里一个 `docs/…md` 链接都没有 —— 「按需加载」的入口丢了（细节会重新堆回主文档）');
   const missing = links.filter((rel) => !fs.existsSync(path.join(pkgRoot, rel)));
   assert(!missing.length, `README 链接指向不存在的文件：${missing.join(' / ')}`);
+  /*
+   * ★ 2026-10-01：**README 里的 Markdown 链接不许跳出本包**。
+   *   起因：`[…](../docs/千星奇域_粒子特效配置格式.md)` —— 那个文件在**工作区** docs/，
+   *   包内解析成 `packages/docs/…`（不存在）；而 npm 页只渲染 README ⇒ 点开必然是 404。
+   *   上面那条只匹配 `](docs/…)` 开头的链接 ⇒ 这种 `../` 链接**一直漏检**（本次才发现）。
+   *   规矩：跨包文档写成**纯文本**（说清它在哪），要能点就必须是包内文件。
+   */
+  const escapes = [...readme.matchAll(/\]\((\.\.?\/[^)]+)\)/g)].map((m) => m[1]);
+  assert(!escapes.length, `README 有跳出本包的链接（npm 页上点不开，应写成纯文本）：${escapes.join(' / ')}`);
   const orphans = fs
     .readdirSync(path.join(pkgRoot, 'docs'))
     .filter((f) => f.endsWith('.md'))
     .map((f) => `docs/${f}`)
     .filter((rel) => !links.includes(rel));
   assert(!orphans.length, `docs/ 里有孤立文件（README 没链接，等于没人会读）：${orphans.join(' / ')}`);
-  return `链接 ${links.length} 篇，docs/ 无孤立文件`;
+  return `链接 ${links.length} 篇（**0 条跳出本包**），docs/ 无孤立文件`;
 });
 
 t('README 第一段的版本号 = package.json', () => {
