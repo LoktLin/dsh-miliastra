@@ -2187,8 +2187,8 @@ const TOOLS = [  {
       properties: {
         op: {
           type: 'string',
-          enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'anatomy', 'nodedb'],
-          description: '默认 summary。`nodes`=节点图/实体/元件明细；`anatomy`=节点图的**能力画像**（各类型节点多少个 + 入口事件 + 引用 + 关键词）。',
+          enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'anatomy', 'regions', 'nodedb'],
+          description: '默认 summary。`nodes`=节点图/实体/元件/场景物件明细；`anatomy`=节点图能力画像（各类型节点 + 入口 + 引用）；`regions`=顶层区地图（这张图里都有什么）。',
         },
         q: { type: 'string', description: 'op=nodedb：搜节点关键词（中/英/标识符；空格=AND）。不给 q 只回分类清单与计数。' },
         nodeId: { type: 'number', description: 'op=nodedb：按**官方节点 id** 取一条（注意：与 .gil 里那种关卡内分配的声明号**不是一套**）。' },
@@ -2336,6 +2336,32 @@ const TOOLS = [  {
         ];
         return out;
       }
+      if (op === 'regions') {
+        /*
+         * ★ 2026-10-02 新增（作者问「实体也是 这都是啥」）：把 `.gil` 的**顶层区地图**摊开 ——
+         * 每个区多少字节 / 多少条目 / 样例名字 / **已知区名**（未确证的一律 label:null，不编名字）。
+         * 这是"这张图里到底都有些什么"的自助入口，也是发现"某个区我没解"的最快方式。
+         */
+        const facts = readGilNodeFacts(gilPath, {});
+        if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
+        const slim = args.summaryOnly === true;
+        return {
+          ok: true, op, path: gilPath, size: facts.size,
+          regionCount: facts.regionMap.length,
+          regions: facts.regionMap.map((r) => (slim ? {
+            field: r.field, label: r.label, bytes: r.bytes, itemCount: r.itemCount,
+          } : r)),
+          counts: {
+            entities: facts.entityCount, components: facts.componentCount, graphs: facts.graphCount,
+            declarations: facts.declarationCount, configs: facts.configCount,
+            sceneObjects: facts.sceneObjectCount, placedInstances: facts.placedCount,
+            factions: (facts.factions || []).length,
+          },
+          note: '**区名只写已确证的**（未确证的一律 null，不编）；`bytes` 对解不成消息的裸块按内容长度算。'
+            + '⚠️ 「实体 12 个」只是 `#5` 逻辑实体表 —— **场景静态**与**摆放实例**在别的区（`#27` / `#8`），`counts` 里一起给了。',
+          nextStep: '要看场景物件/摆放实例的明细用 `op:"nodes", kind:"all", summaryOnly:false`（回执里带 `sceneObjects` / `placedInstances`）。',
+        };
+      }
       if (op === 'nodes') {
         /*
          * ★ 2026-10-01 新增（作者：「有时候我不知道服务端的节点图或者原件到底有没有正确挂载」）。
@@ -2366,6 +2392,11 @@ const TOOLS = [  {
           entityKindCodes: facts.entityKindCodes,
           entityKindLabels: facts.entityKindLabels,
           componentCount: facts.componentCount,
+          // ★ 场景静态 / 摆放实例（2026-10-02）：别让"实体 N 个"被读成"这张图只有 N 个东西"
+          sceneObjectCount: facts.sceneObjectCount,
+          placedCount: facts.placedCount,
+          sceneObjects: (detailed && facts.sceneObjects) ? facts.sceneObjects.slice(0, Number.isFinite(args.limit) ? Number(args.limit) : 200) : undefined,
+          placedInstances: (detailed && facts.placedInstances) ? facts.placedInstances : undefined,
           // ★ 截断如实报（作者 2026-10-02 抓到"元件只回 40 个"）：任何一块被截了都在这里说
           truncated: facts.truncated,
           configCount: facts.configCount,

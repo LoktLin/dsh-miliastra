@@ -243,6 +243,20 @@ await check('⑦ 真 `.gil`：逐图相加 == 整关（含覆盖率），且入�
     assert(raw === f2.componentCount || f2.truncated.components === true,
       lv.levelId + '：元件区实际 ' + raw + ' 个，回执给 ' + f2.componentCount + ' 个，且没说截断');
   }
+  // ★ 2026-10-02 加：场景静态/摆放实例必须**单独计数**（作者：「实体保守估计 50 个、场景静态更多」——
+  //   原来只说 `#5` 实体表，会被读成"这张图只有 12 个东西"）
+  for (const lv of scanLevels().filter((l) => l.gil && l.gil.path).slice(0, 4)) {
+    const f3 = readGilNodeFacts(lv.gil.path, {});
+    assert(Number.isFinite(f3.sceneObjectCount) && Number.isFinite(f3.placedCount),
+      lv.levelId + ' 缺场景物件/摆放实例计数');
+    assert(Array.isArray(f3.regionMap) && f3.regionMap.length > 5, lv.levelId + ' 缺顶层区地图');
+    const known = f3.regionMap.filter((r) => r.label);
+    assert(known.length >= 3, lv.levelId + ' 区地图里已确证的区太少：' + known.length);
+    for (const r of f3.regionMap) assert(Number.isFinite(r.bytes), '区 #' + r.field + ' 的 bytes 不是数字');
+    // 场景物件/摆放实例有的话，名字必须取得到（不能是 null —— 那是"套一层"没深取）
+    if (f3.sceneObjectCount) assert(f3.sceneObjects.slice(0, 5).every((o) => o.name && o.id != null), '场景物件名字没取到');
+    if (f3.placedCount) assert(f3.placedInstances.slice(0, 5).every((o) => o.name), '摆放实例名字没取到');
+  }
   return lv.levelId + '：' + tot.graphs + ' 图 / ' + tot.nodes + ' 节点 / 出边 ' + tot.edges
     + '　' + tot.byTypeLabelText + '　词典覆盖 ' + known + '/' + tot.nodes + '（入口 ' + trig + ' 个，全为事件类）';
 });
