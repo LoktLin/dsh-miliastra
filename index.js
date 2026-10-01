@@ -2303,6 +2303,8 @@ const TOOLS = [  {
             name: a.graph.name,
             id: a.graph.id == null ? null : a.graph.id,
             type: a.graph.typeLabel || null,
+            // ★ 挂载主（作者 2026-10-02 给的编辑器线索）：via=mount 是**已确证**形状，via=ref 是"记录里别处指向这张图"
+            owners: (facts.graphOwners || {})[a.graph.id] || [],
             nodeCount: a.nodeCount,
             edgeCount: a.edgeCount,
             byType: a.typeStats.byTypeLabel,
@@ -2315,9 +2317,17 @@ const TOOLS = [  {
           })),
           brief: '整关 ' + totals.nodes + ' 个节点（' + totals.graphs + ' 张图）：' + totals.byTypeLabelText
             + '　·　词典覆盖 ' + known + '/' + totals.nodes,
+          mountSummary: {
+            graphsWithOwner: Object.keys(facts.graphOwners || {}).length,
+            graphsTotal: (facts.graphs || []).length,
+            entityRecords: (facts.mounts && facts.mounts.entities || []).length,
+            componentRecords: (facts.mounts && facts.mounts.components || []).length,
+            note: '挂载主从**实体/元件记录**里读（`#13` 形状 = 已确证；另有"别处指向"的记 `via:"ref"`）。'
+              + '⚠️ 技能图 / 状态图挂在别的区 ⇒ 没找到时只能说"**这两个区里**没找到"。',
+          },
           nextStep: '要整关一张表：`op:"anatomy"`；只看某张图：`+graph:"<图名子串>"`；'
             + '要看某张图的节点明细与引脚连线：`op:"nodes", graph:"<图名>"`；'
-            + '「谁身上挂着这张图」**读不出来**（见 anatomyNote），别按图名去猜实体。',
+            + '**「谁身上挂着这张图」看每条图的 `owners[]`**（`via:"mount"` 已确证 / `via:"ref"` 口径未确证）。',
         };
         out.caveats = [
           '类型分布基于**随包节点词典**：`identifier` 第一段（`Trigger./Execution./Query./Arithmetic./Control./Others./Hidden.`）为准，'
@@ -2362,6 +2372,21 @@ const TOOLS = [  {
           declarationCount: facts.declarationCount,
           compositeCount: facts.compositeCount,
           declarationStats: facts.declarationStats,
+          // ★ 挂载关系（2026-10-02 补）：概略恒给；明细档才给逐条（免得粗略档回执爆掉）
+          mountSummary: facts.mounts ? {
+            graphsWithOwner: Object.keys(facts.graphOwners || {}).length,
+            graphsTotal: facts.graphs.length,
+            entityRecords: facts.mounts.entities.length,
+            componentRecords: facts.mounts.components.length,
+            note: '挂载主从**实体/元件记录**读（`#13` 形状已确证 ⇒ `via:"mount"`；"别处指向"记 `via:"ref"`，口径未确证）。'
+              + '⚠️ 技能图/状态图挂在别的区 ⇒ 没找到只能说"**这两个区里**没找到"。',
+          } : undefined,
+          mounts: (detailed && facts.mounts) ? {
+            entities: facts.mounts.entities, components: facts.mounts.components,
+            graphOwners: facts.graphOwners,
+          } : undefined,
+          mountsOmitted: (detailed || !facts.mounts) ? undefined
+            : (facts.mounts.entities.length + facts.mounts.components.length),
           filter: { kind, graph: gq || null, entity: eq || null },
           brief: facts.brief,
           caveats: [
@@ -2371,7 +2396,9 @@ const TOOLS = [  {
           ],
           unverified: facts.unverified.length ? facts.unverified : undefined,
           nextStep: '看某张图传 `graph:"<图名子串>"`（如 `关卡实体信号`）；看某个实体的变量传 `entity:"<实体名子串>"`（如 `关卡实体`）；'
-            + '要配置条目（职业/成长曲线/连段/状态）+ 阵营 + 资源树传 `kind:"defs"`；要节点声明表（自定义节点）传 `kind:"decls"`；要元件/实体/图/声明一起看传 `kind:"all"`；只要计数就别传参数（默认粗略档）。',
+            + '要配置条目（职业/成长曲线/连段/状态）+ 阵营 + 资源树传 `kind:"defs"`；要节点声明表（自定义节点）传 `kind:"decls"`；'
+            + '要元件/实体/图/声明一起看传 `kind:"all"`；**要"哪张图挂在哪个实体/元件上"看 `mountSummary` / 明细档的 `mounts.graphOwners`**；'
+            + '只要计数就别传参数（默认粗略档）。',
         };
         // 按 kind 决定回哪一块（默认 graphs；`all` 全给；给了 graph/entity 过滤就按过滤给明细）
         const wantGraphs = kind === 'graphs' || kind === 'all' || !!gq;

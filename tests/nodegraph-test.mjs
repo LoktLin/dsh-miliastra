@@ -11,7 +11,7 @@
  *
  * 用法：node tests/nodegraph-test.mjs
  */
-import { readGilNodeFacts } from '../lib/gilnodes.mjs';
+import { readGilNodeFacts, readGraphMounts } from '../lib/gilnodes.mjs';
 import { scanLevels, pickCurrent } from '../lib/locate.mjs';
 import {
   NODE_TYPE_LABELS, nodeTypeLabel, nodeTypeOf, nodeSideOf, typeStatsOf, triggersOf, refsSummaryOf,
@@ -148,15 +148,56 @@ await check('⑤ 画像与汇总：逐图相加 == 整关总数（统计要对�
   return '2 图 5 节点 → 事件1/执行2/查询1/未知1（逐图相加一致）';
 });
 
-await check('⑥ 「谁身上挂着这张图」读不出来 —— 结论 + 证伪证据都要在（不许下次再猜）', () => {
+await check('⑥ **挂载主读得出来**（作者 2026-10-02 修正；上一轮"读不出来"是错口径 —— 三条教训也要留着）', () => {
   const n = graphOwnerNote();
-  assert(n.verified === false, '这条必须显式标"没确证"');
-  assert(/没有挂载主体字段/.test(n.why), '没说清为什么读不出来');
-  assert(/重叠/.test(n.why), '没说清号段重叠这件事');
-  assert(/证伪/.test(n.falsified) && /反例/.test(n.falsified), '缺证伪实验的描述');
-  assert(/创作者交接/.test(n.howToGet), '没说清正确拿法（找创作者交接）');
-  assert(/图 → 引用谁|引用了哪些实体/.test(n.canTell), '没说清能给的替代（方向相反的那个）');
-  return '读不出来 + 证伪 + 替代口径 + 正确拿法';
+  assert(n.verified === true, '这条现在必须标"已确证"');
+  assert(/#13/.test(n.how) && /逐条对上/.test(n.how), '没给出判据（`#13` 形状 + 与编辑器对上）');
+  assert(/未确证/.test(n.partial) && /布尔过滤器/.test(n.partial), '没写清"另一类形状口径未确证"');
+  assert(/别的区/.test(n.blind), '没写清盲区（技能图/状态图在别的区）');
+  assert(/名字匹配/.test(n.warning) && /裸数值/.test(n.warning), '没留下上一轮那两条错法的教训');
+  assert(/编辑器/.test(n.source), '没写出处（作者给的编辑器线索）');
+  return '已确证 + 判据 + 未确证口径 + 盲区 + 两条教训';
+});
+
+await check('⑥b 挂载抽取：合成树 + 真 .gil 双验（`#13` 形状：实体 `#6`、元件 `#7`）', () => {
+  // 合成树：手工搭 `#5[i].#6.#13.#1.#1{ #1=序号, #2=图id, #501=类型号 }`（元件同形状，只是 `#6`→`#7`）
+  const vi = (no, n) => ({ no, wt: 0, value: BigInt(n) });
+  const msg = (no, ...kids) => ({ no, wt: 2, sub: kids, value: Buffer.alloc(0) });
+  const slotName = () => msg(5, vi(1, 1), msg(11, { no: 0, wt: 2, value: Buffer.from('灶台', 'utf8') }));
+  const mountItem = (idx, gid) => msg(1, msg(1, vi(1, idx), vi(2, gid), vi(501, 20000)));
+  const entRec = msg(1, vi(1, 1001), slotName(), msg(6, msg(13, mountItem(1, 1073741828))));
+  const compRec = msg(1, vi(1, 2002), msg(6, vi(1, 1), msg(11, { no: 0, wt: 2, value: Buffer.from('组合位置', 'utf8') })), msg(7, msg(13, mountItem(1, 1082130434))));
+  const tree = [msg(5, entRec), msg(4, compRec)];
+  const got = readGraphMounts(tree, { graphIds: [1073741828, 1082130434, 999] });
+  eq(got.entities.length, 1, '实体挂载记录没抽出来');
+  eq(got.entities[0].mounts.map((m) => m.graphId), [1073741828], '实体挂载的图 id 不对');
+  eq(got.entities[0].mounts[0].typeCode, 20000, '图类型号（#501）没带出来');
+  eq(got.components[0].mounts.map((m) => m.graphId), [1082130434], '元件挂载的图 id 不对');
+  eq(got.mountedGraphIds.sort((a, b) => a - b), [1073741828, 1082130434], 'mountedGraphIds 不对');
+  const noIds = readGraphMounts(tree, {});
+  assert(noIds.entities.length === 0 && noIds.unverified.length > 0, '不给 graphIds 时应拒绝判定并说明');
+  // 真数据：两个关卡各验一条（与编辑器面板对上的那两条）
+  const lvls = scanLevels();
+  const hit39 = lvls.find((l) => String(l.levelId) === '1073741839' && l.gil);
+  const hit29 = lvls.find((l) => String(l.levelId) === '1073741829' && l.gil);
+  let note = '合成树通过';
+  if (hit39) {
+    const f = readGilNodeFacts(hit39.gil.path, {});
+    const g = (f.graphs || []).find((x) => x.name === '关卡实体信号');
+    if (g) {
+      assert((f.graphOwners[g.id] || []).some((o) => o.kind === '实体' && o.via === 'mount'), '侦探1：关卡实体信号 没读到挂载主');
+      note += '；1073741839「关卡实体信号」← 实体';
+    }
+  }
+  if (hit29) {
+    const f = readGilNodeFacts(hit29.gil.path, {});
+    const g = (f.graphs || []).find((x) => x.name === '吧台_收食物');
+    if (g) {
+      assert((f.graphOwners[g.id] || []).length > 0, '恐怖：吧台_收食物 没读到挂载主');
+      note += '；1073741829「吧台_收食物」← ' + (f.graphOwners[g.id] || []).length + ' 个挂载主';
+    }
+  }
+  return note;
 });
 
 await check('⑦ 真 `.gil`：逐图相加 == 整关（含覆盖率），且入口都是事件类', () => {
@@ -201,7 +242,8 @@ await check('⑧ `op=anatomy` 回执：字段齐、summaryOnly 只去正文、�
   assert(full.totals && full.coverage && full.anatomyNote, '缺 totals / coverage / anatomyNote');
   assert(full.coverage.nodes === full.totals.nodes, 'coverage.nodes 与 totals.nodes 应一致');
   assert(full.coverage.typedNodes + full.coverage.untypedNodes === full.coverage.nodes, '覆盖率的加法对不上');
-  assert(full.anatomyNote.verified === false, 'anatomy 回执必须带"挂载主体读不出来"的结论');
+  assert(full.anatomyNote.verified === true, 'anatomy 回执必须带"挂载主读得出来"的结论（含判据与盲区）');
+  assert(full.mountSummary && full.mountSummary.graphsTotal > 0, '缺 mountSummary（挂载概略）');
   assert(full.customNodes && full.customNodes.declarationsInMap >= 0, '缺 customNodes（本关声明归属）');
   eq(full.customNodes.fromDeclarations, (full.customNodes.composite || 0) + (full.customNodes.custom || 0), 'customNodes 加法对不上');
   assert(/本关卡内的声明/.test(full.coverage.note), 'coverage.note 没写清"命中本关声明"这条归属');
