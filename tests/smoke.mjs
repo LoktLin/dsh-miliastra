@@ -703,14 +703,26 @@ for (const [toolName, args] of CASES) {
   const html = playPageSource('<span id="stamp">v__PLAY_STAMP__</span>__PLAY_STAMP__', stamp);
   const okStamp = /^[0-9a-z]+-[0-9a-z]+$/.test(stamp)
     && html.indexOf('__PLAY_STAMP__') < 0 && (html.match(new RegExp(stamp, 'g')) || []).length === 2;
+  /*
+   * ★ 2026-10-01 加的那半个：`?session=<名>` —— 试玩页可以对着**另一份独立工程**
+   *   （预制效果页用 `presets`；不传就是默认会话 = 老行为）。
+   *   这里钉住三件事：占位符会被替换、注入的是**合法键**（怪字符一律清成空 = 默认会话）、页脚能看出会话名。
+   */
+  const sHtml = playPageSource('var S=__PLAY_SESSION__;/*sess*/__PLAY_SESSION_TEXT__', stamp, 'presets');
+  const okSess = sHtml.indexOf('"presets"') >= 0 && sHtml.indexOf('会话 presets') >= 0;
+  const sBad = playPageSource('var S=__PLAY_SESSION__;/*sess*/__PLAY_SESSION_TEXT__', stamp, '../evil name');
+  const okSessGuard = sBad.indexOf('""') >= 0 && sBad.indexOf('默认会话') >= 0;
   const src = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'index.js'), 'utf8');
-  const routeUsesIt = /playPageSource\(html, playPageStamp\(st\)\)/.test(src);
-  if (okStamp && routeUsesIt) {
-    console.log('✓ ★ 试玩页盖上版本戳（`v<大小>-<mtime>`，如 v9ix-1a2b3c）：页脚能自证"面板里那份是新是旧"');
+  const routeUsesIt = /playPageSource\(html, playPageStamp\(st\), sess\)/.test(src)
+    && /simSessionKey\(url\.searchParams\.get\('session'\)\)/.test(src)
+    && /engineSessionOf\(engineArgsFromBody\(body\)\)/.test(src);
+  if (okStamp && okSess && okSessGuard && routeUsesIt) {
+    console.log('✓ ★ 试玩页盖上版本戳（`v<大小>-<mtime>`，如 v9ix-1a2b3c）**与会话名**（`?session=` ⇒ 独立工程）：页脚能自证"面板里那份是新是旧、对着哪一份"');
     pass += 1;
   } else {
     fail += 1;
-    failures.push('[page] 版本戳不对：stamp=' + stamp + ' okStamp=' + okStamp + ' routeUsesIt=' + routeUsesIt);
+    failures.push('[page] 版本戳/会话不对：stamp=' + stamp + ' okStamp=' + okStamp
+      + ' okSess=' + okSess + ' okSessGuard=' + okSessGuard + ' routeUsesIt=' + routeUsesIt);
   }
 }
 

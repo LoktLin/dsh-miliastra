@@ -39,13 +39,13 @@ ok('①a 图元预设 3 个、id 唯一、与粒子表**不重叠**', (() => {
 
 ok('①b `isSpritePreset` 不把粒子预设认成图元', !isSpritePreset('star-rain') && !isSpritePreset('peacock-in') && !isSpritePreset(''));
 
-ok('①c `preset:"list"` = 13 粒子 + 3 图元，每行带 `shapeKind`', (() => {
+ok('①c `preset:"list"` = 17 粒子（13 + 4 组合）+ 3 图元，每行带 `shapeKind`', (() => {
   const r = vfxLua({ preset: 'list' }, {});
   const sp = r.presets.filter((p) => p.shapeKind === 'sprite');
   const em = r.presets.filter((p) => p.shapeKind !== 'sprite');
-  return r.count === 16 && r.emitterPresetCount === 13 && r.spritePresetCount === 3
-    && sp.length === 3 && em.length === 13;
-})(), 'count=16');
+  return r.count === 20 && r.emitterPresetCount === 17 && r.spritePresetCount === 3
+    && sp.length === 3 && em.length === 17;
+})(), 'count=20');
 
 ok('①d 粒子表 `PRESETS`/`PRESET_NAMES` **一个字段没动**（13 个，字段集仍是 UIParticles@1）', (() => {
   const r = vfxLua({ preset: 'star-rain', output: 'data' }, HANDOVER);

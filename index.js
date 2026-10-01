@@ -269,6 +269,32 @@ export function engineArgsFromBody(body) {
 }
 
 /**
+ * ★ **可选的会话名**（2026-10-01 作者：「我希望预制效果的模拟器是独立的，不受到其他影响」）。
+ *
+ * Host 侧本来就按会话分控制器（`lib/sim.mjs` 的 `registry`，键 = `ctx.sessionId`），
+ * 但 `/miliastra/engine` 与 AI 的工具都传空 ctx ⇒ **大家共用 `'default'` 这一份工程**。
+ * 于是"预制效果预览"会**改掉**模拟器页/AI 正在用的那份工程 —— 那正是作者要解决的。
+ *
+ * 这里只做一件事：把请求里的会话名**验一遍**（只认 `[A-Za-z0-9_-]{1,32}`），
+ * 别的（空 / 怪字符 / 过长）一律回 `''` = 默认会话 —— **绝不把没验过的串当键**。
+ */
+export function simSessionKey(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  return /^[A-Za-z0-9_-]{1,32}$/.test(s) ? s : '';
+}
+
+/** 请求体里的会话名（`__session` / `session`），并把它从 args 里**摘掉**（别让引擎看到这个字段）。 */
+export function engineSessionOf(body) {
+  const src = body && typeof body === 'object' ? body : {};
+  const key = simSessionKey(src.__session != null ? src.__session : src.session);
+  const args = { ...src };
+  delete args.__session;
+  delete args.session;
+  return { key, args };
+}
+
+/**
  * 试玩页的**版本戳**（`<字节数 base36>-<mtime base36>`）。
  *
  * 为什么要有：这一页是每次请求现读的，改完只要「重载页面」就生效 —— 但"面板里那份到底是新的还是旧的"
@@ -281,9 +307,17 @@ export function playPageStamp(stat) {
   return size.toString(36) + '-' + mtime.toString(36);
 }
 
-/** 把版本戳盖进试玩页（占位符 `__PLAY_STAMP__`）。纯函数，便于回归。 */
-export function playPageSource(html, stamp) {
-  return String(html || '').replace(/__PLAY_STAMP__/g, String(stamp || 'unknown'));
+/**
+ * 把版本戳与**会话名**盖进试玩页（占位符 `__PLAY_STAMP__` / `__PLAY_SESSION__`）。纯函数，便于回归。
+ * ★ 会话名走 `JSON.stringify` 注入成 `window.__MILIASTRA_SESSION`（页面据此把 `__session` 带回每次请求），
+ *   同时塞进页脚那个 `#sess` 里 —— **人得看得出这一页对着哪一份工程**，不然"为什么这里没反应"没法自查。
+ */
+export function playPageSource(html, stamp, session) {
+  const key = simSessionKey(session);
+  return String(html || '')
+    .replace(/__PLAY_STAMP__/g, String(stamp || 'unknown'))
+    .replace(/__PLAY_SESSION__/g, JSON.stringify(key))
+    .replace(/__PLAY_SESSION_TEXT__/g, key ? '· 会话 ' + key : '· 默认会话');
 }
 
 /* ---------------------------------------------------------------- 公共解析 */
@@ -3416,7 +3450,7 @@ const TOOLS = [
         spelling: { type: 'string', enum: ['struct_ype', 'struct_type'], description: 'op=struct-json：写出的拼写键（默认 `struct_ype`，都认）。' },
         allowLongText: { type: 'boolean', description: 'op=struct-json：放行 > 500 字符（默认 false = 报错）。' },
         summaryOnly: { type: 'boolean', description: '只去正文不去结论：去掉 `lua` / JSON 正文 / 逐条块数据。统计与 `nextStep` 都留。' },
-        preset: { type: 'string', description: 'op=vfx-lua：预设 id（**13 粒子**：星雨/飘雪/花瓣/火星/星光/彩纸/金币/宝箱/孔雀收拢/孔雀展开/萤火/气泡/火花 + **3 图元**：环刃/刀光/新月）；传 `"list"` 列全部。' },
+        preset: { type: 'string', description: 'op=vfx-lua：预设 id（**17 粒子**（含 4 个组合预设：星光爆发/金币喷泉/雪中花瓣/孔雀终幕）+ **3 图元**：环刃/刀光/新月）；传 `"list"` 列全部（每条带二级分类）。` 列全部。' },
         path: { type: 'object', description: 'op=vfx-lua：贝塞尔"钢笔"三手柄 `{start?,p1,p2,target}`（后三个**相对发射点**）。给了就设 `motion="bezier"`。' },
         pathLayer: { type: 'number', description: 'op=vfx-lua：`path` 打到第几层（1 起，默认 1）。' },
         paths: { type: 'array', description: 'op=vfx-lua：**一次给多层** `[{layer,points:[{x,y}]}]`。粒子层**正好 4 点**（单段）；**图元层 4+3k**（多段）。给错 `ok:false` 说清原因。' },
@@ -4123,7 +4157,13 @@ function makeHandler() {
           return;
         }
         const st = fsMod.statSync(file);
-        const body = Buffer.from(playPageSource(html, playPageStamp(st)), 'utf8');
+        /*
+         * ★ `?session=<名>`（2026-10-01）：这一页对着**哪一份工程**。
+         *   预制效果页的预览用 `presets` 会话 ⇒ 与模拟器页/AI 的那份**互不影响**。
+         *   不传 = 默认会话（老行为，一个字节没变）。
+         */
+        const sess = simSessionKey(url.searchParams.get('session'));
+        const body = Buffer.from(playPageSource(html, playPageStamp(st), sess), 'utf8');
         res.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
@@ -4152,8 +4192,11 @@ function makeHandler() {
          * 于是 `op/action` 一起被吃掉 ⇒ `simOp({x,y})` 退化成 **`op=state`**（默认值），
          * 而且**不报错**：面板的试玩按钮、浏览器试玩页的轮询双双静默失效（iframe 里一片黑、Frame 永远 0）。
          * 现在原样交给 simOp（`engineArgsFromBody` 一行，有回归钉住）。
+         * ★ 2026-10-01：多一层「会话」—— `__session` 从 body 里摘出来当 `ctx.sessionId`
+         *   （不给就是默认会话，行为与以前**逐字一致**）。
          */
-        sendJson(res, 200, { ok: true, data: lossless(await simOp(engineArgsFromBody(body), {})) });
+        const sessOf = engineSessionOf(engineArgsFromBody(body));
+        sendJson(res, 200, { ok: true, data: lossless(await simOp(sessOf.args, sessOf.key ? { sessionId: sessOf.key } : {})) });
         return;
       }
       if (route === PREFIX + '/tool' && req.method === 'POST') {

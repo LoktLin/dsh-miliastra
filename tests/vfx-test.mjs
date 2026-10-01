@@ -72,10 +72,10 @@ const okHandover = { templateIndex: TMPL, container: BOX, parentName: null };
 
 /* ────────────────────────────── ① 纯函数层 ────────────────────────────── */
 
-t('①a 13 个预设、id 唯一、与枚举一致', () => {
-  eq(PRESET_NAMES.length, 13, '预设数');
+t('①a 17 个预设（13 + 4 组合）、id 唯一、与枚举一致', () => {
+  eq(PRESET_NAMES.length, 17, '预设数（13 粒子 + 4 组合）');
   eq(PRESETS.map((p) => p.name), PRESET_NAMES, 'PRESETS 顺序要与 PRESET_NAMES 一致');
-  eq(new Set(PRESET_NAMES).size, 13, 'id 不能重复');
+  eq(new Set(PRESET_NAMES).size, 17, 'id 不能重复');
   for (const p of listPresets()) {
     assert(typeof p.label === 'string' && p.label.length > 0, p.name + ' 缺中文名');
     assert(typeof p.summary === 'string' && p.summary.length > 8, p.name + ' 缺一句话语义');
@@ -113,7 +113,7 @@ t('①c 曲线端点与严格递增（运行时会 reject）', () => {
   }
 });
 
-t('①d validateBuilt 对 13 个预设全绿（数据层自检）', () => {
+t('①d validateBuilt 对 17 个预设全绿（数据层自检）', () => {
   for (const name of PRESET_NAMES) {
     const built = buildPreset(name, { imageId: 101023 });
     eq(validateBuilt(built), [], name + ' 数据层自检');
@@ -131,7 +131,7 @@ t('①e 落程公式 = v·t + ½|g|t²（拿 star-rain A 层手算核对）', ()
   assert(travelOf(a).travel > CANVAS.height, 'star-rain 应当能从顶落到底（≥1000px）');
 });
 
-t('①f 池子 = rate×lifetime.max，且 13 个预设都不缺粒', () => {
+t('①f 池子 = rate×lifetime.max，且 17 个预设都不缺粒', () => {
   const short = [];
   for (const name of PRESET_NAMES) {
     const built = buildPreset(name, { imageId: 101023 });
@@ -168,6 +168,41 @@ t('①i 数量分布：8 层只有孔雀两个；爆发/环境类都是 1~3 层'
   eq(by['confetti-pop'], 3, 'confetti-pop 三层不同颜色');
   eq(by['star-rain'], 2, 'star-rain 两层');
   assert(Object.values(by).filter((n) => n === 8).length === 2, '只有孔雀两条是 8 层');
+});
+
+t('①i2 ★ 二级分类 + 4 个组合预设（2026-10-01 作者：「做做分类，特别是组合的特效」）', () => {
+  const rows = listPresets();
+  // ① 分类字段齐全，且**一级/二级的取值都在允许集合里**
+  const l1 = new Set(['粒子']);
+  const l2 = new Set(['光与火', '天气', '收集与庆祝', '形态与轨迹', '组合（多层同屏）']);
+  for (const p of rows) {
+    assert(l1.has(p.categoryLabel), `${p.name} 的一级分类不认识：${p.categoryLabel}`);
+    assert(l2.has(p.subLabel), `${p.name} 的二级分类不认识：${p.subLabel}`);
+  }
+  // ② 每个二级分类都非空（做分类最怕"有一个桶是空的"，那等于没分）
+  const subs = new Map();
+  for (const p of rows) subs.set(p.subLabel, (subs.get(p.subLabel) || 0) + 1);
+  for (const s of l2) assert((subs.get(s) || 0) > 0, `二级分类「${s}」是空的`);
+  // ③ 组合预设：4 个，都是**多层**（≥4 层）、都共用一张贴图、都不需要创作者给图号
+  const combos = rows.filter((p) => p.sub === 'combo');
+  eq(combos.map((p) => p.name), ['combo-star-burst', 'combo-coin-fountain', 'combo-snow-blossom', 'combo-peacock-finale'], '组合名单');
+  for (const c of combos) {
+    assert(c.emitters >= 4, `${c.name} 只有 ${c.emitters} 层，不算"组合"`);
+    assert(c.imageId >= 100001 && c.imageId <= 100006, `${c.name} 的贴图号必须能被模拟器画出来（组合内共用一张）`);
+    assert(c.needsImageId === false, `${c.name} 不该要求创作者给图号`);
+    const built = buildPreset(c.name, {});
+    const images = new Set(built.emitters.map((e) => e.imageId));
+    eq([...images], [c.imageId], `${c.name} 各层贴图应当一致（生成器一份工程只写一个 IMAGE_ID）`);
+    // 层 id 不许撞（复用别的预设的层时要改 id）
+    eq(new Set(built.emitters.map((e) => e.id)).size, built.emitters.length, `${c.name} 层 id 有重复`);
+    // 池子够用（preflight 那条硬检查的本地等价物）
+    const short = built.emitters.filter((e) => !poolOf(e).enough).map((e) => e.id);
+    eq(short, [], `${c.name} 这些层池子不够`);
+  }
+  // ④ 组合**不改**原来 13 个预设一个字节（加分类/加组合都必须对它们零影响）
+  const star = buildPreset('star-scatter', { imageId: 100005 });
+  eq(star.emitters.length, 2, 'star-scatter 层数不该被组合影响');
+  eq(star.label, '星光散射', 'star-scatter 中文名不该变');
 });
 
 t('①j 孔雀开屏：8 个方向的点都在屏内，且 in/out 是同一组点反着走', () => {
@@ -456,7 +491,7 @@ t('③e 缺交接值：ok:false + needsHandover（文案含"别自己编"）', a
   return '缺 ' + JSON.stringify(missing) + '（+ 空 handover 时两个都报）';
 });
 
-t('③f preset:"list"：第 2 层按需枚举（13 粒子 + 3 图元 = 16 条 + 关键参数 + 控件核算），summaryOnly 只留 id/中文名', async () => {
+t('③f preset:"list"：第 2 层按需枚举（17 粒子 + 3 图元 = 20 条 + 关键参数 + 控件核算），summaryOnly 只留 id/中文名', async () => {
   const gen = TOOLS.find((x) => x.name === 'miliastra_gen');
   const full = await gen.execute({ op: 'vfx-lua', preset: 'list' });
   assert(full.ok === true && full.listMode === true, 'list 模式');
@@ -465,10 +500,10 @@ t('③f preset:"list"：第 2 层按需枚举（13 粒子 + 3 图元 = 16 条 + 
    *   粒子表本身**一个字段没动**（仍是 13 个）⇒ 这里同时钉「总数 16」与「两边各自的数」，
    *   免得将来有人把图元预设混进粒子表、却以为数量没变（那会让 `UGCTools.UIParticles@1` 的字段契约失效）。
    */
-  eq(full.count, 16, '数量（13 粒子 + 3 图元）');
-  eq(full.emitterPresetCount, 13, '粒子预设数');
+  eq(full.count, 20, '数量（17 粒子 + 3 图元）');
+  eq(full.emitterPresetCount, 17, '粒子预设数');
   eq(full.spritePresetCount, 3, '图元预设数');
-  eq(full.presets.length, 16, '条目数');
+  eq(full.presets.length, 20, '条目数');
   eq(full.presets.filter((p) => p.shapeKind === 'sprite').length, 3, '带 shapeKind=sprite 的条目数');
   for (const p of full.presets) {
     assert(p.id && p.nameZh && p.oneLiner, '每条要有 id / 中文名 / 一句话');
@@ -477,15 +512,31 @@ t('③f preset:"list"：第 2 层按需枚举（13 粒子 + 3 图元 = 16 条 + 
   }
   const slim = await gen.execute({ op: 'vfx-lua', preset: 'list', summaryOnly: true });
   assert(slim.presetsOmitted === true, 'summaryOnly 要标 presetsOmitted');
-  assert(slim.presets.length === 16 && slim.presets[0].keyParams === undefined, 'summaryOnly 只留 id/中文名');
-  assert(JSON.stringify(slim).length < JSON.stringify(full).length / 3, 'summaryOnly 要真的省体积');
+  assert(slim.presets.length === 20 && slim.presets[0].keyParams === undefined, 'summaryOnly 要省掉 keyParams/budget');
+  /*
+   * ★ 2026-10-01 实测踩到：`summaryOnly` 原来只留 `{id, nameZh}` ⇒ 面板那侧的
+   *   ① 二级分组退化成「粒子 · 其他」、② 认不出图元（于是把 `imageId` 发给图元，手滑的 `10005` 就什么都不画）。
+   *   ⇒ 这几个"选得动"的字段**必须留着**；这条断言就是防它再被砍掉。
+   */
+  for (const keep of ['categoryLabel', 'subLabel', 'shapeKind', 'defaultLoop']) {
+    assert(slim.presets.every((p) => p[keep] !== undefined), 'summaryOnly 砍掉了 `' + keep + '`：'
+      + JSON.stringify(slim.presets[0]));
+  }
+  assert(slim.presets.filter((p) => p.shapeKind === 'sprite').length === 3, '简版清单里也要能认出 3 个图元');
+  assert(slim.categories && slim.categories.length === 2, '简版清单也要带 categories 摘要');
+  /*
+   * ⚠️ 阈值从 1/3 放宽到 0.4（2026-10-01）：下面那几个"选得动"的字段是**必须**留的，
+   *   加上之后实测比值 0.355（full 15 371 / slim 5 454 字节）—— 仍然省掉三分之二。
+   */
+  const ratio = JSON.stringify(slim).length / JSON.stringify(full).length;
+  assert(ratio < 0.4, 'summaryOnly 要真的省体积（实测比值 ' + ratio.toFixed(3) + '）');
 });
 
 t('③g 没传 preset：不默默用默认，回 needsPreset + 简版清单', async () => {
   const gen = TOOLS.find((x) => x.name === 'miliastra_gen');
   const r = await gen.execute({ op: 'vfx-lua' });
   assert(r.ok === true && r.needsPreset === true, '要标 needsPreset');
-  eq(r.count, 16, '要给简版清单（13 粒子 + 3 图元）');
+  eq(r.count, 20, '要给简版清单（17 粒子 + 3 图元）');
   assert(r.nextStep.includes('preset'), '要指路下一步');
 });
 

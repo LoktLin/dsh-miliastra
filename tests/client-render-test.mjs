@@ -276,15 +276,17 @@ check('空状态下整面板渲染：三栏骨架 + 全部卡片都在（不炸�
     throw new Error('整面板渲染抛错：' + e.message);
   }
   assert(html.includes('dsh-miliastra-panel'), '没渲染出面板根');
-  for (const head of ['① 关卡', '② 代码', '③ 日志']) {
+  for (const head of ['① 当前关卡', '② 存盘与进程', '③ 日志']) {
     assert(html.includes(head), '缺栏目：' + head);
   }
-  for (const card of ['关卡</div>', '关卡与文件', '地图体检', '活文件', '活文件体检', '脚本一致性',
-    '备份', '部署到活文件', '运行时日志', '试玩探针', '刷新']) {
+  for (const card of ['当前关卡', '整体存盘状态', '地图体检', '代码操作', '运行时日志', '试玩探针', '刷新']) {
     assert(html.includes(card), '缺卡片/按钮：' + card);
   }
+  // ★ 2026-10-01 作者要求删掉的两块：关卡选择器（自动跟随 + 全部关卡列表）与「关卡与文件」8 行元信息
+  assert(!html.includes('自动跟随'), '关卡选择器还在（作者：「关卡 做个块可以删除了」）');
+  assert(!html.includes('关卡与文件'), '「关卡与文件」那张 8 行元信息卡还在（应该只剩一行当前关卡）');
   assert(html.includes('dsh-miliastra-col'), '三栏容器没渲染');
-  return `${html.length} 字符，三栏 + ${10} 张卡片齐备`;
+  return `${html.length} 字符，三栏 + ${7} 张卡片齐备，删掉的两块确实不在`;
 });
 
 // Host 是**启动时的快照** —— 面板要把「源码比它新」说出来（P0-C：今晚为此花了 5 个调用定位）。
@@ -831,6 +833,172 @@ check('cleanup 之后能重新挂上（热重载不留幽灵）', () => {
   return '已重挂';
 });
 
+check('★「整体存盘状态」（`saveVerdict`）：一句话结论 + 点名 + 比不出来就不许说已存盘', () => {
+  const V = clientExports.__testSaveVerdict;
+  assert(typeof V === 'function', '缺 __testSaveVerdict');
+  const row = (file, live, emb, mounted) => Object.assign({ file, liveSha: live, embeddedSha: emb }, mounted === undefined ? { mounted: true } : { mounted });
+  // ① 全部一致 ⇒ 已存盘（拿真实回执的形状：liveSha === embeddedSha）
+  const ok = V({ ok: true, gilPath: 'C:\\x\\1073741841.gil', level: { levelId: '1073741841' }, rows: [
+    row('柱子_红.lua', 'AAA', 'AAA'), row('色彩调度.lua', 'BBB', 'BBB'),
+  ] });
+  assert(ok.state === 'saved' && ok.saved === 2 && /已存盘：2 \/ 2 个脚本与地图里嵌的一致/.test(ok.title), '全一致时没说"已存盘"：' + JSON.stringify(ok));
+  assert(ok.gil === '1073741841.gil' && ok.levelId === '1073741841', '没带出 .gil / 关卡号');
+  assert(/可以直接（停掉再）试玩/.test(ok.hint), '已存盘时没给"可以试玩"的下一步：' + ok.hint);
+  // ② 有一个不一样 ⇒ 没存盘，并**点名**（不是只报个数）
+  const dirty = V({ ok: true, rows: [row('a.lua', 'AAA', 'AAA'), row('b.lua', 'NEW', 'OLD'), row('c.lua', 'C2', 'C2')] });
+  assert(dirty.state === 'dirty' && dirty.dirty.length === 1 && dirty.dirty[0] === 'b.lua', '没点名没存盘的那个：' + JSON.stringify(dirty));
+  assert(/有 1 \/ 3 个脚本没存盘/.test(dirty.title), '结论计数不对：' + dirty.title);
+  assert(/去编辑器里存一次盘/.test(dirty.hint), '没说下一步：' + dirty.hint);
+  // ③ 没挂进地图的**不算**"没存盘"（否则结论会说大），只单列
+  const unm = V({ ok: true, rows: [row('a.lua', 'AAA', 'AAA'), row('孤儿.lua', 'ZZZ', null, false)] });
+  assert(unm.state === 'saved' && unm.saved === 1 && unm.notMounted.length === 1, '没挂进地图的被算进结论了：' + JSON.stringify(unm));
+  assert(/没挂进地图/.test(unm.hint) && /孤儿\.lua/.test(unm.hint), '没点名"没挂进地图"的那些：' + unm.hint);
+  // ④ 比不出来（缺 sha）⇒ 降级成"说不清"，**不许**说已存盘
+  const unk = V({ ok: true, rows: [row('x.lua', 'AAA', 'AAA'), { file: 'y.lua', mounted: true }] });
+  assert(unk.state === 'unknown' && /说不清/.test(unk.title) && unk.unknown[0] === 'y.lua', '缺 sha 时没说"说不清"：' + JSON.stringify(unk));
+  assert(!/已存盘/.test(unk.title), '缺 sha 却说"已存盘"（那是把不知道说成知道）');
+  // ⑤ 空 / 读不到：都要**说清是什么状态**，不能空着
+  assert(V({ ok: true, rows: [] }).state === 'none', '没有活文件时该是 none');
+  assert(/还没有活文件/.test(V({ ok: true, rows: [] }).title), '没有活文件时没给空态文案');
+  const bad = V({ ok: false, error: '扫描失败' });
+  assert(bad.state === 'unknown' && /（读取失败）/.test(bad.title) && /扫描失败/.test(bad.error), '回执 ok:false 时没老实说读不到：' + JSON.stringify(bad));
+  assert(V(null).state === 'unknown' && /读取失败|读不到/.test(V(null).title), 'null 没兜住');
+  // ⑥ 渲染层：把三种状态注入面板，看「整体存盘状态」卡真的长对了
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'basic' };
+  const flat = (h) => h.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const saved = flat(renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __saveInfo: { ok: true, gilPath: 'C:\\x\\1.gil', rows: [row('a.lua', 'AAA', 'AAA')] } }))));
+  assert(/✅ 已存盘：1 \/ 1 个脚本与地图里嵌的一致/.test(saved), '渲染层没显示已存盘：' + (saved.match(/[✅⚠️❔][^　]{0,40}/) || []));
+  assert(/1\.gil/.test(saved), '没写比的是哪个 .gil：' + (saved.match(/[✅⚠️❔][^　]{0,60}/) || []));
+  const dirtyHtml = flat(renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __saveInfo: { ok: true, rows: [row('a.lua', 'AAA', 'AAA'), row('柱子_红.lua', 'NEW', 'OLD')] } }))));
+  assert(/⚠️ 有 1 \/ 2 个脚本没存盘/.test(dirtyHtml), '渲染层没显示"没存盘"：' + (dirtyHtml.match(/[✅⚠️❔][^　]{0,40}/) || []));
+  assert(/· 柱子_红\.lua/.test(dirtyHtml), '没把没存盘的文件名列出来');
+  // 还没读到 ⇒ 明说"点刷新"，不假装已存盘
+  const pending = flat(renderToStaticMarkup(React.createElement(clientExports.__testPanel, base)));
+  assert(/整体存盘状态/.test(pending) && /点「刷新」/.test(pending), '还没读到时没给"点刷新"：' + pending.slice(0, 0));
+  assert(!/✅ 已存盘/.test(pending), '还没读到就说已存盘');
+  return '四态（已存盘/没存盘/说不清/空）+ 点名 + 没挂进地图单列 + 渲染层三态';
+});
+
+check('★ 初级页两块按作者要求删掉（关卡选择器 / 关卡与文件）+ 代码操作折进 details', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'basic' };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  // ① 关卡块（自动跟随 + 全部关卡列表）删掉；手选关卡的能力一起没了 ⇒ 面板永远跟随当前图
+  assert(!/自动跟随/.test(text), '关卡选择器（自动跟随 / 关卡列表）还在');
+  assert(!/关卡与文件/.test(text), '「关卡与文件」元信息卡还在');
+  for (const gone of ['本机存档', '关卡数', '账号']) {
+    assert(!text.includes(gone), '删掉的那张卡里的「' + gone + '」还在');
+  }
+  // ② 只留一行「当前关卡」（作者：「我只关心打开的是哪个关卡」）
+  assert(/① 当前关卡/.test(text), '缺 ① 当前关卡 栏');
+  assert(/② 存盘与进程/.test(text), '缺 ② 存盘与进程 栏（作者要的"整体有没有保存"）');
+  // ②b ★ 右栏归属（作者 2026-10-01：「将 整体存盘状态 和 进程 放在右边块」）
+  //     按 -col-head 把 HTML 切开，逐块找：整体存盘状态 / 进程 必须在**第 2 块**，地图体检在**第 1 块**
+  const withProc = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
+    __status: {
+      version: '0.6.3', levelCount: 1, levels: [],
+      processes: {
+        available: true,
+        entries: [{ label: '编辑器 BeyondEditor', running: true, instances: 1, memoryMB: 1234 },
+          { label: '游戏 YuanShen', running: false, instances: 0, memoryMB: 0 }],
+        summary: { canPlaytest: true },
+      },
+    },
+  })));
+  const blocks = withProc.split('dsh-miliastra-col-head').slice(1);
+  assert(blocks.length === 2, '初级页应该是两栏：' + blocks.length);
+  const blockOf = (needle) => blocks.findIndex((b) => b.includes(needle));
+  assert(blockOf('整体存盘状态') === 1, '「整体存盘状态」不在右边块：第 ' + blockOf('整体存盘状态') + ' 块');
+  assert(blockOf('>进程<') === 1 || blockOf('进程') === 1, '「进程」不在右边块：第 ' + blockOf('进程') + ' 块');
+  assert(blockOf('地图体检') === 0, '「地图体检」该留在左边块：第 ' + blockOf('地图体检') + ' 块');
+  assert(blockOf('当前关卡') === 0, '「当前关卡」该留在左边块：第 ' + blockOf('当前关卡') + ' 块');
+  assert(blockOf('代码操作') === 1, '「代码操作」该在右边块（折叠）：第 ' + blockOf('代码操作') + ' 块');
+  assert(/编辑器 BeyondEditor/.test(withProc) && /✅ 在跑/.test(withProc), '进程卡没渲染出进程条目：'
+    + (withProc.match(/编辑器[^<]{0,30}/) || []));
+  assert(/✅ 编辑器 \+ 游戏都在/.test(withProc), '进程卡没给"能否试玩"的结论');
+  // 拿不到进程信息时，这张卡**不占位**（空态交给「刷新」，不留一张空壳）
+  assert(!/② 存盘与进程[\s\S]{0,200}进程/.test(renderToStaticMarkup(React.createElement(clientExports.__testPanel, base))
+    .split('dsh-miliastra-col-head')[2] || ''), '读不到进程时不该渲染进程卡空壳');
+  // ③ 代码操作**功能没丢**，但折进 details 且默认收起（SSR 下 details 不带 open 属性 = 收起）
+  assert(/<details class="dsh-miliastra-sec"><summary[^>]*>代码操作（选活文件 \/ 体检 \/ 备份 \/ 部署 \/ 还原）/.test(html),
+    '代码操作没折进 details / summary 文案不对：' + (html.match(/<summary[^>]*>[^<]{0,40}/) || []));
+  assert(!/<details[^>]*\bopen\b[^>]*>\s*<summary[^>]*>代码操作/.test(html), '代码操作默认展开了（作者要的是别占视线）');
+  for (const kept of ['活文件体检', '脚本一致性', '备份', '部署到活文件']) {
+    assert(html.includes(kept), '折进 details 之后「' + kept + '」丢了（功能不该少）');
+  }
+  // ④ 面板层要真的去拉「整体存盘状态」（op=sha all:true），否则那张卡永远是空的
+  assert(/callTool\('miliastra_health', Object\.assign\(\{ op: 'sha', all: true \}, lvArg\(\)\)\)/.test(src),
+    '面板没去拉整体存盘状态（op=sha all:true）');
+  return '删两块 + 一行当前关卡 + 代码操作折进 details（功能不减）+ 面板真去拉 sha 表';
+});
+
+check('★ 预制效果（2026-10-01 作者三条）：独立会话 + 交接值不再是两个怪输入框 + 二级分类下拉', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'presets',
+    open: true, setOpen: () => {}, rootRef: { current: null } }));
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+  // ① 独立会话（作者：「我希望预制效果的模拟器是独立的 不受到其他影响」）
+  assert(/src="\/miliastra\/play\?session=presets"/.test(html), '右边那块画面没带 ?session=presets：'
+    + (html.match(/src="\/miliastra\/play[^"]*"/) || []));
+  assert(/独立会话/.test(text), '没写清这是独立会话');
+  assert(/__session: PRESETS_SESSION/.test(src), '预览没走带 __session 的引擎调用');
+  const bindBlock = src.slice(src.indexOf('var doPreview = function'), src.indexOf('var field = function'));
+  assert(/engineCall\(\{/.test(bindBlock), '预览还在用工具（tools 永远打在默认会话上）—— 独立不了');
+  assert(!/callTool\('miliastra_sim'/.test(bindBlock), '预览仍然调 miliastra_sim ⇒ 会改掉模拟器页/AI 那份工程');
+  assert(/var PRESETS_SESSION = 'presets'/.test(src), '缺 PRESETS_SESSION 常量');
+
+  // ② 交接值：一行只读值 + 「手填」，不再是两个一上来就要人填的输入框
+  assert(/交接值/.test(text), '缺「交接值」那一行');
+  assert(/自动读自本关 \.gil|还没读到（模拟器预览需要/.test(text), '交接值那行没说清来源/缺什么');
+  assert(/<button[^>]*>手填<\/button>/.test(html), '缺「手填」按钮（要手填的人没路了）');
+  // 读不到时必须**自动展开**两个输入框（那种情况确实要人填）——SSR 下就是"读不到"，所以两个输入框在
+  assert(/控件模板索引 \*/.test(text) && /容器节点索引 \*/.test(text), '读不到交接值时没给出输入框（不许静默留空）');
+
+  // ③ 二级分类：`<optgroup label="一级 · 二级">`，且组合那一组在
+  const groups = html.match(/<optgroup label="([^"]+)"/g) || [];
+  assert(groups.length >= 6, '分组太少（一级/二级没做出来）：' + JSON.stringify(groups));
+  assert(/label="粒子 · 组合（多层同屏）"/.test(html), '缺「粒子 · 组合（多层同屏）」这一组：' + JSON.stringify(groups));
+  assert(/label="图元 · 形状沿路径"/.test(html), '缺「图元 · 形状沿路径」这一组');
+  // 4 个组合都在下拉里，且条数与 Host 一致（17 粒子 + 3 图元 = 20）
+  for (const id of ['combo-star-burst', 'combo-coin-fountain', 'combo-snow-blossom', 'combo-peacock-finale']) {
+    assert(html.indexOf('value="' + id + '"') >= 0, '下拉里缺组合预设：' + id);
+  }
+  const opts = html.match(/<option value="[a-z-]+"/g) || [];
+  assert(opts.length === 20, '下拉条数应为 20（17 粒子 + 3 图元）：' + opts.length);
+  assert(/预制效果（20 个 · 二级分类）/.test(text), '标题没跟着条数/二级分类走');
+  // 图元被选中时要说清哪两项不适用（**不许静默忽略**）
+  assert(/isSpritePick\(\)/.test(src) && /填了也会被忽略/.test(src), '选了图元预设时没说明 imageId / 每层池 不适用');
+  assert(/if \(sprite && \(k === 'imageId' \|\| k === 'particlesPerEmitter'\)\) return;/.test(src),
+    '图元预设仍然把 imageId / particlesPerEmitter 发出去（那是无效参数）');
+  // ④ 从 Host 拉清单时要**归一化 + 静态表兜底**（旧版 Host 的 summaryOnly 只回 {id,nameZh} ⇒
+  //    分组会退化成「其他」、图元被当成粒子、一次性预设说不清）
+  assert(/l1: p\.categoryLabel \|\| \(s \? s\[3\] : \(p\.shapeKind === 'sprite' \? '图元' : '粒子'\)\)/.test(src),
+    '从 Host 拉回来的清单没做「归一化 + 静态表兜底」（旧 Host 上分组会退化成"其他 · 其他"、图元也会被认错）');
+  assert(/loop: p\.defaultLoop === undefined \? \(s \? s\[5\] !== false : true\) : p\.defaultLoop !== false/.test(src),
+    '从 Host 拉回来的清单没给"是否循环"留兜底（一次性预设说不清）');
+  // ④b ★ Host 的 summaryOnly **必须**留着分类/图元/循环这几个字段（2026-10-01 实测踩到）
+  const host = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'vfx', 'index.mjs'), 'utf8');
+  const slimBlock = host.slice(host.indexOf('if (summaryOnly) {'), host.indexOf('out.presetsOmitted = true;'));
+  for (const keep of ['categoryLabel', 'subLabel', 'shapeKind', 'defaultLoop']) {
+    assert(slimBlock.indexOf(keep) >= 0, 'summaryOnly 把 `' + keep + '` 砍掉了 —— 面板分组/图元识别会跟着坏');
+  }
+  // ⑤ ★ 一次性预设（loop:false）必须说清 + 给「重播」（作者实测"啥都没咋回事"：slash-arc 1.2 秒播完）
+  assert(/var isOneShot = function/.test(src), '缺 isOneShot（分不清"播完了"和"坏了"）');
+  assert(/这个预设是\*\*一次性\*\*的（loop=false）/.test(src), '一次性预设没给出解释');
+  assert(/'重播'/.test(src), '缺「重播」按钮（一次性动画没法从头再看）');
+  assert(/onClick: function \(\) \{ doPreview\(\); \}[\s\S]{0,260}'重播'\)/.test(src),
+    '「重播」没走 doPreview（那是让一次性动画从头跑的唯一办法）');
+  assert(/一次性动画\*\*不会\*\*因此重播/.test(src), '「重载画面」的说明没说清它**不会**重播动画');
+  // 静态兜底表也要带 loop（Host 清单没回来时同样要能说清）
+  assert(/\['slash-arc', '刀光 · 切向拉伸 \+ 残影', false, '图元', '形状沿路径', false\]/.test(src),
+    '静态表的 slash-arc 没标成一次性（loop:false）');
+  return '独立会话（?session=presets + engineCall）+ 交接值一行/手填 + 20 条二级分类下拉 + 图元不适用 + 一次性预设解释与重播';
+});
+
 // ---------- ⑤ 2026-09-26：顶部 tab 撤掉后，切换**只能**靠浮层内部那三页 ----------
 
 check('★ 顶部 tab 已撤：切换只剩浮层内部三页（初级功能 / 高级功能 / 模拟器）', () => {
@@ -846,11 +1014,11 @@ check('★ 顶部 tab 已撤：切换只剩浮层内部三页（初级功能 / �
   return '三页按钮 + 切换条都在浮层里';
 });
 
-check('（历史 inline 布局，生产已无入口）「初级功能」只出 ① 关卡 + ② 代码', () => {
+check('（历史 inline 布局，生产已无入口）「初级功能」只出 ① 当前关卡 + ② 存盘与进程', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'basic' }));
   const text = html.replace(/<[^>]+>/g, ' ');
-  assert(text.includes('① 关卡'), '缺 ① 关卡');
-  assert(text.includes('② 代码'), '缺 ② 代码');
+  assert(text.includes('① 当前关卡'), '缺 ① 当前关卡');
+  assert(text.includes('② 存盘与进程'), '缺 ② 存盘与进程');
   assert(!text.includes('③ 日志与画面'), 'basic 视图不该出 ③ 日志与画面');
   assert(html.includes('dsh-miliastra-inline'), '没有 inline 样式类 —— 视图模式没生效（会仍按浮层渲染）');
   return '两栏，无 ③';
@@ -860,8 +1028,8 @@ check('「高级功能」视图：只出 ③ 日志与画面（含高级诊断�
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, { __panelTab: 'all', inline: true, group: 'advanced' }));
   const text = html.replace(/<[^>]+>/g, ' ');
   assert(text.includes('③ 日志与画面'), '缺 ③ 日志与画面');
-  assert(!text.includes('① 关卡'), 'advanced 视图不该出 ① 关卡');
-  assert(!text.includes('② 代码'), 'advanced 视图不该出 ② 代码');
+  assert(!text.includes('① 当前关卡'), 'advanced 视图不该出 ① 当前关卡');
+  assert(!text.includes('② 存盘与进程'), 'advanced 视图不该出 ② 存盘与进程');
   return '一栏（③ + 高级诊断）';
 });
 
@@ -871,17 +1039,34 @@ check('inline 视图里没有关闭按钮（视图不该有"关掉自己"这回�
   return '无 ×';
 });
 
-check('「模拟器」视图能真渲染（不是占位）：传输/导出/重置动作 + 诚实空态', () => {
+check('★「模拟器」视图：那条多余的横条删了、四张卡隐藏了，试玩页与两个独有动作还在', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorView, {}));
-  const text = html.replace(/<[^>]+>/g, ' ');
-  assert(text.includes('模拟器'), '缺标题');
-  for (const label of ['刷新', '开始试玩', '单步', '停止', '导出 GIA', '重置工程']) {
-    assert(text.includes(label), '缺按钮：' + label);
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  /*
+   * ① 作者 2026-10-01（截图圈出那条）：「模拟器多了一个横条 非常奇怪」——
+   *    该条 = SimulatorBody 自己的全宽 header（图标 +「模拟器」+ 就绪徽标 + 刷新）。
+   *    这一页上面已经有 tab 条、外面还有面板头，所以整条删掉（`-badge` 就是那条的徽标，用作判据）。
+   */
+  assert(!html.includes('dsh-miliastra-badge'), '那条横条还在（就绪/试玩中徽标 + 模拟器标题 + 刷新）');
+  assert(!/模拟器<\/span>/.test(html), '横条里的标题「模拟器」还在');
+  // ② 刷新能力搬到试玩页工具条，且**只**剩这一个入口（原来是横条上一个 + 工具条重载）
+  assert(text.includes('刷新状态'), '「刷新状态」没搬进试玩页工具条');
+  // ③ 四张卡按作者要求**不再渲染**（试玩日志 / 试玩操作 / 操作时间线 / 验收单）
+  for (const gone of ['试玩日志', '试玩操作', '操作时间线', '验收单']) {
+    assert(!text.includes(gone), '作者要求隐藏的卡还在：「' + gone + '」');
   }
-  // 取图入口已按作者要求删除（画面去右列那个试玩页看）→ 空态落在**日志**上，不再是「还没有画面」
-  assert(text.includes('还没有日志'), '没给「还没有日志」的诚实提示（空着让人猜）');
+  // ④ 试玩页（右列）必须在：画面、两种打开方式、工具条
+  for (const label of ['试玩页（WebGL', '重载页面', '新窗口 ↗', '画面就在这里']) {
+    assert(text.includes(label), '试玩页缺内容：' + label);
+  }
+  // ⑤ 只有面板里**没别处可点**的两个动作保留（搬进 ④ 折叠卡），别一起删掉
+  for (const label of ['导出 GIA', '重置工程', '④ 工程与控件树']) {
+    assert(text.includes(label), '该保留的动作/卡片丢了：' + label);
+  }
+  // ⑥ 画布固定说明还在（解释为什么没有设备/人数/视角下拉）
+  assert(/画布\/人数\/视角固定/.test(text), '画布固定那句说明丢了');
   assert(html.includes('dsh-miliastra-inline'), '模拟器视图没走全宽 inline 布局');
-  return '6 个动作 + 日志空态 + 全宽布局';
+  return '无横条 + 四卡隐藏 + 试玩页齐 + 导出/重置保留 + 全宽布局';
 });
 
 check('浮层面板 = 三个独立页面（初级功能 / 高级功能 / 模拟器），**没有「全部」**', () => {
@@ -905,14 +1090,14 @@ check('每个页面只出自己那几栏、内容**平铺铺满**（-bodyfill）
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const basic = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'basic' })));
   const bTxt = basic.replace(/<[^>]+>/g, ' ');
-  assert(bTxt.includes('① 关卡') && bTxt.includes('② 代码'), '初级页缺 ①②');
+  assert(bTxt.includes('① 当前关卡') && bTxt.includes('② 存盘与进程'), '初级页缺 ①②');
   assert(!bTxt.includes('③ 日志与画面'), '初级页混进了 ③');
   assert(/dsh-miliastra-bodyfill/.test(basic), '初级页没平铺（会留一个空洞的第三栏）');
 
   const adv = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'advanced' })));
   const aTxt = adv.replace(/<[^>]+>/g, ' ');
   assert(aTxt.includes('③ 日志与画面'), '高级页缺 ③');
-  assert(!aTxt.includes('① 关卡') && !aTxt.includes('② 代码'), '高级页混进了 ①②');
+  assert(!aTxt.includes('① 当前关卡') && !aTxt.includes('② 存盘与进程'), '高级页混进了 ①②');
   assert(/dsh-miliastra-bodyfill/.test(adv), '高级页没平铺');
   return '初级=①② / 高级=③，各自平铺';
 });
@@ -955,26 +1140,33 @@ check('画布点击坐标换算（纯函数）：左下原点、y 翻转、退�
  * 2026-09-25 作者又说：「画面和截取画面功能很鸡肋不要了 GUI 部分直接删除」→ **连帧**（它只服务于画面）也删了。
  * ⚠️ 能力没丢：AI 仍可用 `miliastra_sim op=play device|view`、`playerCount`、`op=shot` / `op=frames`。
  * 这条断言是**反向**的：谁要是把开关 / 取图入口加回来，先看这段注释。
+ * ★ 2026-10-01 作者：「试玩日志 / 试玩操作的 GUI 直接隐藏，操作时间线、验收单没有用」——
+ *   按键行与传输控制**也一起没了**（它们原本住在「② 试玩操作」这张卡里；试玩页自己就有整套控制）。
+ *   这条断言同时是**反向**的：谁要把那四张卡加回来，先看这段注释与作者的原话。
+ * ⚠️ 但 `导出 GIA` / `重置工程` **没别处可点**，仍然保留（搬进了 ④ 折叠卡）；画布固定那句说明也保留。
  */
-check('模拟器面板：按键与传输控制保留，**设备/人数/视角 + 连帧/截图按钮都已去掉**（固定 PC 16:9 单人）', () => {
+check('模拟器面板：四张卡（日志/操作/时间线/验收单）已隐藏，设备·人数·视角 + 连帧/截图也没了', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testSimulatorBody, {}));
   const text = html.replace(/<[^>]+>/g, ' ');
-  assert(text.includes('按键：') && text.includes('发送键'), '缺按键行（按键不是"切换"，要留）');
-  for (const label of ['开始试玩', '单步', '停止']) {
-    assert(text.includes(label), '缺传输控制（非取图功能，要留）：' + label);
+  for (const gone of ['① 试玩日志', '② 试玩操作', '③ 操作时间线', '验收单']) {
+    assert(!text.includes(gone), '作者要求隐藏的卡还在：「' + gone + '」');
   }
+  assert(!text.includes('按键：') && !text.includes('发送键'), '按键行还留着（它属于被隐藏的「试玩操作」）');
+  assert(!text.includes('开始试玩') && !text.includes('单步') && !text.includes('停止'),
+    '传输控制还留着 —— 试玩页自己就有（作者要求隐藏面板这份）');
+  assert(text.includes('导出 GIA') && text.includes('重置工程'), '这两个没别处可点，不该跟着一起没');
   assert(!text.includes('设备：') && !text.includes('人数：') && !text.includes('视角：'),
     '还留着设备/人数/视角下拉 —— 作者要求去掉（它们会重建运行时、打歪画布尺寸）');
   assert(/画布\/人数\/视角固定/.test(text), '去掉开关后没写清"现在是固定的什么"');
-  return '按键 + 传输控制保留；设备·人数·视角已固定';
+  return '四卡隐藏 + 按键/传输控制一起下 + 导出/重置保留 + 设备三下拉已固定';
 });
 
 check('模拟器是**面板内的第三个页面**（不再只是提示去会话区）', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'sim' })));
   const text = html.replace(/<[^>]+>/g, ' ');
-  assert(text.includes('开始试玩') && text.includes('导出 GIA'), '模拟器页没渲染出动作按钮');
-  assert(text.includes('还没有日志'), '模拟器页缺空态提示');
+  assert(text.includes('导出 GIA') && text.includes('试玩页（WebGL'), '模拟器页没渲染出动作按钮/试玩页');
+  assert(text.includes('刷新状态'), '模拟器页缺「刷新状态」');
   assert(/dsh-miliastra-simbody/.test(html), '没有 simbody 容器（正文没与 conversation.view 复用同一个组件）');
   assert(!/dsh-miliastra-bodyfill/.test(html), '模拟器页不该再套卡片网格（它自己就是两栏）');
   return '面板内第三个页面可渲染';
@@ -1012,22 +1204,25 @@ check('★ 模拟器布局（作者要求）：tab 是 **1:2**，2 的部分是�
   assert(html.indexOf('dsh-miliastra-playside') >= 0
     && html.indexOf('dsh-miliastra-playside') < html.indexOf('dsh-miliastra-playframe'),
   'iframe 没排在左列之后（会跑到 1 的那一半去）');
-  // ④ 左列几块都在；**顺序 = "最常看的在最上面"**（作者实测「画面在左下角」就是被工程卡挤下去的）。
-  //    2026-09-25 起第一位是作者点名的「读本地 .lua（绝对路径）」——它原来塞在 ④ 里、要先展开折叠卡才看得见。
-  for (const label of ['读本地 .lua（绝对路径）', '① 试玩日志', '② 试玩操作', '操作时间线', '验收单',
-    '④ 工程与控件树 / 工程适配', '工程适配']) {
+  // ④ 左列剩下的两块都在；**顺序 = "最常看的在最上面"**（第一位是作者点名的「读本地 .lua（绝对路径）」）。
+  //    ★ 2026-10-01：中间那 4 张（① 试玩日志 / ② 试玩操作 / ③ 操作时间线 / 验收单）按作者要求不再渲染。
+  for (const label of ['读本地 .lua（绝对路径）', '④ 工程与控件树 / 工程适配', '工程适配']) {
     assert(text.includes(label), '左列缺：' + label);
   }
-  const order = ['读本地 .lua（绝对路径）', '① 试玩日志', '② 试玩操作', '操作时间线', '验收单', '④ 工程与控件树'];
+  const order = ['读本地 .lua（绝对路径）', '④ 工程与控件树'];
   const idx = order.map((s) => text.indexOf(s));
   assert(idx.every((n) => n >= 0) && idx.slice().sort((a, b) => a - b).join(',') === idx.join(','),
     '左列顺序不对（「读本地 .lua（绝对路径）」必须排第一）：' + idx.join(' / '));
-  // 「最顶上」= 真的排在左列第 1 张卡（在左列容器里、且在日志卡之前）——作者原话「放做在左边最顶上」
+  // 「最顶上」= 真的排在左列第 1 张卡（在左列容器里、且在工程折叠卡之前）——作者原话「放做在左边最顶上」
   assert(html.indexOf('读本地 .lua（绝对路径）') > html.indexOf('dsh-miliastra-playside')
-    && html.indexOf('读本地 .lua（绝对路径）') < html.indexOf('① 试玩日志'),
+    && html.indexOf('读本地 .lua（绝对路径）') < html.indexOf('④ 工程与控件树'),
   '「读本地 .lua（绝对路径）」没排在左列最上面');
-  // ⑤ 传输控制与验收单按钮都在（它们驱动的是**同一个**会话）
-  for (const label of ['开始试玩', '单步', '停止', '读清单', '跑这一组', '扫描活文件', '搭进模拟器']) {
+  // ⑤ 被隐藏的四张卡**确实不在**（作者：「试玩日志 / 试玩操作的 GUI 直接隐藏，操作时间线、验收单没有用」）；
+  //    但面板里**没别处可点**的工程动作与扫描入口要留着（它们驱动的是**同一个**会话）
+  for (const gone of ['① 试玩日志', '② 试玩操作', '③ 操作时间线', '验收单']) {
+    assert(!text.includes(gone), '左列还渲染着已隐藏的卡：' + gone);
+  }
+  for (const label of ['导出 GIA', '重置工程', '扫描活文件', '搭进模拟器']) {
     assert(html.includes(label), '缺控件/按钮：' + label);
   }
   // ⑥ 滚动模型：**左列自己滚、右边不下沉**（否则左列一长，滚下去 iframe 出视野 —— 作者实测「右侧啥都没」）
@@ -1099,17 +1294,17 @@ check('★ 「读本地 .lua（绝对路径）」入口（左列最上面那张�
   //    2026-09-25 起这块提成了左列最上面的独立卡，所以切片的**右边界改成下一张卡的标题**
   //    （原来靠卡片内部那句"或者，从这台机器上的沙箱活文件里挑一份"分界，现在那句搬去了 ④）
   const a = flat.indexOf('读本地 .lua（绝对路径）');
-  const b = flat.indexOf('① 试玩日志');
-  assert(a >= 0 && b > a, '「绝对路径」那一块没渲染出来（或它没排在 ① 试玩日志 之前）');
+  const b = flat.indexOf('④ 工程与控件树');
+  assert(a >= 0 && b > a, '「绝对路径」那一块没渲染出来（或它没排在 ④ 工程卡 之前）');
   const block = flat.slice(a, b);
   const stars = block.match(/\*\*[^*]{1,40}\*\*/g);
   assert(!stars, '新入口文案里有 Markdown 记号（会原样显示）：' + (stars || []).join(' | '));
   const ticks = block.match(/`[^`\n]{1,40}`/g) || [];
   assert(ticks.length === 0, '新入口文案里有反引号（会原样显示）：' + ticks.join(' | '));
 
-  // ⑧ 位置（作者原话「放做在左边最顶上」）：它必须排在 ① 试玩日志 之前，旧卡片名也不许回来
+  // ⑧ 位置（作者原话「放做在左边最顶上」）：左列现在只剩两张卡（这张 + ④ 工程折叠），它必须在前
   assert(flat.indexOf('读本地 .lua（绝对路径）') >= 0
-    && flat.indexOf('读本地 .lua（绝对路径）') < flat.indexOf('① 试玩日志'),
+    && flat.indexOf('读本地 .lua（绝对路径）') < flat.indexOf('④ 工程与控件树'),
   '「读本地 .lua（绝对路径）」没排在左列最上面');
   assert(!/① 画面与日志/.test(flat) && !/② 试玩操作（高级/.test(flat), '旧的卡片名/结构又回来了');
 
@@ -1196,8 +1391,9 @@ check('★ 反向绊线：模拟器面板里**不再有**取图/连帧入口（�
       assert(!t.includes(nope), '面板里又出现了取图入口：' + nope);
     }
   }
-  // 但必须写清「画面去哪里看」（不能让人以为功能没了）——左列 ② 那句指向右列试玩页
-  assert(/画面[^）]{0,30}试玩页/.test(simText), '没告诉人"画面去右边那个试玩页看"');
+  // 但必须写清「画面去哪里看」（不能让人以为功能没了）。
+  // ⚠️ 2026-10-01：原来这句在左列 ②「试玩操作」里，那张卡按作者要求隐藏了 ⇒ 现在靠**试玩页自己的标题那行**说清。
+  assert(/画面就在这里/.test(simText) || /画面[^）]{0,30}试玩页/.test(simText), '没告诉人"画面就在右边那个试玩页里"');
   assert(/新窗口/.test(simText), '没说「新窗口 ↗」可以放大看');
   return '编辑器画面 / 刷新画面 / 连帧 / 还没有画面 都不在面板里；且写清了画面去右列试玩页看';
 });
@@ -1358,7 +1554,7 @@ check('★ 渲染：第六页「网格计算」能真渲染（参数 + 结论放
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'grid' })));
   const text = html.replace(/<[^>]+>/g, ' ');
-  for (const label of ['画布宽 width', '画布高 height', 'X 步长 stepX', 'Y 步长 stepY', '结论', '复制结论', '恢复默认', '网格图（点一下选中/取消这一格）', '选中的格（0）']) {
+  for (const label of ['画布宽 width', '画布高 height', 'X 步长 stepX', 'Y 步长 stepY', '结论', '复制结论', '恢复默认', '网格图（左键点选', '选中的格（0）']) {
     assert(text.includes(label), '网格页缺内容：' + label);
   }
   // ★ 作者 2026-10-01 要求**隐掉**的三样：速查表 / 像素 → 格 / 格 → 像素
@@ -1738,37 +1934,56 @@ check('★ 多选列表与复制按钮（渲染层）：三行 + 四角下拉（
   return '2 行 + 四角下拉（默认右下 / 切换生效）+ 复制·移除·复制全部·清空 + 选中标签亮粉';
 });
 
-check('★ 网格图**单独滚轮缩放**：原生非 passive 监听 + 只缩图 + 夹取 + 读数 / 复位', () => {
+check('★ 网格图缩放：**Ctrl+滚轮**才缩放（普通滚轮只滚动）+ 原生非 passive + 夹取 0.5~8 + 读数 / 复位', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
   // ① 必须用原生 addEventListener + passive:false（React 的 onWheel 是 passive，preventDefault 不生效）
   assert(/addEventListener\('wheel', onWheel, \{ passive: false \}\)/.test(src),
     '滚轮没走原生非 passive 监听 ⇒ 面板会跟着一起滚');
   assert(!/onWheel:/.test(src), '还挂着 React 的 onWheel（passive，preventDefault 无效）');
   assert(/el\.removeEventListener\('wheel', onWheel\)/.test(src), '滚轮监听没有清理（重挂会叠加）');
+  // ①b ★ 普通滚轮**不缩放**（作者 2026-10-01：「这个滚轮咋把网格图也搞小了」—— 滚轮陷阱）
+  //     只有 Ctrl/⌘ 按住才缩放；不按住就直接 return（**不 preventDefault**，交给浏览器滚）
+  assert(/if \(!e\.ctrlKey && !e\.metaKey\) return;/.test(src),
+    '普通滚轮还会缩放 ⇒ 想滚面板时光标停图上就把图缩了（滚轮陷阱）');
+  const wheelBody = src.slice(src.indexOf('var onWheel = function (e) {'), src.indexOf("el.addEventListener('wheel', onWheel"));
+  assert(wheelBody.indexOf('if (!e.ctrlKey && !e.metaKey) return;') < wheelBody.indexOf('e.preventDefault();'),
+    'Ctrl 判断必须在 preventDefault 之前（否则普通滚轮也被吃掉）');
   // ② 缩放范围夹取 + 步进（垃圾值 ⇒ 回 100%，不是夹到最小 —— 存的数坏了就该当没存过）
   const C = clientExports.__testGridZoomClamp;
   assert(typeof C === 'function', '缺 gridZoomClamp');
-  assert(C(1.12) === 1.12 && C(0.01) === 0.25 && C(99) === 8, '夹取不对：' + [C(1.12), C(0.01), C(99)].join(' / '));
+  assert(C(1.12) === 1.12 && C(0.01) === 0.5 && C(99) === 8, '夹取不对：' + [C(1.12), C(0.01), C(99)].join(' / '));
+  assert(C(0.29) === 0.5, '老版本存下的 29% 没被收进新范围（一打开就是一条小带）：' + C(0.29));
   assert(C('abc') === 1 && C(-3) === 1 && C(0) === 1, '非法输入没兜成 100%：' + [C('abc'), C(-3), C(0)].join(' / '));
+  // ②b 读缓存时也要过夹取（否则老值直接进 state）
+  assert(/return gridZoomClamp\(init\.zoom != null \? init\.zoom : saved\.zoom\)/.test(src),
+    '读取缓存的 zoom 没夹取（老的 29% 会原样进来）');
   // ③ 只缩图：svg 的宽度走 inline（zoom%），盒子自己滚
   assert(/className: PLUGIN \+ '-gridsvg'/.test(src) && /style: \{ width: \(Math\.round\(zoom \* 10000\) \/ 100\) \+ '%' \}/.test(src),
     '缩放没有落到网格图自己的宽度上');
   const css = styleNodes[0].textContent;
   assert(/dsh-miliastra-gridbox\{[^}]*overflow:auto/.test(css), '网格图没有独立滚动盒子（放大后没法平移）');
   assert(/dsh-miliastra-gridbox\{[^}]*max-height:min\(420px,52vh\)/.test(css), '滚动盒子没有高度上限（放大后会把面板撑长）');
-  // ④ 渲染层：默认 100% 读数 + 点一下回 100%（读数是按钮，面板里看得见）
+  // ④ 渲染层：默认 100% 读数 + 点一下回 100%（读数是按钮，面板里看得见）+ 标题里写明 Ctrl
   const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
-  assert(/缩放 100%/.test(html.replace(/<[^>]+>/g, ' ')), '没有缩放读数');
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(/缩放 100%/.test(text), '没有缩放读数');
   assert(/dsh-miliastra-gridbox/.test(html), '网格图没包在滚动盒子里');
+  assert(/Ctrl\+滚轮缩放/.test(text), '标题里没写清"Ctrl+滚轮缩放"（人会以为是直接滚轮）');
+  assert(/按住 Ctrl（Mac：⌘）在图滚滚轮 = 缩放/.test(html), '缩放按钮的提示没写清 Ctrl');
   // 注入 200% ⇒ 读数与宽度都跟着变（说明它真的把这个值用在图上了）
   const zoomed = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
     Object.assign({}, base, { __gridInit: { zoom: 2 } })));
   assert(/缩放 200%/.test(zoomed.replace(/<[^>]+>/g, ' ')), '缩放读数没跟着 zoom 走');
   assert(/style="width:200%"/.test(zoomed), '网格图宽度没跟着 zoom 走：' + (zoomed.match(/width:\d+%/) || []));
+  // ④b 注入老值 29% ⇒ 渲染出来是 50%（下限），不是 29%
+  const stale = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { zoom: 0.29 } })));
+  assert(/缩放 50%/.test(stale.replace(/<[^>]+>/g, ' ')), '老的 29% 没被抬到下限 50%：'
+    + (stale.replace(/<[^>]+>/g, ' ').match(/缩放 \d+%/) || []));
   // ⑤ 缩放与四角都记住
   assert(/anchor: anchor, zoom: zoom/.test(src), '缩放 / 四角没有进缓存快照');
-  return '非 passive 滚轮 + 夹取 0.25~8 + 只缩图（滚动盒子）+ 读数与复位 + 都进缓存';
+  return 'Ctrl+滚轮才缩放（普通滚轮不缩放）+ 夹取 0.5~8（含老值收编）+ 只缩图 + 读数与复位 + 都进缓存';
 });
 
 check('★ 面板：常驻（点外面不关）+ 尺寸回到 880×600 + 开合/常驻都记住', () => {

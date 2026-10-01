@@ -141,13 +141,21 @@
     <span id="cvSize">画布 —</span>
     <span class="sp" style="flex:1"></span>
     <span id="diag" title="窗口 / main / 舞台 三个高度：哪一个明显小，问题就在那一层">—</span>
+    <span id="sess" title="这一页对着哪一份模拟器工程：默认会话 = 与模拟器页/AI 共用；别的名字 = 独立工程（预制效果页用 presets）">__PLAY_SESSION_TEXT__</span>
     <span id="stamp" title="试玩页版本戳（大小-mtime）；跟磁盘上的 play.html 对不上就是面板里那份是旧的，点「重载页面」">v__PLAY_STAMP__</span>
   </footer>
 
+<script>window.__MILIASTRA_SESSION__ = __PLAY_SESSION__;</script>
 <script type="module">
   import { PixiPlayRenderer, createPlaySession } from '/miliastra/play-renderer.js'
 
   const API = '/miliastra/engine'
+  /*
+   * ★ 这一页对着**哪一份工程**（2026-10-01）：Host 在响应里盖进去（`?session=<名>`）。
+   *   空 = 默认会话（与模拟器页、与 AI 的工具共用）；`presets` = 预制效果页那份**独立**工程。
+   *   每次请求都带着它 ⇒ 页面看的、投的、玩的都是同一份。
+   */
+  const SESSION = String(window.__MILIASTRA_SESSION__ || '')
   const $ = (id) => document.getElementById(id)
   const el = { main: $('main'), stage: $('stage'), stageWrap: $('stageWrap'), cv: $('cv'), side: $('side') }
   /** 画布 id → 人话标签（只用于只读展示；引擎的权威清单在 `state.canvas.presets`）。 */
@@ -212,7 +220,10 @@
         const res = await fetch(API, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ op: 'play', action, args: { view: true, ...args }, summaryOnly: false }),
+          body: JSON.stringify({
+            op: 'play', action, args: { view: true, ...args }, summaryOnly: false,
+            ...(SESSION ? { __session: SESSION } : {}),
+          }),
         })
         const env = await res.json().catch(() => null)
         if (!res.ok || !env || env.ok === false) throw new Error((env && env.error) || '试玩请求失败')
