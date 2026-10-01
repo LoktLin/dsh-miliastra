@@ -2060,21 +2060,25 @@ check('★ tab 条：七等分，第七档是「节点图」', () => {
   return '7 档 + repeat(7) + 预设 + 取点不翻转';
 });
 
-check('★ 第七页「节点图」：左栏选择器 + 右栏数据区（作者：选择后数据都放右边，为未来预留扩展）', () => {
+check('★ 第七页「节点图」：左侧手风琴（就地展开、一次开一个）+ 右侧只放"再下一层"', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'nodes' })));
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
-  // 左栏 = 选择器（五块），右栏 = 数据区
-  assert(/选一块（右栏看它的数据）/.test(text), '缺左栏选择器标题');
+  assert(/点标题展开，一次开一个/.test(text), '缺第七页标题（含"一次开一个"说明）');
   for (const b of ['节点图', '实体', '元件', '节点声明', '配置条目 / 阵营 / 资源分类']) {
-    assert(text.includes(b), '左栏缺这一块：' + b);
+    assert(text.includes(b), '缺分组标题：' + b);
   }
-  assert(/^|数据 · 节点图|数据 · /.test(text) || /数据 · 节点图/.test(text), '右栏缺「数据 · <当前块>」标题');
   assert(/重新读一次/.test(text), '缺「重新读一次」');
-  // 默认选中第一块（节点图），且右栏是固定高度 + 内部滚动（不再靠整页滚动）
-  assert(/React\.useState\('graphs'\)/.test(src), '默认选中不是第一个区块');
-  assert(/maxHeight: '58vh', overflowY: 'auto'/.test(src), '右栏不是固定高度 + 内部滚动（"预留扩展"的数据区）');
+  assert(/全部收起/.test(text), '缺「全部收起」');
+  // 默认全收起：只出现 ▸，不该出现 ▾
+  assert(text.includes('▸'), '分组默认收起时应有 ▸ 指示');
+  assert(!/▾/.test(text), '默认应当是**收起**（不该出现 ▾）');
+  // ★ 手风琴：点标题就地展开（同一栏），一次只开一个 —— 这就是作者要的"少一层级"
+  assert(/setSel\(sel === key \? '' : key\)/.test(src), '不是手风琴（没有"开一个就收另一个"的语义）');
+  assert(/open \? React\.createElement\('div', \{\s*style: \{ maxHeight: '42vh'/.test(src), '展开的数据体没有就地渲染（或没做内部滚动）');
+  // 右侧只放"再下一层"（点实体看变量），不再是"左侧列表 → 右侧数据"
+  assert(/这一层放/.test(text) && /再往下钻/.test(text), '右侧没有说明它是"再下一层"');
   // 只读 + 走工具
   assert(/callTool\('miliastra_map', \{ op: 'nodes', kind: 'all' \}\)/.test(src), '面板没走 miliastra_map op=nodes kind=all');
   assert(/callTool\('miliastra_map', \{ op: 'nodes', entity: name \}\)/.test(src), '点实体没去读它的自定义变量');
@@ -2086,7 +2090,7 @@ check('★ 第七页「节点图」：左栏选择器 + 右栏数据区（作者
   assert(/粗略数字/.test(text), '页面没说明节点数/连线数是粗略数字');
   assert(/var labelOf = function/.test(src), '实体没有按标签分组的逻辑');
   assert(/kindLabelSource/.test(src), '实体行没写出处');
-  return '左选（5 块）+ 右数据（58vh 内滚）+ 只读 op=nodes';
+  return '手风琴（一次开一个、就地 42vh 内滚）+ 右侧下一层';
 });
 
 check('网格页文案：不许有 Markdown 记号（面板不渲染 Markdown），且复制正文自洽', () => {
