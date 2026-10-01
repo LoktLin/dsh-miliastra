@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { readGilNodeFacts } from '../lib/gilnodes.mjs';
-import { buildNodeReport, reportStats } from '../lib/gilreport.mjs';
+import { buildNodeReport, reportStats, statsFingerprint } from '../lib/gilreport.mjs';
 import { scanLevels, findLevel } from '../lib/locate.mjs';
 import { atomicWriteFile } from '../lib/fsx.mjs';
 
@@ -42,8 +42,12 @@ const numOf = (name) => {
 if (has('help') || argv.includes('-h')) {
   console.log('用法: node tools/gil-node-report.mjs --level <关卡ID> | --path <gil> [--out <文件>] [--account <账号>]');
   console.log('      --summary-only · --max-nodes-per-graph N · --max-graphs N · --dry-run · --quiet');
+  console.log('      --check：只核对"已有报告还准不准"（不写盘；数字变了就退出码 1 并让你重跑）');
   process.exit(0);
 }
+
+/** 行数（按"文件有几行"算：结尾那个换行不算新的一行 —— 别把 3805 报成 3806）。 */
+const lineCount = (s) => { const a = String(s).split('\n'); return a.length - (a[a.length - 1] === '' ? 1 : 0); };
 
 /** 定位 `.gil`：`--path` 优先；`--level` 走扫档（多个账号命中就报错不猜）。 */
 function resolveGil() {
@@ -92,6 +96,7 @@ if (!facts.ok) {
   process.exit(1);
 }
 const st = reportStats(facts);
+const fingerprint = statsFingerprint(st);
 const sha256 = crypto.createHash('sha256').update(fs.readFileSync(target.gilPath)).digest('hex');
 
 const outArg = argOf('out');
@@ -108,6 +113,7 @@ const md = buildNodeReport(facts, {
   sha256,
   generatedAt: new Date().toISOString(),
   command,
+  fingerprint,
   summaryOnly: has('summary-only'),
   maxNodesPerGraph: numOf('max-nodes-per-graph'),
   maxGraphs: numOf('max-graphs'),
@@ -120,19 +126,62 @@ if (!has('quiet')) {
   console.log('大小 / sha  : ' + facts.size + ' B　' + sha256.slice(0, 16) + '…');
   console.log('读数        : 图 ' + st.graphCount + ' 张（能取到节点列表 ' + st.graphWithNodes + '）· 节点 ' + st.nodeCount
     + ' 个 · 出边 ' + st.edgeCount + ' 条 · 官方名命中 ' + st.namedCount + '/' + st.nodeCount
-    + ' · 带坐标 ' + st.xyCount + ' · 引脚实例 ' + st.pinCount);
+    + ' · 坐标(x,y 都有) ' + st.xyBoth + '（任一有 ' + st.xyAny + '）· 引脚实例 ' + st.pinCount);
   console.log('实体/变量   : ' + st.entityCount + ' / ' + st.totalVariables + '　元件 ' + st.componentCount
     + '　节点声明 ' + st.declarationCount + '（复合 ' + st.compositeCount + '）　配置条目 ' + st.configCount
     + '　信号引用 ' + st.signalRefCount);
+  console.log('数据指纹    : ' + fingerprint.slice(0, 16) + '…（--check 拿它判"该不该重跑"）');
+  if (st.xyOnlyX || st.xyOnlyY) {
+    console.log('坐标单边    : 只存了 x 的 ' + st.xyOnlyX + ' 个 · 只存了 y 的 ' + st.xyOnlyY
+      + ' 个（`.gil` 里就只有那一个字段 ⇒ 数据事实，不是漏读）');
+  }
   if (st.duplicateGraphNames.length) {
     console.log('⚠️ 同名图    : ' + st.duplicateGraphNames.join(' / ')
       + ' —— 读取层按图名做键，报告里这两条会指向同一份节点列表（`.gil` 里它们是两条图记录）');
   }
 }
 
+/*
+ * `--check`：**只判"该不该重跑"，不写盘**（复核 2026-10-01 第 6 节那条建议的落地）。
+ * 判据不是"文件动过没有"，而是**"现在重跑一遍，数字还一样吗"** ⇒ 比 `.gil` 的 sha 更严：
+ * 读取层改了（哪怕 `.gil` 一个字节没变）只要数字变了，这里就会报"该重跑"。
+ */
+if (has('check')) {
+  if (!outArg) {
+    console.error('✗ --check 要配合 --out <已有报告> 用（否则不知道该核对哪一份）');
+    process.exit(1);
+  }
+  const p = path.resolve(outArg);
+  if (!fs.existsSync(p)) {
+    console.error('✗ --check：报告不存在：' + p + '（那就直接跑一次生成，别传 --check）');
+    process.exit(1);
+  }
+  const old = fs.readFileSync(p, 'utf8');
+  const m = /数据指纹：`([0-9a-f]{64})`/.exec(old);
+  const oldLevel = (/^# 节点图报告 · 关卡 ([^\s]+)/m.exec(old) || [])[1] || null;
+  if (!m) {
+    console.error('✗ --check：这份报告里**没有数据指纹**（是旧版工具生成的）⇒ 建议重跑一次');
+    console.error('  报告：' + p);
+    process.exit(1);
+  }
+  const same = m[1] === fingerprint && (!oldLevel || oldLevel === String(target.levelId));
+  if (same) {
+    console.log('\n✅ --check：报告**仍然有效**（同一份 .gil + 同一个读取层 ⇒ 数字一个没变）');
+    console.log('   报告：' + p + '　数据指纹 ' + fingerprint.slice(0, 16) + '…');
+    process.exit(0);
+  }
+  console.error('\n✗ --check：**该重跑了** —— 现在重跑算出来的数字与报告里那份不一致');
+  console.error('   报告里的指纹：' + m[1].slice(0, 16) + '…'
+    + (oldLevel && oldLevel !== String(target.levelId) ? '（报告是关卡 ' + oldLevel + ' 的）' : ''));
+  console.error('   现在的指纹  ：' + fingerprint.slice(0, 16) + '…（关卡 ' + target.levelId + '）');
+  console.error('   重跑：' + command);
+  process.exit(1);
+}
+
 if (has('dry-run') || !outArg) {
-  console.log(has('dry-run') ? '\n（--dry-run：正文 ' + md.split('\n').length + ' 行 / '
-    + Buffer.byteLength(md) + ' 字节，**没有写盘**）' : '\n（没给 --out：只报统计，正文 ' + md.split('\n').length
+  const lines = lineCount(md);
+  console.log(has('dry-run') ? '\n（--dry-run：正文 ' + lines + ' 行 / '
+    + Buffer.byteLength(md) + ' 字节，**没有写盘**）' : '\n（没给 --out：只报统计，正文 ' + lines
     + ' 行 / ' + Buffer.byteLength(md) + ' 字节，**没有写盘**）');
   process.exit(0);
 }
@@ -146,5 +195,5 @@ try {
 }
 const head = [...fs.readFileSync(out).slice(0, 3)].map((b) => b.toString(16).padStart(2, '0')).join(' ');
 console.log('\n✅ 报告已写：' + out);
-console.log('   ' + md.split('\n').length + ' 行 / ' + Buffer.byteLength(md) + ' 字节　前 3 字节 ' + head
+console.log('   ' + lineCount(md) + ' 行 / ' + Buffer.byteLength(md) + ' 字节　前 3 字节 ' + head
   + (head === 'ef bb bf' ? '（⚠️ 带 UTF-8 BOM —— 不该发生，请上报）' : '（无 BOM ✅）'));

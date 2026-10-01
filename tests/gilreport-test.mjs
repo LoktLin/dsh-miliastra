@@ -16,8 +16,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readGilNodeFacts } from '../lib/gilnodes.mjs';
-import { buildNodeReport, reportStats, mdCell, nodeName, coordText } from '../lib/gilreport.mjs';
+import { buildNodeReport, reportStats, mdCell, nodeName, coordText, statsFingerprint } from '../lib/gilreport.mjs';
 import { nodeById } from '../lib/nodedb.mjs';
+import { scanLevels, pickCurrent } from '../lib/locate.mjs';
 
 let pass = 0;
 const failures = [];
@@ -110,18 +111,48 @@ check('① reportStats：图/节点/出边/命中/坐标/引脚 一次算对（�
   eq(st.edgeCount, 3, '出边数（1 + 2）');
   eq(st.namedCount, 3, '官方名字命中数（75 / 13 / 75）');
   eq(st.unnamedCount, 2, '未命中数');
-  eq(st.xyCount, 5, '带坐标数');
+  eq(st.xyCount, 5, '带坐标数（主口径 = x、y 都有）');
+  eq(st.xyBoth, 5, 'x、y 都有');
+  eq(st.xyAny, 5, '任一有');
+  eq(st.xyOnlyX + st.xyOnlyY, 0, '单边坐标');
+  // ★ 复核 2026-10-01 第 3.2 条：`uniqueNodeIds` 是**全部**唯一号（4 种：75/13/999999/424242），
+  //   不是"未命中的种数"（那是 2 种）—— 报告文案必须把两个数都写出来，别让人读成 4。
+  eq(st.uniqueNodeIds, 4, '唯一号（全部）');
+  eq(st.hitUniqueIds, 2, '命中的唯一号');
+  eq(st.missUniqueIds, 2, '未收录的唯一号');
   eq(st.pinCount, 2, '引脚实例数');
   eq(st.nodesWithPins, 2, '有引脚的节点数');
   eq(st.duplicateGraphNames, [], '同名图');
   eq(st.declarationCount, 1, '节点声明数');
-  return '3 图 / 5 节点 / 3 出边 / 命中 3 / 坐标 5 / 引脚 2';
+  return '3 图 / 5 节点 / 3 出边 / 命中 3 / 坐标 5 / 唯一号 4(=2 命中 + 2 未收录) / 引脚 2';
+});
+
+/* ---------- ①b 复核第 3.1 条：坐标两个口径 + 单边坐标点名 ---------- */
+check('①b 只存一个坐标的节点：两个口径都报，并点名是哪个节点（数据事实，不是漏读）', () => {
+  const one = {
+    graphs: [{ name: '甲图', id: 1, typeCode: 20000, typeLabel: '关卡实体图', kindCode: 21001, hasBody: true }],
+    graphNodeLists: { 甲图: [
+      { index: 1, docId: 3, doc: { zh: '多分支', system: 'Server', domain: 'Control', pins: 3 }, x: -123, y: null, pinCount: 1, pins: [], outEdges: [] },
+      { index: 2, docId: 1, doc: { zh: '打印字符串', system: 'Server', domain: 'Debug', pins: 2 }, x: 5, y: 6, pinCount: 0, pins: [], outEdges: [] },
+    ] },
+    unverified: [],
+  };
+  const st = reportStats(one);
+  eq([st.xyBoth, st.xyAny, st.xyOnlyX, st.xyOnlyY], [1, 2, 1, 0], '坐标三口径');
+  const t = buildNodeReport(one, { levelId: '1' });
+  assert(t.includes('**x、y 都有** 1 / 2；任一有 2'), '总览没写两个口径：' + (t.split('\n').find((l) => l.includes('节点带坐标')) || ''));
+  assert(/只存了 x：图「甲图」#1　多分支（x = -123）/.test(t), '没有点名那个只存 x 的节点');
+  assert(/读取层只认字段 `#5`\(x\)\/`#6`\(y\) 的 float32/.test(t), '没写明"只有 #5 就是数据事实"（会被当成漏读）');
+  // 两个口径都在附录 C 里讲清
+  assert(/坐标两个口径/.test(t), '附录 C 没写坐标口径');
+  return '都有 1 / 任一 2 + 点名 多分支 x=-123 + 口径写进附录 C';
 });
 
 /* ---------- ② 正文：该有的节都在，数字与事实一一对应 ---------- */
 const md = buildNodeReport(facts, {
   levelId: LEVEL, gilPath, sha256: gilShaBefore, generatedAt: '2026-01-01T00:00:00.000Z',
   command: 'node tools/gil-node-report.mjs --level ' + LEVEL,
+  fingerprint: statsFingerprint(reportStats(facts)),
 });
 check('② 正文骨架：标题 / 总览表 / 按类型 / 图一览 / 逐图明细 / 三个附录', () => {
   for (const s of ['# 节点图报告 · 关卡 ' + LEVEL, '## 0. 一页总览', '## 1. 按图类型分组', '## 2. 图一览',
@@ -131,16 +162,20 @@ check('② 正文骨架：标题 / 总览表 / 按类型 / 图一览 / 逐图明
   assert(md.includes(gilShaBefore.slice(0, 16) + '…'), '没写来源 sha');
   assert(md.includes('2026-01-01T00:00:00.000Z'), '没写生成时间');
   assert(md.includes('node tools/gil-node-report.mjs --level ' + LEVEL), '没写复现命令');
-  return '8 个节 + sha + 时间 + 复现命令';
+  assert(new RegExp('数据指纹：`' + statsFingerprint(reportStats(facts)) + '`').test(md), '没写数据指纹（--check 要靠它）');
+  return '8 个节 + sha + 时间 + 复现命令 + 数据指纹';
 });
 
 check('③ 总览的数字与 reportStats 完全一致（不许两处各算一份）', () => {
   const st = reportStats(facts);
   assert(md.includes('| 节点 | ' + st.nodeCount + ' 个 |'), '总览的节点数不对');
   assert(md.includes('| 出边（连线） | ' + st.edgeCount + ' 条 |'), '总览的出边数不对');
-  assert(md.includes('| 节点带坐标 | ' + st.xyCount + ' / ' + st.nodeCount + ' |'), '总览的坐标数不对');
+  assert(md.includes('| 节点带坐标 | **x、y 都有** ' + st.xyBoth + ' / ' + st.nodeCount + '；任一有 ' + st.xyAny), '总览的坐标口径不对');
   assert(md.includes('官方名字命中词典 | ' + st.namedCount + ' / ' + st.nodeCount), '总览的命中文案不对');
-  return '总览 = reportStats';
+  // ★ 复核第 3.2 条：三个数都要在场，且**未收录**那个数必须写成 missUniqueIds（不是 uniqueNodeIds）
+  assert(/\*\*词典未收录\*\* 2 个，涉及 2 种号；本关节点用到的唯一号共 4 种 = 命中 2 \+ 未收录 2/.test(md),
+    '总览的"未收录种数"文案不对（会让人把 4 读成未收录）：' + (md.split('\n').find((l) => l.includes('命中词典')) || ''));
+  return '总览 = reportStats（含"唯一号 4 = 命中 2 + 未收录 2"）';
 });
 
 check('④ 逐图明细：图名锚点 + 节点表（官方名字/坐标/引脚/出边）+ 连线表（谁连谁）', () => {
@@ -185,7 +220,22 @@ check('⑥ 未确证清单**原样搬**（不改写、不省略），且正文�
   assert(!/✅|❌/.test(md), '报告里出现了对勾/叉（那是判决，不是事实）');
   assert(!/\bpass\b|\bverdict\b|\breachable\b/i.test(md), '报告里出现了判决词');
   assert(md.includes('不下"对不对 / 通不通"的判决'), '没写明"只报数字不下判决"');
-  return un.length + ' 条未确证原样搬入 + 零判决词';
+  return un.length + '条未确证原样搬入 + 零判决词';
+});
+
+/* ---------- ⑥b 复核第 4.1 / 4.2 条：附录 A 表头与表格**不许自相矛盾** ---------- */
+check('⑥b 附录 A：表头如实描述表格里的字面（原来自相矛盾）+ 写明词典自己缺号', () => {
+  const apx = md.slice(md.indexOf('## 附录 A'), md.indexOf('## 附录 B'));
+  // 表里印的是读取层的兜底文案「未知节点 <号>」⇒ 表头必须解释这一句，而不是承诺另一个词
+  assert(/未知节点 `?<?号?>?`?/.test(apx) || apx.includes('未知节点 `<号>`'), '表头没解释表格里的「未知节点 <号>」');
+  assert(apx.includes('不是**"这个节点不存在"**') || apx.includes('不是'), '没说明"未知节点 ≠ 节点不存在"');
+  assert(!/命不中一律写「词典未收录」/.test(apx), '表头还留着"一律写词典未收录"那句自相矛盾的话');
+  // 表格里的实际写法也要对得上（合成样本里 999999 / 424242 都没收录）
+  assert(apx.includes('未知节点 999999') || apx.includes('未知节点 424242'), '附录 A 表里没印兜底文案');
+  // 上游缺号（4）这件事要写出来，省掉下次一轮排查
+  assert(/跳过 4|缺号/.test(apx), '没写明词典自己也有缺号（上游 runtimeId 跳过 4）');
+  assert(nodeById(4) === null && nodeById(3), '词典形状变了？nodeById(4) 应当为 null、nodeById(3) 有名字');
+  return '表头 = 表格字面 + 「未知节点 ≠ 节点不存在」+ 上游缺号说明';
 });
 
 check('⑦ 小工具：nodeName / coordText / mdCell 的边界（null、NaN、超长）', () => {
@@ -217,11 +267,82 @@ check('⑧ CLI（--path）：写出报告、**地图一个字节都没变**、�
   assert(buf.toString('utf8').startsWith('# 节点图报告 · 关卡 ' + LEVEL), '报告开头不对');
   eq(shaOf(gilPath), gilShaBefore, '⚠️ 读报告把地图改了 —— 这是最严重的一类错');
   assert(/节点 5 个 · 出边 3 条/.test(r.stdout), '打印的读数不对：' + r.stdout.split('\n')[4]);
-  return Buffer.byteLength(buf) + ' 字节；地图 sha 不变';
+  // 行数不许把结尾那个换行数成一行（复核时发现：3805 行的文件被印成 3806）
+  const txt = buf.toString('utf8');
+  const real = txt.split('\n').filter((l, i, a) => !(i === a.length - 1 && l === '')).length;
+  assert(new RegExp('\\b' + real + ' 行 /').test(r.stdout), '打印的行数与文件实际行数不一致（实际 ' + real + '）：'
+    + (r.stdout.split('\n').pop() || ''));
+  return Buffer.byteLength(buf) + ' 字节；地图 sha 不变；行数 ' + real + ' 如实';
 });
 
-check('⑨ CLI：--dry-run 不落盘；--summary-only 没有明细而且**明说**没有', () => {
-  const out = path.join(tmp, 'report-dry.md');
+/* ---------- ⑧b 复核第 6 条：`--check` ——"改了读取层/换了图，报告过期没有" ---------- */
+check('⑧b CLI：`--check` 判"该不该重跑"（数字没变 ⇒ 仍然有效；数字变了 ⇒ 退出码 1）', () => {
+  const out = path.join(tmp, 'report-chk.md');
+  const gen = cli(['--path', gilPath, '--out', out]);
+  assert(gen.status === 0, '先生成一份失败：' + gen.stderr);
+  const fresh = cli(['--path', gilPath, '--out', out, '--check']);
+  assert(fresh.status === 0, '--check 对刚生成的报告却报"该重跑"：' + fresh.stdout + fresh.stderr);
+  assert(/仍然有效/.test(fresh.stdout), '--check 没说清结论：' + fresh.stdout);
+  // ① 数字变了（换一份 .gil） ⇒ 必须报"该重跑"
+  const otherPath = path.join(tmp, LEVEL + '-other', '1073741998.gil');
+  fs.mkdirSync(path.dirname(otherPath), { recursive: true });
+  fs.copyFileSync(gilPath, otherPath);   // 副本换个文件名 ⇒ levelId 随之变（1073741998）
+  const stale = cli(['--path', otherPath, '--out', out, '--check']);
+  assert(stale.status === 1, '换了图 --check 却没报过期（退出码 ' + stale.status + '）');
+  assert(/该重跑了/.test(stale.stderr) && /1073741998/.test(stale.stderr), '过期提示没说清新旧关卡：' + stale.stderr);
+  // ② 旧版报告（没有数据指纹） ⇒ 明确说"没有指纹，建议重跑"，不假装有效
+  const legacy = path.join(tmp, 'report-legacy.md');
+  fs.writeFileSync(legacy, '# 节点图报告 · 关卡 ' + LEVEL + '\n\n（旧版工具生成的，没有数据指纹）\n');
+  const r3 = cli(['--path', gilPath, '--out', legacy, '--check']);
+  assert(r3.status === 1 && /没有数据指纹/.test(r3.stderr), '旧版报告没有明确提示：' + r3.stderr);
+  // ③ 没给 --out / 报告不存在 ⇒ 明确报错，别静默通过
+  const r4 = cli(['--path', gilPath, '--check']);
+  assert(r4.status === 1 && /--check 要配合 --out/.test(r4.stderr), '缺 --out 没报错：' + r4.stderr);
+  const r5 = cli(['--path', gilPath, '--out', path.join(tmp, 'nope.md'), '--check']);
+  assert(r5.status === 1 && /报告不存在/.test(r5.stderr), '报告不存在没报错：' + r5.stderr);
+  return '有效 ⇒ 0；换图 ⇒ 1（点名新旧关卡）；无指纹 ⇒ 1；缺 --out/文件 ⇒ 1';
+});
+
+/* ---------- ⑧c 复核第 6 条的"对账"版：真 `.gil` 上**逐行**核（复核者说他没有核第 3 节） ---------- */
+check('⑧c 真 `.gil`（有就核，没有就跳过）：逐图摘要 + 节点表行数 + 连线表行数 + 端点索引 全对得上', () => {
+  const all = scanLevels().filter((l) => l.gil && l.gil.path);
+  if (!all.length) return '环境里没有 .gil ⇒ 如实跳过（不伪装通过）';
+  const lv = all.find((l) => l.levelId === ((pickCurrent(all) || {}).levelId)) || all[0];
+  const f = readGilNodeFacts(lv.gil.path, {});
+  const lines = buildNodeReport(f, { levelId: lv.levelId }).split('\n');
+  const starts = [];
+  lines.forEach((l, i) => { if (l.startsWith('### 图 ')) starts.push(i); });
+  const apx = lines.findIndex((l) => l.startsWith('## 附录 A'));
+  if (apx > 0) starts.push(apx);
+  const countRows = (block, h) => { let i = h + 2; let n = 0; while (i < block.length && block[i].startsWith('| ')) { n += 1; i += 1; } return n; };
+  let graphs = 0; let nodeRows = 0; let edgeRows = 0;
+  const bad = [];
+  for (let s = 0; s + 1 < starts.length; s += 1) {
+    const block = lines.slice(starts[s], starts[s + 1]);
+    const name = block[0].replace(/^### 图 \d+：/, '').trim();
+    const list = f.graphNodeLists[name] || [];
+    const eReal = list.reduce((a, n) => a + (n.outEdges || []).length, 0);
+    const head = block.findIndex((l) => l.startsWith('| # | 节点（官方名字）'));
+    const eHead = block.findIndex((l) => l.startsWith('| 从 | → 到 |'));
+    if (list.length) {
+      if (head < 0) bad.push(name + ' 缺节点表');
+      else { const n = countRows(block, head); nodeRows += n; if (n !== list.length) bad.push(name + ' 节点表 ' + n + ' ≠ ' + list.length); }
+    }
+    if (eReal) {
+      if (eHead < 0) bad.push(name + ' 有出边却缺连线表');
+      else { const n = countRows(block, eHead); edgeRows += n; if (n !== eReal) bad.push(name + ' 连线表 ' + n + ' ≠ ' + eReal); }
+    }
+    const orphan = block.filter((l) => l.startsWith('| #') && l.includes('不在本图节点表里'));
+    if (orphan.length) bad.push(name + ' 连线表里有 ' + orphan.length + ' 个目标索引不在本图');
+    graphs += 1;
+  }
+  assert(graphs > 0, '一份图都没切出来（标题锚点变了？）');
+  assert(nodeRows > 0 && edgeRows > 0, '切出来的表是空的（节点 ' + nodeRows + ' 行 / 连线 ' + edgeRows + ' 行）');
+  assert(!bad.length, '逐行对账不一致：' + bad.slice(0, 5).join(' ｜ '));
+  return lv.levelId + '：' + graphs + ' 图 / ' + nodeRows + ' 行节点表 / ' + edgeRows + ' 行连线表 —— 逐行一致';
+});
+
+check('⑨ CLI：--dry-run 不落盘；--summary-only 没有明细而且**明说**没有', () => {  const out = path.join(tmp, 'report-dry.md');
   const r1 = cli(['--path', gilPath, '--out', out, '--dry-run']);
   assert(r1.status === 0, 'dry-run 退出码 ' + r1.status);
   assert(!fs.existsSync(out), '--dry-run 竟然写了文件');
