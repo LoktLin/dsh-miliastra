@@ -2140,7 +2140,7 @@ const TOOLS = [
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡。' },
         file: { type: 'string', description: 'op=script：用哪个活文件比对（一个关卡可能有多个 .lua；省略=自动选；给了名字但不存在会报错并列出全部）。' },
         kind: { type: 'string', enum: ['graphs', 'entities', 'components', 'decls', 'defs', 'all'], description: 'op=nodes 看哪一块：默认 graphs（节点图）；entities=实体（含量与种类号）；components=元件；decls=节点声明表（自定义节点）；defs=配置条目（职业/成长曲线/连段/状态）+ 阵营 + 资源分类树；all=全给。' },
-        graph: { type: 'string', description: 'op=nodes：只看名字含这个子串的**节点图**（如 `关卡实体信号`）；不给就列全部。' },
+        graph: { type: 'string', description: 'op=nodes：只看名字含这个子串的**节点图**（如 `关卡实体信号`）；**点名时额外回该图的逐节点明细**（`nodes`：索引/引用/引脚 kind/坐标/官方名字）；不给就只列图。' },
         entity: { type: 'string', description: 'op=nodes：要哪个**实体的自定义变量**（名字子串，如 `关卡实体`）——给了才回逐条 `variables[]`。' },
         summaryOnly: {
           type: 'boolean',
@@ -2247,6 +2247,17 @@ const TOOLS = [
         if (wantGraphs) {
           out.graphs = detailed ? graphs : undefined;
           if (!detailed) out.graphsOmitted = graphs.length;
+          // ★ 点名某张图时，把它的**节点明细**一起回（作者：「我想要每一个节点都能被点到，而不是总和」）
+          if (gq) {
+            const pick = Object.keys(facts.graphNodeLists || {}).filter(function (k) { return k.includes(gq); });
+            const nodeDetail = {};
+            for (const k of pick) nodeDetail[k] = facts.graphNodeLists[k];
+            out.nodes = nodeDetail;
+            out.nodeTotal = pick.reduce(function (s, k) { return s + nodeDetail[k].length; }, 0);
+            out.nodesNote = '每节点给：index / declaredIndex / shell·kernel 引用 / 引脚 kind 与引脚数 / 引用到的实体·图 / x·y 坐标 / '
+              + 'doc（拿 runtimeId 去官方节点词典查到的名字，查不到为 null）。'
+              + '⚠️ 引脚/连线的**语义未确证**（只回"引脚 kind 号 / 引脚数 / 引用了哪些 id"这类事实）。';
+          }
         }
         if (wantEnts) {
           out.entities = detailed ? entities : entities.map((e) => ({ name: e.name, id: e.id, kindCode: e.kindCode, kindEcho: e.kindEcho, componentCount: e.componentCount, variableCount: e.variableCount }));
