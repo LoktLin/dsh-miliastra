@@ -58,6 +58,7 @@ async function refusal(fn) {
 }
 
 const codeTool = TOOLS.find((t) => t.name === 'miliastra_code');
+const healthTool = TOOLS.find((t) => t.name === 'miliastra_health');
 const simTool = TOOLS.find((t) => t.name === 'miliastra_sim');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-read-src-'));
@@ -255,8 +256,36 @@ await check('★ 只读性（结构）：readLuaAt 里没有任何写操作（�
 await check('★ 只读性（回归）：op=deploy 的 source 语义没被改 —— 源文件不存在就是拒绝，不会被 read 路径接管', async () => {
   let out = null;
   let threw = null;
+  /*
+   * ⚠️ 2026-10-01 实测踩到：这条原来**不带 `level`**，于是 deploy 先去做「当前关卡」判定 ——
+   *   本机上同时有两个关卡"最近改动过"时会回 `LEVEL_AMBIGUOUS`（那是 2026-09-28 事故后有意加的闸），
+   *   它**发生在源文件检查之前** ⇒ 这条断言随机变红（同一天里先绿后红，环境一动手就翻）。
+   *   修法：先从 `health` 拿到**一个具体的关卡 ID** 显式传进去，让"关卡"这一维不再是变量 ——
+   *   这样测的才是我们要钉的那件事（deploy 的 `source` 有没有被 read 分支接管）。
+   */
+  let level = '';
+  let liveName = '';
   try {
-    out = await codeTool.execute({ op: 'deploy', source: path.join(tmp, '并不存在', '要投的.lua') });
+    // 全量 scan：要 `luaFiles` 的**数组**（带 name），简版里它可能只是个数字
+    const h = await healthTool.execute({ op: 'scan' });
+    const rows = Array.isArray(h.levels) ? h.levels : [];
+    const luaOf = (r) => (Array.isArray(r.luaFiles) ? r.luaFiles : []);
+    const withLua = rows.filter((r) => r && r.levelId
+      && luaOf(r).some((f) => f && f.name && /\.lua$/i.test(f.name)));
+    const pick = withLua.find((r) => h.current && r.levelId === h.current.levelId) || withLua[0];
+    if (pick) {
+      level = String(pick.levelId);
+      liveName = luaOf(pick).find((f) => f && f.name && /\.lua$/i.test(f.name)).name;
+    }
+  } catch (e) { /* 拿不到就退回老行为（下面按环境缺失/歧义如实跳过） */ }
+  try {
+    /*
+     * ⚠️ **文件名要用该关卡真实活文件的名字**：deploy 在源文件检查之前还有一道「文件名是不是本关的活文件」守卫，
+     *   随便编个名字会被那道拦住（实测踩到），那样测不到的正是我们要钉的东西。
+     */
+    const args = { op: 'deploy', source: path.join(tmp, '并不存在', liveName || '要投的.lua') };
+    if (level) args.level = level;
+    out = await codeTool.execute(args);
   } catch (e) {
     threw = e;
   }
@@ -264,6 +293,10 @@ await check('★ 只读性（回归）：op=deploy 的 source 语义没被改 �
     // 本机没有关卡 / 活文件时，deploy 走不到「源文件检查」那一步 —— 如实跳过，不放宽别的断言
     assert(/external_lua_file|没找到|关卡/.test(threw.message), '环境缺失时的报错也不对头：' + threw.message);
     return '本机没有可部署的活文件，跳过（' + String(threw.message).slice(0, 36) + '…）';
+  }
+  // 连 `level` 都定不下来（两个关卡都像"当前"）时**不是**这条要测的事 ⇒ 如实跳过并写明（不伪装通过）
+  if (/LEVEL_AMBIGUOUS/.test(String(out.code || ''))) {
+    return '本机"当前关卡"有歧义（' + String(out.code) + '），这条测不了 —— 跳过（不改判据）';
   }
   assert(out.ok === false, '不存在的源文件竟然部署成功了');
   assert(/源文件不存在/.test((out.errors || []).join(' ')), 'deploy 没把 source 当「要投进去的本地文件」：' + JSON.stringify(out).slice(0, 220));
