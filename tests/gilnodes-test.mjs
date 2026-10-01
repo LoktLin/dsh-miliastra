@@ -95,7 +95,9 @@ const gilPath = path.join(tmp, '1073741999.gil');
       msg(4, decl(1073741845, false, ['侦_名声', '数值'], ['由于负载消耗太高，基本没有实际意义；留着引以为戒。'])),
       msg(4, decl(1610612737, true, ['侦_浮点数', '名称', '数值'], []))),
     msg(15, msg(1, vint(1, 1094713345), msg(4, msg(11, str(1, '自定义成长曲线'), str(2, '关键字甲'))))),
-    msg(6, msg(1, vint(1, 800), msg(2, str(1, 'root'), vint(3, 1)), msg(3, str(1, '玩家模版'), vint(3, 2), msg(5, vint(1, 5400), vint(2, 1186988033))))),
+    msg(6,
+      msg(1, vint(1, 800), msg(2, str(1, 'root'), vint(3, 1)), msg(3, str(1, '玩家模版'), vint(3, 2), msg(5, vint(1, 1700), vint(2, 1086324737)))),
+      msg(1, vint(1, 56), msg(2, str(1, 'root'), vint(3, 1)), msg(3, str(1, '默认'), vint(3, 2), msg(5, vint(1, 5400), vint(2, 1186988033))))),
     msg(11, msg(2, str(1, '初始玩家阵营'), str(2, 'UI_MarkPlayer_Faction_0')), msg(3, str(1, '出生点1'))),
   ]);
   const head = Buffer.alloc(20);
@@ -207,11 +209,18 @@ check('②f 配置条目 / 阵营 / 资源树：名字与**能确证的关联**�
   assert(r.configs[0].keywords.includes('关键字甲'), '关键字没读到');
   eq(r.configLinked.length, 1, '关联条数');
   assert(/关卡实体/.test(r.configLinked[0]), '关联没指到实体：' + r.configLinked[0]);
-  eq(r.resourceCategories, ['玩家模版'], '资源分类');
-  eq(r.resourceTree[0].ref.id, 1186988033, '资源 id');
+  eq(r.resourceCategories, ['玩家模版', '默认'], '资源分类');
+  assert(r.resourceTree.some(function (e) { return e.ref && e.ref.id === 1186988033; }), '资源 id（默认→环境配置）没读到');
+  assert(r.resourceTree.some(function (e) { return e.ref && e.ref.id === 1086324737; }), '资源 id（玩家模版）没读到');
   eq(r.factions, ['初始玩家阵营', 'UI_MarkPlayer_Faction_0'], '阵营串');
   eq(r.spawns, ['出生点1'], '出生点');
   assert(r.unverified.some((s) => s.includes('字段语义')), '配置字段语义未确证没进 unverified');
+  // ★ 种类号标签：有出处（资源树分类名 = 玩家模版）才给名字，并在 kindLabelSource 写出处
+  eq(r.entityKindLabels['1086324737'], '玩家模版', '种类号标签');
+  const tpl = r.entities.find((x) => x.name === '默认模版');
+  assert(tpl && tpl.kindLabel === '玩家模版', '实体没带上种类号标签：' + JSON.stringify(tpl));
+  assert(/资源分类树/.test(tpl.kindLabelSource || ''), '出处没写清：' + tpl.kindLabelSource);
+  assert(r.unverified.some((s) => s.includes('还没出处') && s.includes('10003004')), '没出处的号没被点名：' + JSON.stringify(r.unverified));
   return r.configs[0].name + ' ↔ ' + r.configLinked[0] + '；分类 ' + r.resourceCategories.join('/');
 });
 

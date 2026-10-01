@@ -2066,12 +2066,16 @@ check('★ 第七页「节点图」（2026-10-01 作者要求：给 AI 用的插
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
   // 页面本体：标题 + 动作 + 两条空态（SSR 里工具调用是异步的 ⇒ 必然先是空态）
-  assert(/节点图（读本关 \.gil · 只读）/.test(text), '缺第七页标题');
+  assert(/节点图 \/ 实体 \/ 元件（读本关 \.gil · 只读 · 默认收起，点标题展开）/.test(text), '缺第七页标题（含默认收起说明）');
   assert(/重新读一次/.test(text), '缺「重新读一次」按钮');
-  assert(/实体的自定义变量/.test(text), '缺「实体的自定义变量」那一栏');
-  assert(/没读到实体|点上面任意一个实体/.test(text), '缺实体栏的空态说明');
-  assert(/种类号是原始号 · 语义未确证/.test(text), '缺实体表标题（要写明“种类号语义未确证”）');
-  assert(/元件/.test(text), '缺元件那一栏');
+  // ★ 2026-10-01 作者要求「界面做一下分组 默认收起」：六个分组标题必须在，且**默认收起**（▸ 而不是 ▾）
+  for (const g2 of ['节点图', '实体', '元件', '节点声明', '配置条目 / 阵营 / 资源分类']) {
+    assert(text.includes(g2), '缺分组标题：' + g2);
+  }
+  assert(/全部展开/.test(text), '缺「全部展开」按钮');
+  assert(text.includes('▸'), '分组默认收起时应有 ▸ 指示');
+  assert(!/▾/.test(text), '默认应当是**收起**（不该出现 ▾）');
+  assert(/默认收起/.test(src), '源码里没写"默认收起"（说明分组是默认展开的）');
   // 只读 + 走工具（AI 那份能力，面板只是窗口）
   assert(/callTool\('miliastra_map', \{ op: 'nodes', kind: 'all' \}\)/.test(src), '面板没走 miliastra_map op=nodes kind=all');
   assert(/callTool\('miliastra_map', \{ op: 'nodes', entity: name \}\)/.test(src), '点实体没去读它的自定义变量');
@@ -2082,7 +2086,10 @@ check('★ 第七页「节点图」（2026-10-01 作者要求：给 AI 用的插
   }
   // 口径必须写出来（**粗略数字**，不下判决）
   assert(/粗略数字/.test(text), '页面没说明节点数/连线数是粗略数字');
-  assert(/语义未逐个确证/.test(src), '源码里没留"语义未确证"的口径说明');
+  assert(/语义未逐个确证/.test(src), '源码里没留语义未确证的口径说明');
+  // 实体按「已确证标签」分组（没出处的按种类号归堆），并写出处
+  assert(/var labelOf = function/.test(src), '实体没有按标签分组的逻辑');
+  assert(/kindLabelSource/.test(src), '实体行没写出处');
   return '第 7 页 + 只读（op=nodes）+ 口径说明';
 });
 

@@ -2190,6 +2190,7 @@ const TOOLS = [
           entityCount: facts.entityCount,
           totalVariables: facts.totalVariables,
           entityKindCodes: facts.entityKindCodes,
+          entityKindLabels: facts.entityKindLabels,
           componentCount: facts.componentCount,
           configCount: facts.configCount,
           signalRefCount: facts.signalRefCount,
@@ -2201,7 +2202,8 @@ const TOOLS = [
           brief: facts.brief,
           caveats: [
             '`nodeCount` 取的是**图体自己声明**的那个数；`linkCount` 是数出来的**图体连线记录条数**（疑似连线，语义未逐个确证）—— 都当"粗略数字"看。',
-            '实体**种类号**（`kindCode` / `kindEcho`）只回原始号：**哪些是玩家实体 / 角色实体 / 职业实体 / 元件，本机没确证**（名字带"模版"的才标成模版/元件实例，且带 `guess:true`）。',
+            '实体**种类号**：有出处的按 `kindLabels` 给名字（来源写在 `kindLabelSource`：资源分类树 #6 的分类名「玩家模版」「职业」等 ref id 命中）；'
+            + '**没出处的照旧只回原始号**（见 `kindLabelsUnverified`），名字带"模版"的另标 `roleGuess.guess:true`。',
           ],
           unverified: facts.unverified.length ? facts.unverified : undefined,
           nextStep: '看某张图传 `graph:"<图名子串>"`（如 `关卡实体信号`）；看某个实体的变量传 `entity:"<实体名子串>"`（如 `关卡实体`）；'
