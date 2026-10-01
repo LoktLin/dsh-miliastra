@@ -46,9 +46,19 @@ const msg = (no, ...kids) => bytes(no, Buffer.concat(kids));
 /** 一条 `identity`：`#1`=origin / `#2`=service_domain（图类型） / `#3`=kind / `#5`=图 id */
 const identity = (domain, kind, id) => msg(1, vint(1, 10000), vint(2, domain), vint(3, kind), vint(5, id));
 /** 一条图记录：`{ #1: { #1: identity, #2: 图名, #3: 图体 }, #2: … }` */
+/**
+ * 一张图：\`#1{ #1=identity, #2=图名, #3×N=节点 }\`
+ * ⚠️ 节点是**重复的 #3 块**（不是"一个 #3 里放计数"）—— 第一版 fixture 就是按错的模型造的，已修。
+ * \`links\` = 前 links 个节点各带 1 条 \`#4\` 记录（合计 = links）。
+ */
 const graph = (name, domain, kind, id, nodeCount, links) => {
-  const body = msg(3, vint(1, nodeCount), ...Array.from({ length: links }, (_, i) => msg(4, vint(1, i + 1), vint(4, nodeCount))));
-  return msg(1, msg(1, identity(domain, kind, id), str(2, name), nodeCount == null ? Buffer.alloc(0) : body));
+  const nodes = Array.from({ length: nodeCount || 0 }, (_, i) => msg(3,
+    vint(1, i + 1),
+    msg(2, vint(1, 10001), vint(2, domain), vint(3, 22000), vint(5, 75)),
+    msg(3, vint(1, 10001), vint(2, domain), vint(3, 22000), vint(5, 75)),
+    ...(i < (links || 0) ? [msg(4, vint(1, i + 1), vint(4, 2))] : []),
+    ...(nodeCount == null ? [] : [])));
+  return msg(1, msg(1, identity(domain, kind, id), str(2, name), ...nodes));
 };
 /** 一条 `GraphVariable`：`#2`=名 / `#3`=类型 / `#4`=初值（TypedValue：`#1`=类型 + 类型号字段）/ `#5`=是否公开 */
 const variable = (name, typeCode, isPublic, withValue) => {
