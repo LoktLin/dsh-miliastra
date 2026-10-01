@@ -2069,9 +2069,11 @@ check('★ 第七页「节点图」：左侧手风琴（就地展开、一次开
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
   assert(/点标题展开，一次开一个/.test(text), '缺第七页标题（含"一次开一个"说明）');
-  for (const b of ['节点图', '实体', '元件', '节点声明', '配置条目 / 阵营 / 资源分类']) {
+  // ★ 2026-10-02（作者要求 ④）：**节点声明不再是独立分组**，收进「节点图」详情里当字段
+  for (const b of ['节点图', '实体', '元件', '配置条目 / 阵营 / 资源分类']) {
     assert(text.includes(b), '缺分组标题：' + b);
   }
+  assert(!/节点声明\s*\d/.test(text), '节点声明不该再是独立分组（要求 ④ 要它进节点图详情）');
   assert(/重新读一次/.test(text), '缺「重新读一次」');
   assert(/全部收起/.test(text), '缺「全部收起」');
   // 默认全收起：只出现 ▸，不该出现 ▾
@@ -2080,26 +2082,32 @@ check('★ 第七页「节点图」：左侧手风琴（就地展开、一次开
   // ★ 手风琴：点标题就地展开（同一栏），一次只开一个 —— 这就是作者要的"少一层级"
   assert(/setSel\(sel === key \? '' : key\)/.test(src), '不是手风琴（没有"开一个就收另一个"的语义）');
   assert(/open \? React\.createElement\('div', \{\s*style: \{ maxHeight: '42vh'/.test(src), '展开的数据体没有就地渲染（或没做内部滚动）');
-  // 右侧只放"再下一层"（点实体看变量），不再是"左侧列表 → 右侧数据"
+  // ★ 要求 ①：展开中的标题必须用**专用样式**（不能再用按钮那套浅色渐变，否则里面小字看不清）
+  assert(/-fold-title' \+ \(open \? ' ' \+ PLUGIN \+ '-fold-on' : ''\)/.test(src), '展开态没有用 -fold-on 专用样式（要求 ①）');
+  assert(/-fold-on\{border-left:3px solid/.test(src), '缺 -fold-on 的样式定义');
+  assert(/-fold-on \.\' \+ PLUGIN \+ '-hint\{color:#cfe3ff;\}/.test(src), '-fold-on 里的小字颜色没提亮（还是看不清）');
+  assert(!/-fold-title' \+ \(open \? ' ' \+ PLUGIN \+ '-primary'/.test(src), '展开态还在套按钮的 -primary 渐变 —— 那就是"看不清"的成因');
+  // 右侧只放"再下一层"（点实体看变量 / 点节点看引脚与连线）
   assert(/这一层放/.test(text) && /再往下钻/.test(text), '右侧没有说明它是"再下一层"');
-  // 只读 + 走工具
-  assert(/callTool\('miliastra_map', \{ op: 'nodes', kind: 'all' \}\)/.test(src), '面板没走 miliastra_map op=nodes kind=all');
-  assert(/callTool\('miliastra_map', \{ op: 'nodes', entity: name \}\)/.test(src), '点实体没去读它的自定义变量');
+  // 只读 + 走工具（明细档：实体带变量，省掉一次往返）
+  assert(/callTool\('miliastra_map', Object\.assign\(\{ op: 'nodes', kind: 'all', summaryOnly: false \}, lvArg\(\)\)\)/.test(src),
+    '面板没走 miliastra_map op=nodes kind=all（明细档）');
+  assert(/callTool\('miliastra_map', Object\.assign\(\{ op: 'nodes', entity: e\.name \}, lvArg\(\)\)\)/.test(src), '点实体没去读它的自定义变量');
   const pane = src.slice(src.indexOf('exports.__nodesPane = function NodesPane'), src.indexOf('var NodesPane = exports.__nodesPane'));
-  assert(pane.length > 400, '取不到 NodesPane 源码片段（锚点变了就更新这条断言）');
+  assert(pane.length > 2000, '取不到 NodesPane 源码片段（锚点变了就更新这条断言）');
   for (const bad of ["'miliastra_code'", "'miliastra_sim'", 'writeFile', 'deploy']) {
     assert(pane.indexOf(bad) < 0, '节点图那页出现了写/模拟器调用：' + bad);
   }
   assert(/粗略数字/.test(text), '页面没说明节点数/连线数是粗略数字');
-  assert(/var labelOf = function/.test(src), '实体没有按标签分组的逻辑');
-  assert(/kindLabelSource/.test(src), '实体行没写出处');
-  return '手风琴（一次开一个、就地 42vh 内滚）+ 右侧下一层';
+  assert(/kindLabelSource/.test(src), '实体详情没写出处');
+  return '手风琴 + -fold-on 可读标题 + 右侧下一层 + 零写路径';
 });
 
 /*
- * ★ 第七页第 2 步（图 → 节点 → 引脚/连线）——**面板**这一层。
- * 五条：① 接线（点图名就地展开 / 点节点走右栏）②③④ 三个纯函数的判据（合成数据）
- *      ⑤ 拿**真 .gil** 喂同一批判据（环境里没有就如实跳过，不伪装通过）。
+ * ★ 第七页第二版（2026-10-02，作者看图后的五条要求）——**面板**这一层。
+ * ① 可读的展开标题 ② 节点图列表（搜索 + 每页 10 条 + 三列）⇒ 点一行看右栏详情
+ * ③ 实体 / 元件 同款 ④ 节点声明进节点图详情 ⑤ 关卡下拉（换图后能指到那张图）
+ * 另外：②③④ 的**判据**是纯函数（合成数据 + 真 `.gil` 都喂一遍）。
  */
 const nodesPaneSource = () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
@@ -2109,30 +2117,102 @@ const nodesPaneSource = () => {
   };
 };
 
-check('★ 第 2 步 ①：点图名 ⇒ 就地展开节点表（左栏、自带内滚）+ 点节点 ⇒ 右栏引脚与连线', () => {
+check('★ 第二版 ①②：节点图是**可搜索 + 每页 10 条**的三列表（类型/名称/节点图 id），点一行 ⇒ 右栏详情', () => {
   const { src, pane } = nodesPaneSource();
-  assert(pane.length > 800, '取不到 NodesPane 源码片段（锚点变了就更新这条断言）');
-  // 图名 → 节点表：走 miliastra_map op=nodes graph=…（只读）
-  assert(/callTool\('miliastra_map', \{ op: 'nodes', graph: name \}\)/.test(pane), '点图名没去读这张图的节点明细');
-  assert(/var openGraphBody = function/.test(pane), '缺"就地展开的节点表"（openGraphBody）');
-  assert(/maxHeight: '30vh', overflowY: 'auto'/.test(pane), '展开的节点表没有自己的内滚（会把左栏撑爆）');
-  assert(/nodes\.length > NODE_ROW_CAP/.test(pane), '节点表没有"超过上限就明说没列全"');
-  // 节点行：官方名字 + 坐标 / 引脚数 / 出边数
-  assert(/nodesNodeLabel\(nd\)/.test(pane) && /nodesNodeMeta\(nd\)/.test(pane), '节点行没写官方名字/坐标/引脚/出边');
-  // 节点 → 引脚与连线：右栏（并给回左边的路）
-  assert(/var openNode = function/.test(pane), '缺"点节点"的入口');
-  assert(/var pinLines = nodesPinLines\(/.test(pane), '右栏没有把引脚与连线排出来');
-  assert(/回到节点表|回左边的节点表/.test(src), '右栏没有回节点表的路');
-  // 判据只有一份：纯函数必须导出去给测试用
+  assert(pane.length > 2000, '取不到 NodesPane 源码片段（锚点变了就更新这条断言）');
+  // ① 三列表头 + 每页 10 条
+  assert(/\['类型', '名称', '节点图 id'\]/.test(pane), '节点图列表的表头不是「类型 / 名称 / 节点图 id」三列');
+  assert(/var PAGE = 10;/.test(pane), '每页条数不是 10（作者要求每页 10 条）');
+  assert(/var hit = nodesFilterRows\(opt\.rows, opt\.q\)/.test(pane) && /var pg = nodesPaged\(hit, opt\.page, PAGE\)/.test(pane),
+    '列表没有"先搜索再分页"的接线');
+  assert(/上一页/.test(pane) && /下一页/.test(pane) && /第 ' \+ pg\.page \+ ' \/ ' \+ pg\.pages \+ ' 页/.test(pane), '缺分页器（上一页/下一页 + 第 x/y 页）');
+  assert(/type: 'search'/.test(pane), '缺搜索框');
+  // ② 点一行 ⇒ 右栏详情（走 miliastra_map op=nodes graph=…，只读）
+  assert(/callTool\('miliastra_map', Object\.assign\(\{ op: 'nodes', graph: g\.name \}, lvArg\(\)\)\)/.test(pane),
+    '点图行没去读这张图的节点明细');
+  assert(/onClick: function \(\) \{ opt\.onPick\(r\.raw\); \}/.test(pane), '点行没有接上"看详情"');
+  assert(/var graphPane = function/.test(pane) && /var nodePane = function/.test(pane), '缺图详情 / 节点详情两屏');
+  // 节点 → 引脚与连线（第二层）还在，并且有回退
+  assert(/setNodeView\(\{ graphName: g\.name, node: nd \}\)/.test(pane), '节点表点一行没有进"引脚与连线"');
+  assert(/← 回节点表/.test(pane), '引脚与连线那一屏没有回节点表的路');
+  assert(/var pinLines = nodesPinLines\(/.test(pane), '没有把引脚与连线排出来');
+  // 判据只有一份：纯函数必须导出去给测试用（第二版新增 搜索/分页/声明归属/路径/单位）
   for (const k of ['__testNodesPickKey', '__testNodesNodeLabel', '__testNodesNodeMeta', '__testNodesEdgesOf',
-    '__testNodesPinLines', '__testNodesRefLines', '__testNodesGraphFacts']) {
+    '__testNodesPinLines', '__testNodesRefLines', '__testNodesGraphFacts',
+    '__testNodesFilterRows', '__testNodesPaged', '__testNodesDeclForGraph', '__testNodesLevelOfPath',
+    '__testNodesBytesText', '__testNodesShortTime']) {
     assert(typeof clientExports[k] === 'function', '缺纯函数导出：' + k);
   }
   // 只读：这一页不许出现写路径 / 模拟器
   for (const bad of ["'miliastra_code'", "'miliastra_sim'", 'writeFile', 'deploy']) {
     assert(pane.indexOf(bad) < 0, '节点图那页出现了写/模拟器调用：' + bad);
   }
-  return '就地展开(30vh) + 节点行 + 右栏引脚与连线 + 7 个纯函数导出 + 零写路径';
+  return '三列表 + 搜索 + 每页 10 条 + 分页器 + 点行看详情 + 13 个纯函数导出 + 零写路径';
+});
+
+check('★ 第二版 ②③：搜索与分页的判据（大小写无关 / 多词 AND / 页码夹回范围内）', () => {
+  const F = clientExports.__testNodesFilterRows;
+  const rows = [{ hay: '甲图 关卡实体图 1073741825' }, { hay: '食物 客户端布尔过滤器图 1082130433' }, { hay: 'DialogueManager' }];
+  assert(F(rows, '').length === 3, '空搜索词应回全部');
+  assert(F(rows, '   ').length === 3, '只有空白的搜索词也算空');
+  assert(F(rows, 'dia').length === 1 && F(rows, 'DIALOGUE').length === 1, '搜索没做大小写无关');
+  assert(F(rows, '食物 1082').length === 1, '多词不是 AND');
+  assert(F(rows, '不存在的').length === 0, '没匹配到却还有行');
+  const P = clientExports.__testNodesPaged;
+  const list = Array.from({ length: 25 }, (_, i) => 'r' + (i + 1));
+  const p1 = P(list, 1, 10); const p3 = P(list, 3, 10);
+  assert(p1.rows.length === 10 && p1.page === 1 && p1.pages === 3 && p1.from === 1 && p1.to === 10, '第 1 页算错了：' + JSON.stringify(p1));
+  assert(p3.rows.length === 5 && p3.from === 21 && p3.to === 25, '最后一页算错了：' + JSON.stringify(p3));
+  assert(P(list, 99, 10).page === 3, '页码越界没有夹回范围内（会停在空白页）');
+  assert(P(list, 0, 10).page === 1 && P([], 5, 10).pages === 1, '非法页码 / 空列表没兜住');
+  return '子串+AND+大小写无关 + 25 条分 3 页 + 越界夹回';
+});
+
+check('★ 第二版 ④：节点声明**进节点图详情当字段**（能归属的归属、归属不了的给全图总数）', () => {
+  const D = clientExports.__testNodesDeclForGraph;
+  const decls = [
+    { id: 1610612737, isComposite: true, labels: ['侦_名声'], notes: [] },
+    { id: 1073741845, isComposite: false, labels: ['数值'], notes: [] },
+  ];
+  const nodes = [
+    { index: 1, kernelRef: { runtimeId: 1610612737 }, refs: [] },                 // 复合声明
+    { index: 2, kernelRef: { runtimeId: 13 }, refs: [{ id: 1073741845, what: '声明 1073741845' }] }, // 引脚引用
+    { index: 3, kernelRef: { runtimeId: 13 }, refs: [] },                        // 都不沾
+  ];
+  const r = D(nodes, decls);
+  assert(r.declTotal === 2 && r.declComposite === 1, '全图总数/复合数不对：' + JSON.stringify(r));
+  assert(r.composite.length === 1 && r.composite[0].id === 1610612737 && r.composite[0].node.index === 1, '复合声明归属不对');
+  assert(r.refs.length === 1 && r.refs[0].id === 1073741845 && r.refs[0].node.index === 2, '引脚引用的声明归属不对');
+  const empty = D(nodes, []);
+  assert(empty.composite.length === 0 && empty.refs.length === 0 && empty.declTotal === 0, '没有声明时不该硬凑归属');
+  const { pane } = nodesPaneSource();
+  assert(/nodesDeclForGraph\(nodes, decls\)/.test(pane), '图详情没把节点声明算进来');
+  assert(/节点声明 · 全图 ' \+ df\.declTotal \+ ' 条/.test(pane), '图详情没有「节点声明」这个字段');
+  assert(/复合节点声明 \*\*/.test(pane) && /引脚引用的声明 \*\*/.test(pane), '没写清"能归到声明的有哪几种"');
+  return '复合 1 / 引脚引用 1 / 全图 2（复合 1）+ 页面把它当字段';
+});
+
+check('★ 第二版 ⑤：关卡下拉 —— 换图后能指到那张图（无活文件的图 Host 永远不会选它）', () => {
+  const { pane } = nodesPaneSource();
+  assert(/var lvArg = function \(\) \{ return levelSel \? \{ level: String\(levelSel\) \} : \{\}; \}/.test(pane),
+    '没有把"手选关卡"接进工具调用');
+  assert(/createElement\('select'/.test(pane) && /自动跟随（Host 判定/.test(pane), '缺关卡下拉（或没有"自动"那一项）');
+  assert(/callTool\('miliastra_map', Object\.assign\(\{ op: 'nodes', kind: 'all', summaryOnly: false \}, lvArg\(\)\)\)/.test(pane),
+    '读这一页时没带上手选的关卡');
+  assert(/luaFiles \|\| \[\]\)\.length \? l\.luaFiles\.length \+ ' 个活文件' : '无活文件'/.test(pane), '下拉里没标"有没有活文件"（那是选不中的根因）');
+  // 根因提示：存盘更新但**没有活文件**的图会被点名
+  assert(/没有活文件\*\* ⇒ Host 的「当前关卡」不会选它/.test(pane), '没有点名提示"没有活文件的图不会被自动选中"');
+  // 手选的关卡要记住；并一直显示"Host 判定的当前关卡是哪个"（免得看着像当前图、其实是另一张）
+  assert(/NODES_LV_KEY = PLUGIN \+ ':nodes-level'/.test(pane), '手选关卡没有自己的存储键');
+  assert(/storeSet\(NODES_LV_KEY, \{ v: e\.target\.value \|\| '' \}\)/.test(pane), '手选之后没记住');
+  assert(/storeGet\(NODES_LV_KEY\)/.test(pane) && /savedOk \? savedLv : ''/.test(pane), '下次打开没有读回手选的关卡（或没在图消失时回退到"自动"）');
+  assert(/Host 判定的当前关卡是 ' \+ props\.currentLevelId/.test(pane), '手选了别的图时，没有提示"Host 判定的当前关卡是哪个"');
+  // 单位/时间两个小工具
+  assert(clientExports.__testNodesBytesText(1956175) === '1.87 MB', '字节格式化不对：' + clientExports.__testNodesBytesText(1956175));
+  assert(clientExports.__testNodesLevelOfPath('C:\\x\\Beyond_Local_Save_Level\\1073741829\\1073741829.gil') === '1073741829', '从路径取关卡 ID 不对');
+  assert(clientExports.__testNodesLevelOfPath('C:\\x\\1073741830.gil') === '1073741830', 'root-gil 布局取关卡 ID 不对');
+  assert(/^[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$/.test(clientExports.__testNodesShortTime(Date.now())), '时间格式不是 MM-DD HH:mm');
+  return '下拉 + 位置/活文件数/地图大小/存盘时间 + 点名提示 + 工具调用带 level';
 });
 
 check('★ 第 2 步 ②：节点名 / 坐标 / 出边 —— 命中给官方名、没命中如实说未知（合成数据）', () => {
@@ -2224,20 +2304,31 @@ check('★ 第 2 步 ⑤：拿**真 .gil** 喂同一批判据（没有 .gil 就�
     for (const e of clientExports.__testNodesEdgesOf(withPins)) { if (idx.has(e.to)) targetOk += 1; else targetMiss += 1; }
   }
   // ★ 真数据也要**过一遍 React**：把"真 .gil 的图 + 节点"当注入口喂进面板，SSR 真渲染一次。
-  //   （合成数据那两条只能证明"形状对"；这一条证明**真的这份回执**画得出来。）
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+  //   （合成数据那几条只能证明"形状对"；这一条证明**真的这份回执**画得出来。）
+  const graphRec = (facts.graphs || []).find((x) => x.name === big) || { name: big, id: null, typeCode: 20000, typeLabel: '关卡实体图', kindCode: 21001, nodeCount: nodes.length, linkCount: 0, hasBody: true };
+  const base = {
+    facts, sel: 'graphs',
+    view: { kind: 'graph', graph: graphRec, nodes, edges, key: big },
+  };
+  // ① 图详情这一屏（不带 nodeView，否则右栏会被"引脚与连线"那一屏顶掉）
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({
     open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'nodes',
-    __nodesInit: {
-      facts,
-      sel: 'graphs',
-      gView: { name: big, loading: false, nodes, edges },
-      nodeView: withPins ? { graphName: big, node: withPins } : null,
-    },
-  }));
+  }, { __nodesInit: base })));
   const txt = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert(txt.includes('官方名字命中'), '真数据渲染出来没有节点表小计');
+  assert(/节点表 · \d+ 个/.test(txt), '真数据渲染出来没有节点表');
+  assert(txt.includes('官方名字命中'), '真数据渲染出来没有名字命中小计');
+  assert(txt.includes('节点声明 · 全图'), '真数据的图详情里没有「节点声明」字段（要求 ④）');
   assert(!/undefined|NaN/.test(txt), '真数据渲染结果里出现了 undefined/NaN');
-  if (withPins) assert(/引脚与连线/.test(txt) && /kindShell=/.test(txt), '真数据的右栏引脚与连线没画出来');
+  // ② 再点一个节点 ⇒ "引脚与连线"这一屏也真渲染一遍
+  if (withPins) {
+    const html2 = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+      open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'nodes',
+      __nodesInit: Object.assign({}, base, { nodeView: { graphName: big, node: withPins } }),
+    }));
+    const txt2 = html2.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    assert(/引脚与连线/.test(txt2) && /kindShell=/.test(txt2), '真数据的引脚与连线没画出来');
+    assert(!/undefined|NaN/.test(txt2), '真数据（引脚屏）出现了 undefined/NaN');
+  }
   return lv.levelId + ' 的「' + big + '」' + nodes.length + ' 节点 / ' + edges.length + ' 出边'
     + '（真渲染 OK）'
     + (withPins ? '（首节点出边目标命中本图 ' + targetOk + ' / 不在本图 ' + targetMiss + '）' : '');
@@ -2271,39 +2362,49 @@ const SYNTH_NODES = [
   { index: 2, docId: 999999, doc: null, x: 0, y: 0, pinCount: 0, pins: [], outEdges: [], refs: [], label: '未知节点 999999' },
 ];
 
-check('★ 第 2 步 ⑥（渲染）：展开的节点表真画得出来（图名 / 小计 / 每行的名字·坐标·引脚·出边）', () => {
-  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
-    open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'nodes',
-    __nodesInit: { facts: SYNTH_FACTS, sel: 'graphs', gView: { name: '甲图', loading: false, nodes: SYNTH_NODES, edges: SYNTH_NODES[0].outEdges } },
-  }));
-  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert(/▾ 甲图/.test(text), '图名没有展开态（▾）—— 就地展开没生效：' + text.slice(0, 200));
-  assert(text.includes('节点 2 · 官方名字命中 1/2 · 有坐标 2 · 出边 1（粗略数字）'), '节点表小计不对');
-  assert(text.includes('#1 以GUID查询实体') || text.includes('#1　以GUID查询实体'), '节点表没画出节点名');
-  assert(text.includes('#2 未知节点 999999') || text.includes('#2　未知节点 999999'), '词典没命中的节点没如实写未知');
-  assert(/\(-156\.5, -78\.[0-9]\)/.test(text), '节点行没画坐标：' + text.slice(text.indexOf('#1'), text.indexOf('#1') + 160));
-  assert(/引脚 1 · 出边 1/.test(text), '节点行没画引脚/出边数');
-  assert(!/undefined|NaN/.test(text), '渲染结果里出现了 undefined/NaN');
-  return '展开态 ▾ + 小计 + 两行节点（含未命中）';
-});
-
-check('★ 第 2 步 ⑥（渲染）：右栏的引脚与连线真画得出来（谁连谁 + 引用 + 回退按钮）', () => {
+check('★ 第二版 ②（渲染）：点开节点图 ⇒ 左栏是**三列表 + 搜索 + 分页**，右栏是这张图的详情', () => {
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
     open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'nodes',
     __nodesInit: {
       facts: SYNTH_FACTS, sel: 'graphs',
-      gView: { name: '甲图', loading: false, nodes: SYNTH_NODES, edges: SYNTH_NODES[0].outEdges },
+      view: { kind: 'graph', graph: SYNTH_FACTS.graphs[0], nodes: SYNTH_NODES, edges: SYNTH_NODES[0].outEdges, key: '甲图' },
+    },
+  }));
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  // 左栏：展开态（▾）+ 三列表头 + 搜索框 + 分页器
+  assert(/▾/.test(text), '分组没有展开态（▾）：' + text.slice(0, 240));
+  assert(/类型 名称 节点图 id/.test(text), '左栏没有「类型 / 名称 / 节点图 id」三列表头');
+  assert(/甲图/.test(text) && /关卡实体图/.test(text) && /1073741825/.test(text), '列表里没有这一行的三个字段');
+  assert(/第 1 \/ 1 页\s*共 1 条/.test(text), '缺分页信息（第 x / y 页　共 N 条）');
+  assert(/上一页/.test(text) && /下一页/.test(text), '缺上下页按钮');
+  // 右栏：图详情（字段 + 节点声明 + 节点表）
+  assert(/图「甲图」/.test(text), '右栏没有图详情标题');
+  assert(/节点声明 · 全图 0 条/.test(text), '右栏没有「节点声明」字段');
+  assert(/节点表 · 2 个/.test(text), '右栏没有节点表');
+  assert(text.includes('#1 以GUID查询实体') || text.includes('#1　以GUID查询实体'), '节点表没画出节点名');
+  assert(/\(-156\.5, -78\.[0-9]\)/.test(text), '节点表没画坐标');
+  assert(/官方名字命中 1\/2/.test(text), '节点表小计不对');
+  assert(!/undefined|NaN/.test(text), '渲染结果里出现了 undefined/NaN');
+  return '▾ + 三列表 + 搜索 + 分页 + 右栏图详情（含节点声明字段与节点表）';
+});
+
+check('★ 第二版 ②（渲染）：节点表里点一个节点 ⇒ 引脚与连线（谁连谁 + 引用 + 回退）', () => {
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, {
+    open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'nodes',
+    __nodesInit: {
+      facts: SYNTH_FACTS, sel: 'graphs',
+      view: { kind: 'graph', graph: SYNTH_FACTS.graphs[0], nodes: SYNTH_NODES, edges: SYNTH_NODES[0].outEdges, key: '甲图' },
       nodeView: { graphName: '甲图', node: SYNTH_NODES[0] },
     },
   }));
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert(text.includes('引脚与连线 · 1 个引脚实例'), '右栏没画"引脚与连线"这一节');
-  assert(/引脚 0\s+kindShell=2 \/ kindKernel=2/.test(text), '右栏没画引脚头：' + text.slice(text.indexOf('引脚与连线') - 20, text.indexOf('引脚与连线') + 200));
-  assert(/→ 节点 #2（未知节点 999999）/.test(text), '右栏没把连线目标写成人能读的（#2 未知节点 999999）');
+  assert(text.includes('引脚与连线 · 1 个引脚实例'), '没画"引脚与连线"这一节');
+  assert(/引脚 0\s+kindShell=2 \/ kindKernel=2/.test(text), '没画引脚头：' + text.slice(text.indexOf('引脚与连线') - 20, text.indexOf('引脚与连线') + 200));
+  assert(/→ 节点 #2（未知节点 999999）/.test(text), '没把连线目标写成人能读的（#2 未知节点 999999）');
   assert(/kind 号的名字未确证/.test(text), '右栏没写明 kind 号↔名字未确证');
   assert(text.includes('引用到的对象 · 1 个') && text.includes('1073741845 → 实体「关卡实体」'), '右栏没画引用行');
   assert(/回到?节点表|回左边的节点表/.test(text), '右栏没有回节点表的路');
-  assert(text.includes('属于图「甲图」'), '右栏没写它属于哪张图');
+  assert(text.includes('← 回节点表（甲图）'), '没写清这个节点属于哪张图 / 回不去节点表');
   // 右栏此时应当**已经被最深那一层占住**（不该还挂着"这里以后放什么"的空壳说明）
   assert(!/再往下钻/.test(text), '右栏还挂着空壳说明（最深那一层没顶掉它）');
   return '引脚头 + 谁连谁 + 引用 + 未确证声明 + 回退按钮';
