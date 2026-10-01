@@ -51,7 +51,7 @@ import { lintLua, lintSummary } from './lib/lualint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
 import { readGilNodeFacts } from './lib/gilnodes.mjs';
-import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS } from './lib/nodegraph.mjs';
+import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS, triggersOf, actionsOf } from './lib/nodegraph.mjs';
 import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
 import { kbSearch, kbCatalog, kbEntry, kbSources, KB_ENTRIES } from './lib/kbqa.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
@@ -2438,7 +2438,23 @@ const TOOLS = [  {
         const wantEnts = kind === 'entities' || kind === 'all' || !!eq;
         const wantComps = kind === 'components' || kind === 'all';
         if (wantGraphs) {
-          out.graphs = detailed ? graphs : undefined;
+          /*
+           * ★ 2026-10-02 加：每条图**就地补上**「入口事件 / 会做哪些事 / 挂载在谁身上」——
+           * 作者问「挂在 XX 上的图能做到什么」。数据全在**已经读进来的** `graphNodeLists` 与 `graphOwners` 里，
+           * **不用再读一遍 `.gil`**（面板/回执都能直接渲染，不用二次调用）。
+           */
+          out.graphs = detailed ? graphs.map(function (g) {
+            const nodes = (facts.graphNodeLists || {})[g.name] || [];
+            const acts = actionsOf(nodes, { limit: 8 });
+            return Object.assign({}, g, {
+              owners: (facts.graphOwners || {})[g.id] || [],
+              entryEvents: triggersOf(nodes).map((t) => t.name),
+              actions: acts.names,
+              actionTotal: acts.total,
+              actionUnknown: acts.unknown,
+              nodeKnown: nodes.length,
+            });
+          }) : undefined;
           if (!detailed) out.graphsOmitted = graphs.length;
           // ★ 点名某张图时，把它的**节点明细**一起回（作者：「我想要每一个节点都能被点到，而不是总和」）
           if (gq) {

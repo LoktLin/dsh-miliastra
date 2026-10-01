@@ -2226,6 +2226,15 @@ check('★ 第二版 ⑤：关卡选择 —— 默认「最近存盘的地图（
   assert(/storeSet\(NODES_LV_KEY, \{ v: e\.target\.value \|\| '' \}\)/.test(pane), '手选之后没记住');
   assert(/storeGet\(NODES_LV_KEY\)/.test(pane) && /savedOk \? savedLv : ''/.test(pane), '下次打开没有读回手选的关卡（或没在图消失时回退）');
   assert(/lvWhy\(\)/.test(pane) && /（最近改动）/.test(pane) && /（手选）/.test(pane), '没在图旁写明"本次读的是谁、凭什么"');
+  /*
+   * ★ 2026-10-02（作者要求）：图详情里要有「**挂载在：XX → 入口事件 + 关键动作**」三行。
+   * 数据来自同一次 `op=nodes` 回执（Host 已算好 owners / entryEvents / actions）⇒ 面板不许再读一次 .gil。
+   */
+  assert(/kv\('挂载在'/.test(pane) && /o\.kind \+ '「'/.test(pane), '图详情里没有「挂载在：XX」');
+  assert(/kv\('入口事件'/.test(pane) && /g\.entryEvents/.test(pane), '图详情里没有「入口事件」');
+  assert(/kv\('关键动作'/.test(pane) && /g\.actions/.test(pane), '图详情里没有「关键动作」');
+  assert(/口径未确证/.test(pane), 'via:"ref" 那种未确证的挂载主没有标出来（不许和确证的混在一起）');
+  assert(/技能图\/状态图挂在别的区/.test(pane), '没有说明"没找到挂载主"的正确读法（技能图/状态图在别的区）');
   assert(/永远选不到它/.test(pane), 'Host 口径下没提示"最近改动的那张图 Host 永远选不到"');
   // 单位/时间两个小工具
   assert(clientExports.__testNodesBytesText(1956175) === '1.87 MB', '字节格式化不对：' + clientExports.__testNodesBytesText(1956175));

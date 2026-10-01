@@ -17,7 +17,7 @@ import { parseMessage } from '../lib/wire.mjs';
 import { scanLevels, pickCurrent } from '../lib/locate.mjs';
 import {
   NODE_TYPE_LABELS, nodeTypeLabel, nodeTypeOf, nodeSideOf, typeStatsOf, triggersOf, refsSummaryOf,
-  keywordsOf, graphAnatomy, anatomyTotals, graphOwnerNote,
+  keywordsOf, graphAnatomy, anatomyTotals, graphOwnerNote, actionsOf,
 } from '../lib/nodegraph.mjs';
 import { TOOLS } from '../index.js';
 
@@ -200,6 +200,38 @@ await check('⑥b 挂载抽取：合成树 + 真 .gil 双验（`#13` 形状：�
     }
   }
   return note;
+});
+
+await check('⑨ 「挂在 XX 上的图能做到什么」：入口事件 + **执行节点去重清单**（作者 2026-10-02 要求）', () => {
+  const mk = (domain, zh, id) => ({ index: id, docId: id, doc: { identifier: domain + '.' + zh, domain, zh, system: 'Server' } });
+  const nodes = [
+    mk('Trigger', '定时器触发时', 1), mk('Trigger', '定时器触发时', 2), mk('Trigger', '实体创建时', 3),
+    mk('Execution', '设置自定义变量', 4), mk('Execution', '设置自定义变量', 5), mk('Execution', '创建元件', 6),
+    mk('Query', '获取自定义变量', 7), mk('Arithmetic', '加法运算', 8), mk('Control', '双分支', 9),
+    { index: 10, docId: 10, doc: null },                                   // 词典未收录的执行节点：名字给不出
+  ];
+  const a = actionsOf(nodes, { limit: 8 });
+  eq(a.names, ['设置自定义变量', '创建元件'], '执行类节点名去重/保序不对：' + JSON.stringify(a.names));
+  eq(a.total, 3, '执行类节点总数不对（含未收录那个）');
+  eq(a.unique, 2, '去重后的种类数不对');
+  eq(a.unknown, 0, '这里的未收录数应为 0（那个 doc 为 null 的不是 Execution 类）');
+  eq(actionsOf(nodes, { limit: 1 }).names, ['设置自定义变量'], 'limit 没生效');
+  eq(actionsOf([], {}).names, [], '空图应该给空清单');
+  eq(triggersOf(nodes).map((t) => t.name), ['定时器触发时', '定时器触发时', '实体创建时'], '入口事件应保留重复（同一事件可能挂多个）');
+  // 回执层：`op=nodes` 的每条图要**就地带上** owners / entryEvents / actions（面板不用二次读 .gil）
+  const lv = scanLevels().find((l) => String(l.levelId) === '1073741829' && l.gil);
+  if (!lv) return '合成口径通过（本机没有 1073741829，跳过真数据那条）';
+  const t = TOOLS.find((x) => x.name === 'miliastra_map');
+  return t.execute({ op: 'nodes', level: '1073741829', kind: 'all', summaryOnly: false }).then((r) => {
+    const g = (r.graphs || []).find((x) => x.name === '关卡_异常聚合');
+    assert(g, '没找到「关卡_异常聚合」');
+    eq((g.owners || []).map((o) => o.name), ['关卡实体'], '挂载主不对：' + JSON.stringify(g.owners));
+    eq(g.owners[0].via, 'mount', '挂载口径应是已确证的 mount');
+    assert(g.entryEvents.includes('定时器触发时'), '入口事件没带上：' + JSON.stringify(g.entryEvents));
+    assert(g.actions.includes('设置自定义变量') && g.actions.includes('创建元件'), '关键动作没带上：' + JSON.stringify(g.actions));
+    assert(Number.isFinite(g.actionTotal) && g.actionTotal >= g.actions.length, 'actionTotal 不对');
+    return '入口 ' + g.entryEvents.length + ' 个 · 动作 ' + g.actions.join('/') + '（共 ' + g.actionTotal + ' 个执行节点）';
+  });
 });
 
 await check('⑦ 真 `.gil`：逐图相加 == 整关（含覆盖率），且入口都是事件类', () => {
