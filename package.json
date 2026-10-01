@@ -74,7 +74,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/LoktLin/dsh-miliastra.git"
+    "url": "git+https://github.com/LoktLin/dsh-miliastra.git"
   },
   "bugs": {
     "url": "https://github.com/LoktLin/dsh-miliastra/issues"
