@@ -2037,17 +2037,17 @@ check('★ 面板可以拖拉（按住头部挪位置 / 双击回原位 / 位置
   return '头部拖动 + left/top 切换 + 位置记住 + 双击回原位 + 不拖出屏幕 + inline 短路';
 });
 
-check('★ tab 条：六等分，第六档是「网格计算」', () => {
+check('★ tab 条：七等分，第七档是「节点图」', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'basic' })));
   const text = html.replace(/<[^>]+>/g, ' ');
-  for (const label of ['初级功能', '高级功能', '模拟器', '预制效果', '像素画', '网格计算']) {
+  for (const label of ['初级功能', '高级功能', '模拟器', '预制效果', '像素画', '网格计算', '节点图']) {
     assert(text.includes(label), 'tab 条缺这一档：' + label);
   }
   const btns = html.match(/dsh-miliastra-vtab[ "]/g) || [];
-  assert(btns.length === 6, '切换按钮应该是 6 个（含选中态）：' + btns.length);
+  assert(btns.length === 7, '切换按钮应该是 7 个（含选中态）：' + btns.length);
   const css = styleNodes[0].textContent;
-  assert(/dsh-miliastra-viewtabs\{[^}]*repeat\(6,/.test(css), 'tab 条不是六等分（repeat(6,…)）');
+  assert(/dsh-miliastra-viewtabs\{[^}]*repeat\(7,/.test(css), 'tab 条不是七等分（repeat(7,…)）');
   assert(/dsh-miliastra-gridsvg\{[^}]*width:100%/.test(css), '网格图没有自适应宽度 —— 点图取坐标的线性换算就失真了');
   assert(Array.isArray(clientExports.__testGridPresets) && clientExports.__testGridPresets.length >= 2, '缺预设按钮表');
   const labels = clientExports.__testGridPresets.map((p) => p.label).join(' | ');
@@ -2057,7 +2057,33 @@ check('★ tab 条：六等分，第六档是「网格计算」', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
   assert(/e\.clientY - r\.top/.test(src), '网格图的取点没按"y 向下"算（应该是 clientY - rect.top）');
   assert(!/r\.bottom - e\.clientY/.test(src), '网格图里混进了引擎那套"左下原点"的翻转写法（两套坐标系不许混用）');
-  return '6 档 + repeat(6) + 预设 + 取点不翻转';
+  return '7 档 + repeat(7) + 预设 + 取点不翻转';
+});
+
+check('★ 第七页「节点图」（2026-10-01 作者要求：给 AI 用的插件第 7 个 tag）', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'nodes' })));
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  // 页面本体：标题 + 动作 + 两条空态（SSR 里工具调用是异步的 ⇒ 必然先是空态）
+  assert(/节点图（读本关 \.gil · 只读）/.test(text), '缺第七页标题');
+  assert(/重新读一次/.test(text), '缺「重新读一次」按钮');
+  assert(/实体的自定义变量/.test(text), '缺「实体的自定义变量」那一栏');
+  assert(/没读到实体|点上面任意一个实体/.test(text), '缺实体栏的空态说明');
+  assert(/种类号是原始号 · 语义未确证/.test(text), '缺实体表标题（要写明“种类号语义未确证”）');
+  assert(/元件/.test(text), '缺元件那一栏');
+  // 只读 + 走工具（AI 那份能力，面板只是窗口）
+  assert(/callTool\('miliastra_map', \{ op: 'nodes', kind: 'all' \}\)/.test(src), '面板没走 miliastra_map op=nodes kind=all');
+  assert(/callTool\('miliastra_map', \{ op: 'nodes', entity: name \}\)/.test(src), '点实体没去读它的自定义变量');
+  const pane = src.slice(src.indexOf('exports.__nodesPane = function NodesPane'), src.indexOf('var NodesPane = exports.__nodesPane'));
+  assert(pane.length > 400, '取不到 NodesPane 源码片段（锚点变了就更新这条断言）');
+  for (const bad of ["'miliastra_code'", "'miliastra_sim'", 'writeFile', 'deploy']) {
+    assert(pane.indexOf(bad) < 0, '节点图那页出现了写/模拟器调用：' + bad);
+  }
+  // 口径必须写出来（**粗略数字**，不下判决）
+  assert(/粗略数字/.test(text), '页面没说明节点数/连线数是粗略数字');
+  assert(/语义未逐个确证/.test(src), '源码里没留"语义未确证"的口径说明');
+  return '第 7 页 + 只读（op=nodes）+ 口径说明';
 });
 
 check('网格页文案：不许有 Markdown 记号（面板不渲染 Markdown），且复制正文自洽', () => {

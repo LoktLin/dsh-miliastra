@@ -779,7 +779,7 @@ for (const [toolName, args] of CASES) {
 
     // ★ P2 schema 体积棘轮（2026-09-24 实测 26.3 KB，其中 miliastra_sim 占 6.1 KB）
     const schemaBytes = JSON.stringify(TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length;
-    const LIMIT = 32 * 1024;
+    const LIMIT = 34 * 1024;   // 2026-10-01：新增 miliastra_map op=nodes（读节点图/实体变量）后涨到 32.5 KB ⇒ 声明式放宽 32→34 KB；再加能力前**先把旧说明下沉到 docs**
     if (schemaBytes > LIMIT) {
       fail += 1;
       failures.push('[ergonomics] 工具 schema 涨到 ' + (schemaBytes / 1024).toFixed(1) + ' KB，超过棘轮上限 '

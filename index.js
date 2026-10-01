@@ -50,6 +50,7 @@ import { globalWrites } from './lib/lua-audit.mjs';
 import { lintLua, lintSummary } from './lib/lualint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
+import { readGilNodeFacts } from './lib/gilnodes.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
   findErrorRecords, parseFileLine, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
 import {
@@ -2126,19 +2127,22 @@ const TOOLS = [
   {
     name: 'miliastra_map',
     description:
-      TITLE + '：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**（每条控件的「控件模板索引 / 名字 / 父 / 子」）——判断「哪些控件能被脚本动态创建」的唯一正解：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**，画布上摆的实例、以及模板控件的子节点，一律返回 nil。op=script 比对地图里嵌的脚本源码与本地活文件（并给 `belongsTo`/`isCurrent`：**`.gil` 是存盘那一刻的快照**，不是实时的）；op=strings 提取可读字符串（存盘前后 diff 用）。\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列出全部映射（含 `mappingId` / `mounted`）；`embedded` = **按名字挑中本次那一份**（`embeddedPickedBy` 说明凭什么）。\n\n**典型调用**：`{"op":"summary"}`｜`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）',
+      TITLE + '：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**（每条控件的「控件模板索引 / 名字 / 父 / 子」）——判断「哪些控件能被脚本动态创建」的唯一正解：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**，画布上摆的实例、以及模板控件的子节点，一律返回 nil。op=script 比对地图里嵌的脚本源码与本地活文件（并给 `belongsTo`/`isCurrent`：**`.gil` 是存盘那一刻的快照**，不是实时的）；op=strings 提取可读字符串（存盘前后 diff 用）。\n★ **op=nodes**：读**服务端节点图**与**实体自定义变量**（回答「节点图/原件有没有正确挂载」）。每条图给 类型/节点数/连线数/id；实体给 变量名/类型/是否公开。默认**粗略档**（计数 + 一行 `brief`），要明细传 `graph`/`entity`。⚠️ 字段号有出处**但未逐个真机确证**，不确定的原样回数字并进 `unverified`。\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列出全部映射（含 `mappingId` / `mounted`）；`embedded` = **按名字挑中本次那一份**（`embeddedPickedBy` 说明凭什么）。\n\n**典型调用**：`{"op":"summary"}`｜`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）｜`{"op":"nodes","graph":"关卡实体信号"}`（这张图挂上了没）｜`{"op":"nodes","entity":"关卡实体"}`（它的自定义变量）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['summary', 'clientui', 'script', 'strings'], description: '默认 summary。' },
+        op: { type: 'string', enum: ['summary', 'clientui', 'script', 'strings', 'nodes'], description: '默认 summary。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡。' },
         file: { type: 'string', description: 'op=script：用哪个活文件比对（一个关卡可能有多个 .lua；省略=自动选；给了名字但不存在会报错并列出全部）。' },
+        kind: { type: 'string', enum: ['graphs', 'entities', 'components', 'decls', 'defs', 'all'], description: 'op=nodes 看哪一块：默认 graphs（节点图）；entities=实体（含量与种类号）；components=元件；decls=节点声明表（自定义节点）；defs=配置条目（职业/成长曲线/连段/状态）+ 阵营 + 资源分类树；all=全给。' },
+        graph: { type: 'string', description: 'op=nodes：只看名字含这个子串的**节点图**（如 `关卡实体信号`）；不给就列全部。' },
+        entity: { type: 'string', description: 'op=nodes：要哪个**实体的自定义变量**（名字子串，如 `关卡实体`）——给了才回逐条 `variables[]`。' },
         summaryOnly: {
           type: 'boolean',
-          description: 'op=clientui：省掉 `records` 与 `rendered`，只留计数与「可能能动态创建的模板」。默认 false。',
+          description: 'op=clientui：省掉 `records` 与 `rendered`，只留计数与「可能能动态创建的模板」。op=nodes：省掉逐条 `graphs[]`/`entities[]`，只留计数 + `kinds` + 一行 `brief`。默认 false。',
         },
         path: { type: 'string', description: '直接指定 .gil 绝对路径（跳过自动定位）。' },
-        limit: { type: 'number', description: 'op=strings：最多返回多少条（默认 200）。' },
+        limit: { type: 'number', description: 'op=strings：最多返回多少条（默认 200）。op=nodes：最多列几张图 / 几个实体（默认 40 / 20）。' },
         match: { type: 'string', description: 'op=strings：子串过滤。' },
       },
       additionalProperties: false,
@@ -2157,6 +2161,79 @@ const TOOLS = [
         const filtered = args.match ? rows.filter((r) => r.text.includes(String(args.match))) : rows;
         const limit = Number.isFinite(args.limit) ? args.limit : 200;
         return { ok: true, op, path: gilPath, total: rows.length, returned: Math.min(limit, filtered.length), rows: filtered.slice(0, limit) };
+      }
+      if (op === 'nodes') {
+        /*
+         * ★ 2026-10-01 新增（作者：「有时候我不知道服务端的节点图或者原件到底有没有正确挂载」）。
+         *   只读：一次 findProtobufRoot + 纯函数（`lib/gilnodes.mjs`），不写任何文件。
+         *   `kind` 选看哪一块：graphs（默认）/ entities / components / all；默认**粗略档**（计数 + 一行 brief）。
+         */
+        const kind = String(args.kind || 'graphs');
+        const wantDeclsEarly = kind === 'decls' || kind === 'all';
+        const gq = args.graph ? String(args.graph) : '';
+        const eq = args.entity ? String(args.entity) : '';
+        const wantVars = !!eq || args.summaryOnly === false;
+        const facts = readGilNodeFacts(gilPath, {
+          graphLimit: Number.isFinite(args.limit) ? Number(args.limit) : 40,
+          entityLimit: Number.isFinite(args.limit) ? Number(args.limit) : 30,
+          withVariables: wantVars,
+        });
+        if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
+        const graphs = gq ? facts.graphs.filter((g) => g.name.includes(gq)) : facts.graphs;
+        const entities = eq ? facts.entities.filter((e) => e.name.includes(eq)) : facts.entities;
+        const detailed = args.summaryOnly === false || !!gq || !!eq;
+        const out = {
+          ok: true, op, path: gilPath, size: facts.size,
+          kind,
+          graphCount: facts.graphCount,
+          kinds: facts.kinds,
+          entityCount: facts.entityCount,
+          totalVariables: facts.totalVariables,
+          entityKindCodes: facts.entityKindCodes,
+          componentCount: facts.componentCount,
+          configCount: facts.configCount,
+          signalRefCount: facts.signalRefCount,
+          configLinked: facts.configLinked,
+          declarationCount: facts.declarationCount,
+          compositeCount: facts.compositeCount,
+          declarationStats: facts.declarationStats,
+          filter: { kind, graph: gq || null, entity: eq || null },
+          brief: facts.brief,
+          caveats: [
+            '`nodeCount` 取的是**图体自己声明**的那个数；`linkCount` 是数出来的**图体连线记录条数**（疑似连线，语义未逐个确证）—— 都当"粗略数字"看。',
+            '实体**种类号**（`kindCode` / `kindEcho`）只回原始号：**哪些是玩家实体 / 角色实体 / 职业实体 / 元件，本机没确证**（名字带"模版"的才标成模版/元件实例，且带 `guess:true`）。',
+          ],
+          unverified: facts.unverified.length ? facts.unverified : undefined,
+          nextStep: '看某张图传 `graph:"<图名子串>"`（如 `关卡实体信号`）；看某个实体的变量传 `entity:"<实体名子串>"`（如 `关卡实体`）；'
+            + '要配置条目（职业/成长曲线/连段/状态）+ 阵营 + 资源树传 `kind:"defs"`；要节点声明表（自定义节点）传 `kind:"decls"`；要元件/实体/图/声明一起看传 `kind:"all"`；只要计数就别传参数（默认粗略档）。',
+        };
+        // 按 kind 决定回哪一块（默认 graphs；`all` 全给；给了 graph/entity 过滤就按过滤给明细）
+        const wantGraphs = kind === 'graphs' || kind === 'all' || !!gq;
+        const wantEnts = kind === 'entities' || kind === 'all' || !!eq;
+        const wantComps = kind === 'components' || kind === 'all';
+        if (wantGraphs) {
+          out.graphs = detailed ? graphs : undefined;
+          if (!detailed) out.graphsOmitted = graphs.length;
+        }
+        if (wantEnts) {
+          out.entities = detailed ? entities : entities.map((e) => ({ name: e.name, id: e.id, kindCode: e.kindCode, kindEcho: e.kindEcho, componentCount: e.componentCount, variableCount: e.variableCount }));
+          out.variablesOmitted = eq ? undefined : true;
+        }
+        if (wantComps) out.components = facts.components;
+        if (wantDeclsEarly) out.declarations = facts.declarations;
+        if (kind === 'defs' || kind === 'all') {
+          out.configCount = facts.configCount;
+          out.configs = facts.configs;
+          out.configLinked = facts.configLinked;
+          out.factions = facts.factions;
+          out.spawns = facts.spawns;
+          out.presets = facts.presets;
+          out.resourceCategories = facts.resourceCategories;
+          out.resourceTree = facts.resourceTree;
+          out.signalRefCount = facts.signalRefCount;
+          out.signalWords = facts.signalWords;
+        }
+        return out;
       }
       const gil = readGil(gilPath);
       if (!gil.ok) return { ok: false, op, path: gilPath, error: gil.error };

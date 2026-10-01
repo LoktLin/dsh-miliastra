@@ -39,6 +39,7 @@ export const SUITES = [
   { name: 'locate-test（当前活文件是谁 + 跨脚本不判）', args: ['tests/locate-test.mjs'] },
   { name: 'deploy-test（部署 / 备份 / 指纹 / 原子写）', args: ['tests/deploy-test.mjs'] },
   { name: 'read-source-test（op=read source=<绝对路径>：只读读取）', args: ['tests/read-source-test.mjs'] },
+  { name: 'gilnodes-test（节点图 / 实体自定义变量：合成 .gil 逐字段钉住 + 只读）', args: ['tests/gilnodes-test.mjs'] },
   { name: 'probe-deploy-test（试玩探针渲染 / 部署）', args: ['tests/probe-deploy-test.mjs'] },
   { name: 'handover-ledger-test（P2-8 交接值台账：不 set 不放行 / set 后自动带上 / 按关卡分）', args: ['tests/handover-ledger-test.mjs'] },
   { name: 'lualint-test（Lua 结构校验）', args: ['tests/lualint-test.mjs'] },
