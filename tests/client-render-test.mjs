@@ -2207,27 +2207,32 @@ check('★ 第二版 ④：节点声明**进节点图详情当字段**（能归�
   return '复合 1 / 引脚引用 1 / 全图 2（复合 1）+ 页面把它当字段 + "登记表 ≠ 玩法规则"说清';
 });
 
-check('★ 第二版 ⑤：关卡下拉 —— 换图后能指到那张图（无活文件的图 Host 永远不会选它）', () => {
+check('★ 第二版 ⑤：关卡选择 —— 默认「最近存盘的地图（.gil）」，可切 Host 口径 / 手选，手选会记住', () => {
   const { pane } = nodesPaneSource();
-  assert(/var lvArg = function \(\) \{ return levelSel \? \{ level: String\(levelSel\) \} : \{\}; \}/.test(pane),
-    '没有把"手选关卡"接进工具调用');
-  assert(/createElement\('select'/.test(pane) && /自动跟随（Host 判定/.test(pane), '缺关卡下拉（或没有"自动"那一项）');
+  // 三种口径：''=最近改动（面板自己算）／'@host'=Host 判定／<id>=手选
+  assert(/if \(levelSel === '@host'\) return \{\};/.test(pane) && /lvPickRecent/.test(pane),
+    '没有把"最近改动 / Host 口径 / 手选"接进工具调用');
+  assert(/lvPickRecent/.test(pane) && /lvGilMs\(b\) - lvGilMs\(a\)/.test(pane),
+    '缺"最近存盘"的取值逻辑（必须按 .gil 的 mtime，不是"任何文件最近"）');
+  assert(/gil && l\.gil\.mtime \? Date\.parse\(l\.gil\.mtime\)/.test(pane), '没有用 .gil 的 mtime（活文件被部署改过 ⇒ 不能当"人在编辑器里做的图"的判据）');
+  assert(/createElement\('select'/.test(pane), '缺关卡下拉');
+  assert(/最近存盘的地图（\.gil/.test(pane), '下拉里没有「最近存盘的地图」这一项（新默认）');
+  assert(/Host 判定的当前关卡（优先有活文件的图）/.test(pane), '下拉里没有「Host 判定」这一项');
   assert(/callTool\('miliastra_map', Object\.assign\(\{ op: 'nodes', kind: 'all', summaryOnly: false \}, lvArg\(\)\)\)/.test(pane),
-    '读这一页时没带上手选的关卡');
-  assert(/luaFiles \|\| \[\]\)\.length \? l\.luaFiles\.length \+ ' 个活文件' : '无活文件'/.test(pane), '下拉里没标"有没有活文件"（那是选不中的根因）');
-  // 根因提示：存盘更新但**没有活文件**的图会被点名
-  assert(/没有活文件\*\* ⇒ Host 的「当前关卡」不会选它/.test(pane), '没有点名提示"没有活文件的图不会被自动选中"');
-  // 手选的关卡要记住；并一直显示"Host 判定的当前关卡是哪个"（免得看着像当前图、其实是另一张）
+    '读这一页时没带上选定的关卡');
+  assert(/luaFiles \|\| \[\]\)\.length \? l\.luaFiles\.length \+ ' 个活文件' : '无活文件'/.test(pane), '下拉里没标"有没有活文件"（那是 Host 选不中的根因）');
+  // 手选记住 + 图旁写明"本次读的是谁、凭什么"
   assert(/NODES_LV_KEY = PLUGIN \+ ':nodes-level'/.test(pane), '手选关卡没有自己的存储键');
   assert(/storeSet\(NODES_LV_KEY, \{ v: e\.target\.value \|\| '' \}\)/.test(pane), '手选之后没记住');
-  assert(/storeGet\(NODES_LV_KEY\)/.test(pane) && /savedOk \? savedLv : ''/.test(pane), '下次打开没有读回手选的关卡（或没在图消失时回退到"自动"）');
-  assert(/Host 判定的当前关卡是 ' \+ props\.currentLevelId/.test(pane), '手选了别的图时，没有提示"Host 判定的当前关卡是哪个"');
+  assert(/storeGet\(NODES_LV_KEY\)/.test(pane) && /savedOk \? savedLv : ''/.test(pane), '下次打开没有读回手选的关卡（或没在图消失时回退）');
+  assert(/lvWhy\(\)/.test(pane) && /（最近改动）/.test(pane) && /（手选）/.test(pane), '没在图旁写明"本次读的是谁、凭什么"');
+  assert(/永远选不到它/.test(pane), 'Host 口径下没提示"最近改动的那张图 Host 永远选不到"');
   // 单位/时间两个小工具
   assert(clientExports.__testNodesBytesText(1956175) === '1.87 MB', '字节格式化不对：' + clientExports.__testNodesBytesText(1956175));
   assert(clientExports.__testNodesLevelOfPath('C:\\x\\Beyond_Local_Save_Level\\1073741829\\1073741829.gil') === '1073741829', '从路径取关卡 ID 不对');
   assert(clientExports.__testNodesLevelOfPath('C:\\x\\1073741830.gil') === '1073741830', 'root-gil 布局取关卡 ID 不对');
   assert(/^[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$/.test(clientExports.__testNodesShortTime(Date.now())), '时间格式不是 MM-DD HH:mm');
-  return '下拉 + 位置/活文件数/地图大小/存盘时间 + 点名提示 + 工具调用带 level';
+  return '默认最近存盘(.gil) + 可切 Host/手选 + 记忆 + 图旁写明依据';
 });
 
 check('★ 第 2 步 ②：节点名 / 坐标 / 出边 —— 命中给官方名、没命中如实说未知（合成数据）', () => {
