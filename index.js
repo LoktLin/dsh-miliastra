@@ -2366,6 +2366,8 @@ const TOOLS = [  {
           entityKindCodes: facts.entityKindCodes,
           entityKindLabels: facts.entityKindLabels,
           componentCount: facts.componentCount,
+          // ★ 截断如实报（作者 2026-10-02 抓到"元件只回 40 个"）：任何一块被截了都在这里说
+          truncated: facts.truncated,
           configCount: facts.configCount,
           signalRefCount: facts.signalRefCount,
           configLinked: facts.configLinked,

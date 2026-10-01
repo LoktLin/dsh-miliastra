@@ -11,7 +11,9 @@
  *
  * 用法：node tests/nodegraph-test.mjs
  */
+import fs from 'node:fs';
 import { readGilNodeFacts, readGraphMounts } from '../lib/gilnodes.mjs';
+import { parseMessage } from '../lib/wire.mjs';
 import { scanLevels, pickCurrent } from '../lib/locate.mjs';
 import {
   NODE_TYPE_LABELS, nodeTypeLabel, nodeTypeOf, nodeSideOf, typeStatsOf, triggersOf, refsSummaryOf,
@@ -226,6 +228,21 @@ await check('⑦ 真 `.gil`：逐图相加 == 整关（含覆盖率），且入�
   }
   eq(bad, 0, '入口里混进了非事件节点');
   const known = anatomies.reduce((s, a) => s + a.typeStats.known, 0);
+  // ★ 2026-10-02 加：计数**必须是数字**且**不许静默截断**（作者抓到"元件只回 40 个 / 声明数 undefined"）
+  for (const lv of scanLevels().filter((l) => l.gil && l.gil.path).slice(0, 4)) {
+    const f2 = readGilNodeFacts(lv.gil.path, {});
+    for (const k of ['graphCount', 'entityCount', 'componentCount', 'declarationCount', 'configCount']) {
+      assert(Number.isFinite(f2[k]), lv.levelId + ' 的 ' + k + ' 不是数字：' + f2[k]);
+    }
+    assert(f2.truncated && typeof f2.truncated === 'object', lv.levelId + ' 缺 truncated（截断要能看出来）');
+    // 元件区条目数必须与回执一致（除非**显式**说了截断）
+    const buf = fs.readFileSync(lv.gil.path);
+    const root = parseMessage(buf, 20, 20 + buf.readUInt32BE(16), 0);
+    const r4 = (root || []).find((x) => x.no === 4);
+    const raw = r4 && r4.sub ? r4.sub.filter((x) => x.no === 1).length : 0;
+    assert(raw === f2.componentCount || f2.truncated.components === true,
+      lv.levelId + '：元件区实际 ' + raw + ' 个，回执给 ' + f2.componentCount + ' 个，且没说截断');
+  }
   return lv.levelId + '：' + tot.graphs + ' 图 / ' + tot.nodes + ' 节点 / 出边 ' + tot.edges
     + '　' + tot.byTypeLabelText + '　词典覆盖 ' + known + '/' + tot.nodes + '（入口 ' + trig + ' 个，全为事件类）';
 });
