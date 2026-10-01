@@ -197,7 +197,17 @@ check('样式已注入 <style data-plugin="dsh-miliastra">，且带 id 便于回
   const s = styleNodes[0];
   assert(s.id === 'dsh-miliastra-style', 'style id 不对：' + s.id);
   assert(s.getAttribute('data-plugin') === 'dsh-miliastra', '缺 data-plugin 属性 —— 宿主无法按模块回收样式');
-  return 'style ' + s.textContent.length + ' 字符';
+  /*
+   * ★ 2026-10-02 回归：**样式要跟着 bundle 更新**（作者截图里"表格没样式、数字挤两行"的根因就是旧 <style> 活着）。
+   * 判据：注入时按 CSS 指纹比对；指纹不一致 ⇒ **把旧的删掉**再插新的。别再退回"有 id 就直接 return"。
+   */
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  assert(/data-sig/.test(s.getAttribute('data-sig') || '') || /existing\.getAttribute\('data-sig'\) === sig/.test(src),
+    '样式注入没有指纹比对（旧 CSS 会活下来 ⇒ 新 JS + 旧 CSS）');
+  assert(/if \(existing\) \{ try \{ existing\.remove\(\)/.test(src), '指纹不一致时没有删掉旧 <style>');
+  assert(!/if \(document\.getElementById\(STYLE_ID\)\) return function \(\) \{\};/.test(src),
+    '又退回"有 id 就直接 return"了 —— 那会让 CSS 永远不更新');
+  return 'style ' + s.textContent.length + ' 字符（含内容指纹 data-sig）';
 });
 
 check('**样式里没有裸色值**：每个 var(--dsw-*) 都带 fallback', () => {
