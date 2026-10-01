@@ -18,3 +18,12 @@ Copyright 2026 linyq / LoktLin
   - protobufjs         BSD-3-Clause
   - @napi-rs/canvas    MIT（含各平台预编译二进制）
   - pixi.js            MIT
+
+--------------------------------------------------------------------------------
+【节点词典数据】lib/nodedb.json
+  来源：Genshin-Impact-Miliastra-Wonderland-Code-Node-Editor-Pack（Node Editor Pack）
+        文件 utils/node_data/data.json（4.1 MB / 558 节点 / 274 枚举）
+  许可：MIT — Copyright 2025-2026 Wu-Yijun
+  处理：本插件用 tools/gen-nodedb.mjs **只挑选并压缩字段**（id / 中英名字 / 标识 / 服务端·客户端 / 分类 / 端口），
+        不改语义、不转许可；压缩后约 205 KB。上游是**逆向整理**的库（Schema: Skip），与 7.1 是否逐条一致未核。
+  ⚠️ 该词典的 id（<=300004）与 .gil 里"关卡内分配"的节点声明号**不是一套**，不能互相翻译。

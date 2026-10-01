@@ -51,6 +51,7 @@ import { lintLua, lintSummary } from './lib/lualint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
 import { readGilNodeFacts } from './lib/gilnodes.mjs';
+import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
   findErrorRecords, parseFileLine, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
 import {
@@ -2127,11 +2128,15 @@ const TOOLS = [
   {
     name: 'miliastra_map',
     description:
-      TITLE + '：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**（每条控件的「控件模板索引 / 名字 / 父 / 子」）——判断「哪些控件能被脚本动态创建」的唯一正解：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**，画布上摆的实例、以及模板控件的子节点，一律返回 nil。op=script 比对地图里嵌的脚本源码与本地活文件（并给 `belongsTo`/`isCurrent`：**`.gil` 是存盘那一刻的快照**，不是实时的）；op=strings 提取可读字符串（存盘前后 diff 用）。\n★ **op=nodes**：读**服务端节点图**与**实体自定义变量**（回答「节点图/原件有没有正确挂载」）。每条图给 类型/节点数/连线数/id；实体给 变量名/类型/是否公开。默认**粗略档**（计数 + 一行 `brief`），要明细传 `graph`/`entity`。⚠️ 字段号有出处**但未逐个真机确证**，不确定的原样回数字并进 `unverified`。\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列出全部映射（含 `mappingId` / `mounted`）；`embedded` = **按名字挑中本次那一份**（`embeddedPickedBy` 说明凭什么）。\n\n**典型调用**：`{"op":"summary"}`｜`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）｜`{"op":"nodes","graph":"关卡实体信号"}`（这张图挂上了没）｜`{"op":"nodes","entity":"关卡实体"}`（它的自定义变量）',
+      TITLE + '：读地图存档 `<关卡ID>.gil`（protobuf，含脚本源码快照）。op=summary 关卡/版本/账号/脚本映射；op=clientui **客户端控件谱系**（每条控件的「控件模板索引 / 名字 / 父 / 子」）——判断「哪些控件能被脚本动态创建」的唯一正解：**只有「无父节点」的独立控件（存为模板）才可能被 game.InstantiateClientUIControl 创建**，画布上摆的实例、以及模板控件的子节点，一律返回 nil。op=script 比对地图里嵌的脚本源码与本地活文件（并给 `belongsTo`/`isCurrent`：**`.gil` 是存盘那一刻的快照**，不是实时的）；op=strings 提取可读字符串（存盘前后 diff 用）。\n★ **op=nodedb**：查**官方节点词典**（558 节点：中英名字 / 标识 / 服务端·客户端 / 分类 / 端口；来源 = 参考项目 Pack `node_data`，MIT）—— 写节点图时的知识库。⚠️ 词典 id 与 `.gil` 里**关卡内分配的声明号不是一套**（对不上），所以它回答「官方有哪些节点、叫什么」，不能把地图里的号翻成名字。\n★ **op=nodes**：读**服务端节点图**与**实体自定义变量**（回答「节点图/原件有没有正确挂载」）。每条图给 类型/节点数/连线数/id；实体给 变量名/类型/是否公开。默认**粗略档**（计数 + 一行 `brief`），要明细传 `graph`/`entity`。⚠️ 字段号有出处**但未逐个真机确证**，不确定的原样回数字并进 `unverified`。\n★ **多脚本工程**：`op=script` 的 `mappings[]` 列出全部映射（含 `mappingId` / `mounted`）；`embedded` = **按名字挑中本次那一份**（`embeddedPickedBy` 说明凭什么）。\n\n**典型调用**：`{"op":"summary"}`｜`{"op":"clientui","summaryOnly":true}`（先看有没有可动态创建的模板）｜`{"op":"script"}`（跑的是不是本地这版）｜`{"op":"nodes","graph":"关卡实体信号"}`（这张图挂上了没）｜`{"op":"nodes","entity":"关卡实体"}`（它的自定义变量）',
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['summary', 'clientui', 'script', 'strings', 'nodes'], description: '默认 summary。' },
+        op: { type: 'string', enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'nodedb'], description: '默认 summary。' },
+        q: { type: 'string', description: 'op=nodedb：搜节点关键词（中/英/标识符；空格=AND）。不给 q 只回分类清单与计数。' },
+        nodeId: { type: 'number', description: 'op=nodedb：按**官方节点 id** 取一条（注意：与 .gil 里那种关卡内分配的声明号**不是一套**）。' },
+        system: { type: 'string', enum: ['Server', 'Client'], description: 'op=nodedb：只看服务端 / 客户端节点。' },
+        domain: { type: 'string', description: 'op=nodedb：按分类过滤（Execution / Control / Query / Arithmetic / Trigger …）。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡。' },
         file: { type: 'string', description: 'op=script：用哪个活文件比对（一个关卡可能有多个 .lua；省略=自动选；给了名字但不存在会报错并列出全部）。' },
         kind: { type: 'string', enum: ['graphs', 'entities', 'components', 'decls', 'defs', 'all'], description: 'op=nodes 看哪一块：默认 graphs（节点图）；entities=实体（含量与种类号）；components=元件；decls=节点声明表（自定义节点）；defs=配置条目（职业/成长曲线/连段/状态）+ 阵营 + 资源分类树；all=全给。' },
@@ -2150,6 +2155,32 @@ const TOOLS = [
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
       const op = String(args.op || 'summary');
+      // ★ op=nodedb 与地图无关（**不要求 .gil**）—— 词典是随包发的静态数据
+      if (op === 'nodedb') {
+        const meta = nodeDbMeta();
+        if (args.nodeId != null) {
+          const one = nodeById(Number(args.nodeId));
+          return {
+            ok: true, op, nodeId: Number(args.nodeId), found: !!one, node: one || undefined,
+            meta: { source: meta.project, license: meta.license, copyright: meta.copyright, dbVersion: meta.dbVersion, gameVersion: meta.gameVersion },
+            unverified: meta.unverified,
+            nextStep: one ? undefined : '这个号在词典里没有 —— 确认是**官方节点 id**（<=300004），不是 .gil 里的声明号。',
+          };
+        }
+        const r = searchNodes({ q: args.q || '', system: args.system, domain: args.domain, limit: args.limit });
+        const facets = nodeDbFacets();
+        const detail = args.summaryOnly !== true;
+        return {
+          ok: true, op, q: args.q || null, filter: { system: args.system || null, domain: args.domain || null },
+          total: r.total, returned: r.returned,
+          meta: { source: r.meta.project, license: r.meta.license, copyright: r.meta.copyright, dbVersion: r.meta.dbVersion, gameVersion: r.meta.gameVersion, counts: r.meta.counts },
+          facets: { domains: facets.domains, server: facets.server, client: facets.client },
+          nodes: detail ? r.rows : undefined,
+          nodesOmitted: detail ? undefined : r.total,
+          unverified: r.unverified,
+          nextStep: '搜关键词传 `q:"玩家实体"`（中英/标识符都行）；按分类过滤传 `domain:"Query"`；看客户端节点传 `system:"Client"`；要端口明细别传 summaryOnly（默认就给逐条端口：方向/标签/类型/shellIndex）。',
+        };
+      }
       const gilPath = args.path || (() => {
         const lv = resolveLevel(args.level);
         if (!lv.gil) throw new Error(`关卡 ${lv.levelId} 下没有 .gil。`);
@@ -2232,6 +2263,8 @@ const TOOLS = [
           out.presets = facts.presets;
           out.resourceCategories = facts.resourceCategories;
           out.resourceTree = facts.resourceTree;
+          out.semantics = facts.semantics;
+          out.semanticMeaningful = facts.semanticMeaningful;
           out.signalRefCount = facts.signalRefCount;
           out.signalWords = facts.signalWords;
         }
