@@ -2187,9 +2187,14 @@ check('★ 第二版 ④：节点声明**进节点图详情当字段**（能归�
   assert(empty.composite.length === 0 && empty.refs.length === 0 && empty.declTotal === 0, '没有声明时不该硬凑归属');
   const { pane } = nodesPaneSource();
   assert(/nodesDeclForGraph\(nodes, decls\)/.test(pane), '图详情没把节点声明算进来');
-  assert(/节点声明 · 全图 ' \+ df\.declTotal \+ ' 条/.test(pane), '图详情没有「节点声明」这个字段');
-  assert(/复合节点声明 \*\*/.test(pane) && /引脚引用的声明 \*\*/.test(pane), '没写清"能归到声明的有哪几种"');
-  return '复合 1 / 引脚引用 1 / 全图 2（复合 1）+ 页面把它当字段';
+  // ★ 措辞（作者 2026-10-02 纠正）：「全图 N 条」会在这页被读成"这张节点图里有 N 条"——
+  //   它其实是 **`.gil` 顶层 `#10.#4` 的关卡级登记表**，而且**不是玩法规则**，所以标题里要写清这两件事。
+  assert(/自定义节点声明 · 本关地图登记表 ' \+ df\.declTotal \+ ' 条/.test(pane), '图详情没有「自定义节点声明 · 本关地图登记表」这个字段');
+  assert(/#10\.#4/.test(pane) && /登记表/.test(pane) && /\*\*参考数据\*\*，不是玩法规则/.test(pane), '没写清它是 `#10.#4` 的登记表、且只是参考数据');
+  assert(/本图节点用到的：复合节点声明 \*\*/.test(pane) && /引脚引用的声明 \*\*/.test(pane), '没写清"本图用到的那几条"');
+  assert(/这张图没用到任何声明/.test(pane), '一条都没用到时，没有明说"只是参考/未使用"');
+  assert(!/节点声明 · 全图/.test(pane), '还留着"全图 N 条"那种会被误读的措辞');
+  return '复合 1 / 引脚引用 1 / 全图 2（复合 1）+ 页面把它当字段 + "登记表 ≠ 玩法规则"说清';
 });
 
 check('★ 第二版 ⑤：关卡下拉 —— 换图后能指到那张图（无活文件的图 Host 永远不会选它）', () => {
@@ -2317,7 +2322,7 @@ check('★ 第 2 步 ⑤：拿**真 .gil** 喂同一批判据（没有 .gil 就�
   const txt = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert(/节点表 · \d+ 个/.test(txt), '真数据渲染出来没有节点表');
   assert(txt.includes('官方名字命中'), '真数据渲染出来没有名字命中小计');
-  assert(txt.includes('节点声明 · 全图'), '真数据的图详情里没有「节点声明」字段（要求 ④）');
+  assert(txt.includes('自定义节点声明 · 本关地图登记表'), '真数据的图详情里没有「自定义节点声明」字段（要求 ④）');
   assert(!/undefined|NaN/.test(txt), '真数据渲染结果里出现了 undefined/NaN');
   // ② 再点一个节点 ⇒ "引脚与连线"这一屏也真渲染一遍
   if (withPins) {
@@ -2379,7 +2384,7 @@ check('★ 第二版 ②（渲染）：点开节点图 ⇒ 左栏是**三列表 
   assert(/上一页/.test(text) && /下一页/.test(text), '缺上下页按钮');
   // 右栏：图详情（字段 + 节点声明 + 节点表）
   assert(/图「甲图」/.test(text), '右栏没有图详情标题');
-  assert(/节点声明 · 全图 0 条/.test(text), '右栏没有「节点声明」字段');
+  assert(/自定义节点声明 · 本关地图登记表 0 条/.test(text), '右栏没有「自定义节点声明」字段');
   assert(/节点表 · 2 个/.test(text), '右栏没有节点表');
   assert(text.includes('#1 以GUID查询实体') || text.includes('#1　以GUID查询实体'), '节点表没画出节点名');
   assert(/\(-156\.5, -78\.[0-9]\)/.test(text), '节点表没画坐标');
