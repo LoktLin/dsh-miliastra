@@ -5,7 +5,8 @@
  * 作者的原话是「gui 界面也没看懂试玩探针作用」—— 那次就是因为没人以使用者视角读过一遍。
  *
  * 环境与 client-render-test.mjs 一致：最小 window/document + 真 react 的 SSR。
- * 用法: node tools/dump-panel-text.mjs [关键字，默认「试玩探针」]
+ * 用法: node tools/dump-panel-text.mjs [关键字，默认「试玩探针」] [--tab basic|advanced|sim|presets|pixel|grid]
+ *   `--tab` 选浮层里哪一页（默认 `basic`）；第六页「网格计算」用 `--tab grid`。
  */
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -77,9 +78,13 @@ const SAMPLE_UI = {
   rendered: '（略）',
 };
 
+const tabIdx = process.argv.indexOf('--tab');
+const TAB = tabIdx >= 0 && process.argv[tabIdx + 1] ? process.argv[tabIdx + 1] : 'basic';
+
 const html = req('react-dom/server').renderToStaticMarkup(
   React.createElement(exports_.__testPanel, {
     open: true, setOpen() {}, rootRef: { current: null },
+    __panelTab: TAB,
     __advOpen: process.argv.includes('--adv'),
     __logs: process.argv.includes('--logs') ? exports_.__testToLogRows(SAMPLE_LOGS) : [],
     __uiInfo: process.argv.includes('--ui') ? SAMPLE_UI : null,

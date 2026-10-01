@@ -1214,6 +1214,344 @@ check('操作时间线的一行：说清"什么时候、做了什么"（AI 照�
   return 'pointer / key / signal / 空输入 都对';
 });
 
+/*
+ * ============================ 第六页「网格计算」 ============================
+ * 2026-09-30 作者要求：真机 UGC 画布是 **1600 × 1000**（所有坐标按它设计），摆放模型时对不准位置，
+ * 所以面板里加一页网格计算。规则**改了**（相对工作区技能 `game-grid-mapper`）：
+ *   ① **不再要求步长整除画布**（旧 `grid.py` 除不尽直接 `ValueError` 拒绝建档）——
+ *      除不尽就如实报残多少，**界外那一条不算**（作者原话「我们就不管最后在界外的点了」）；
+ *   ② **X / Y 步长可以不同**（旧技能只有一个正方形 `cell`）；默认推荐 X 100 / Y 50。
+ * 这一页**纯前端计算**（一个工具都不调、不写文件），所以回归全落在纯函数 + 渲染 + 文案上。
+ */
+check('网格计算（纯函数）：默认 1600×1000 / X100 Y50 ⇒ 16×20 = 320 格，整除铺满', () => {
+  const P = clientExports.__testGridPlan;
+  assert(typeof P === 'function', '缺少 __testGridPlan（网格参数没有独立函数就无法回归）');
+  const g = P({ width: 1600, height: 1000, stepX: 100, stepY: 50 });
+  assert(g.ok === true, '默认参数应该合法：' + JSON.stringify(g));
+  assert(g.cols === 16 && g.rows === 20 && g.cells === 320, '格数不对：' + JSON.stringify(g));
+  assert(g.restX === 0 && g.restY === 0 && g.exact === true, '整除却报了残格：' + JSON.stringify(g));
+  assert(g.coverX === 1600 && g.coverY === 1000, '有效覆盖不对：' + JSON.stringify(g));
+  const ax = clientExports.__testGridAxisLine(g, 'x');
+  assert(/^X：1600 \/ 100 = 16\.0000/.test(ax), 'X 轴结论格式不对：' + ax);
+  assert(/整除/.test(ax), '整除了却没写「整除」：' + ax);
+  assert(clientExports.__testGridAxisLine(g, 'y').startsWith('Y：'), 'Y 轴结论没区分轴：' + clientExports.__testGridAxisLine(g, 'y'));
+  // 数字显示：不许出现浮点尾巴
+  assert(clientExports.__testGridNum(0.1 + 0.2) === '0.3', 'gridNum 没抹掉浮点尾巴：' + clientExports.__testGridNum(0.1 + 0.2));
+  assert(clientExports.__testGridNum('abc') === '?', 'gridNum 对非法输入没给占位：' + clientExports.__testGridNum('abc'));
+  return '16×20=320，整除铺满，X/Y 分开';
+});
+
+check('★ 除不尽**不再拒绝**：1600×1000 / X110 Y80 ⇒ 14×12 格，残 60/40，界外不算（作者给的例子）', () => {
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  assert(g.ok === true, '除不尽不该被拒（这正是这次要改的规则）：' + JSON.stringify(g));
+  assert(g.cols === 14 && g.rows === 12, '格数不对：' + JSON.stringify(g));
+  assert(g.restX === 60 && g.restY === 40, '残格不对（应 X 残 60 / Y 残 40）：' + JSON.stringify(g));
+  assert(g.coverX === 1540 && g.coverY === 960, '有效覆盖不对：' + JSON.stringify(g));
+  assert(g.cells === 168 && g.exact === false, '总格数/整除标记不对：' + JSON.stringify(g));
+  const ax = clientExports.__testGridAxisLine(g, 'x');
+  assert(/14\.5455/.test(ax), 'X 的比例没算对：' + ax);
+  assert(/残 60px/.test(ax), 'X 的残格没报出来：' + ax);
+  assert(/最后一格切不出来/.test(ax), '没说清"最后一格切不出来"：' + ax);
+  assert(/残 40px/.test(clientExports.__testGridAxisLine(g, 'y')), 'Y 的残格没报出来：' + clientExports.__testGridAxisLine(g, 'y'));
+  const lines = clientExports.__testGridSummaryLines(g);
+  assert(lines.length === 4, '结论应该有 4 行：' + JSON.stringify(lines));
+  assert(/14 × 12 = 168 格/.test(lines[2]), '结论里的格数行不对：' + lines[2]);
+  assert(/x\[0, 1540\)/.test(lines[2]) && /y\[0, 960\)/.test(lines[2]), '结论没写有效覆盖：' + lines[2]);
+  assert(/界外不算/.test(lines[3]) && /60px/.test(lines[3]) && /40px/.test(lines[3]), '界外那行不对：' + lines[3]);
+  return '14×12=168，残 60/40，界外=丢';
+});
+
+check('像素 → 格：三态（格内 / 残格 / 画布外）—— 残格要说清"落在第几格位置上"', () => {
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const F = clientExports.__testGridPixelToCell;
+  assert(typeof F === 'function', '缺 __testGridPixelToCell');
+  // ① 格内
+  const a = F(g, 880, 400);
+  assert(a.ok && a.state === 'in' && a.inGrid === true, '格内被判成界外：' + JSON.stringify(a));
+  assert(a.col === 8 && a.row === 5, '格号算错（880/110=8、400/80=5）：' + JSON.stringify(a));
+  assert(/覆盖 x\[880, 990\)/.test(a.note) && /中心 \(935, 440\)/.test(a.note), '格内结论不对：' + a.note);
+  // ② 右边残格：x ∈ [1540, 1600)
+  const b = F(g, 1550, 500);
+  assert(b.state === 'rest' && b.inGrid === false, '残格没被标成界外：' + JSON.stringify(b));
+  assert(b.col === null, '界外的点不该给一个"格号"（会误导）：' + JSON.stringify(b));
+  assert(/第 15 格位置上/.test(b.note) && /网格只有 14 格/.test(b.note), '残格没说清它落在不存在的第几格：' + b.note);
+  // ③ 下边残格：y ∈ [960, 1000)
+  assert(F(g, 500, 980).state === 'rest', '下边残格没被识别');
+  assert(/第 13 行位置上/.test(F(g, 500, 980).note), '下边残格的行号不对：' + F(g, 500, 980).note);
+  // ④ 画布外（含正好落在右下边界上的那个点）
+  const d = F(g, 1600, 1000);
+  assert(d.state === 'out' && /画布外/.test(d.note), '边界点没判成画布外：' + JSON.stringify(d));
+  assert(F(g, -1, 10).state === 'out', '负坐标没判成画布外');
+  // ⑤ 整除的那套里，右/下边界就是"画布外"，不该被说成残格
+  const ex = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 100, stepY: 50 });
+  assert(F(ex, 1600, 1000).state === 'out', '整除时边界点被说成了残格（残 0 不该叫残格）');
+  assert(F(ex, 0, 0).state === 'in' && F(ex, 0, 0).col === 0 && F(ex, 0, 0).row === 0, '原点不在 (0,0) 格里');
+  const bad = F(g, 'x', 1);
+  assert(bad.ok === false && /必须是数字/.test(bad.error), '非法像素没如实报错：' + JSON.stringify(bad));
+  return 'in/rest/out 三态 + 残格给"第几格位置" + 边界不误判';
+});
+
+check('格 → 像素：左上/中心/覆盖范围；列行越界**如实报合法范围**（不静默夹）', () => {
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const C = clientExports.__testGridCellToPixel;
+  const c = C(g, 8, 5);
+  assert(c.ok && c.x0 === 880 && c.y0 === 400 && c.x1 === 990 && c.y1 === 480, '范围算错：' + JSON.stringify(c));
+  assert(c.cx === 935 && c.cy === 440, '中心算错（X/Y 步长不同时最容易错）：' + JSON.stringify(c));
+  assert(/左上 \(880, 400\)/.test(c.note), '结论里没写左上：' + c.note);
+  // 数字字符串也要认（面板输入框给的就是字符串）
+  assert(C(g, '0', '0').ok === true && C(g, '0', '0').x1 === 110, '字符串列/行没认：' + JSON.stringify(C(g, '0', '0')));
+  const bad = C(g, 14, 0);
+  assert(bad.ok === false && /列 0~13/.test(bad.error) && /行 0~11/.test(bad.error), '越界没如实报合法范围：' + JSON.stringify(bad));
+  assert(C(g, 0, -1).ok === false, '负行号没被拒');
+  return '左上/中心/范围 + 越界报 0~13 / 0~11';
+});
+
+check('网格参数不合法：如实报错（不抛、不静默兜底）', () => {
+  const P = clientExports.__testGridPlan;
+  const cases = [
+    [{ width: 0, height: 1000, stepX: 100, stepY: 50 }, /画布宽\/高必须是正数/],
+    [{ width: 'abc', height: 1000, stepX: 100, stepY: 50 }, /画布宽\/高必须是正数/],
+    [{ width: 1600, height: 1000, stepX: 0, stepY: 50 }, /步长必须是正数/],
+    [{ width: 1600, height: 1000, stepX: 100, stepY: -5 }, /步长必须是正数/],
+    [{ width: 1600, height: 1000, stepX: 2000, stepY: 50 }, /步长比画布还大/],
+    [{}, /画布宽\/高必须是正数/],
+  ];
+  for (const [arg, re] of cases) {
+    const r = P(arg);
+    assert(r.ok === false && re.test(r.error), '这一档没如实报错：' + JSON.stringify(arg) + ' → ' + JSON.stringify(r));
+  }
+  // 非法参数喂给别的函数也不许炸：如实回 ok:false
+  assert(clientExports.__testGridCellToPixel({ ok: false, error: 'X' }, 0, 0).ok === false, '非法参数下 cellToPixel 没兜住');
+  assert(clientExports.__testGridTable({ ok: false, error: 'X' }).ok === false, '非法参数下 table 没兜住');
+  assert(clientExports.__testGridLines(null).ok === false, 'gridLines 对 null 没兜住');
+  assert(/网格参数不合法/.test(clientExports.__testGridSummaryLines({ ok: false, error: '画布 0' })[0]), '结论行没兜住非法参数');
+  return '6 档非法输入 + 下游函数兜底';
+});
+
+check('网格线与速查表都有上限：步长很小时**如实说明**，不把页面拖死', () => {
+  const dense = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 1, stepY: 1 });
+  assert(dense.ok === true && dense.cols === 1600, '1px 步长的计划应该仍然成立：' + JSON.stringify(dense));
+  const dl = clientExports.__testGridLines(dense);
+  assert(dl.cappedX === true && dl.cappedY === true, '1px 步长没触发线数上限（会画出 2600 条线）：' + JSON.stringify(dl));
+  assert(dl.xs.length === 0 && dl.d === '', '超上限时不该仍然生成线：' + dl.d.length);
+  assert(/线太多/.test(dl.note) && /1600/.test(dl.note), '超上限时没说清为什么没画线：' + dl.note);
+  const dt = clientExports.__testGridTable(dense, 200);
+  assert(dt.truncated === true && dt.rows.length === 0, '160 万格时不该真的建表：' + JSON.stringify({ t: dt.truncated, n: dt.rows.length }));
+  assert(dt.total === 1600000, '截断时没报总格数：' + dt.total);
+  // 正常档：线数 = 格数 + 1（每格一条 + 收尾那条）
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const ln = clientExports.__testGridLines(g);
+  assert(ln.cappedX === false && ln.xs.length === 15 && ln.ys.length === 13, '线数不对（14+1 / 12+1）：' + JSON.stringify({ x: ln.xs.length, y: ln.ys.length }));
+  assert(/^M0 0L0 1000M110 0L110 1000/.test(ln.d), 'path 的 d 起点不对（应逐条竖线：M<x> 0L<x> 1000）：' + ln.d.slice(0, 30));
+  const tb = clientExports.__testGridTable(g, 200);
+  assert(tb.truncated === false && tb.rows.length === 168, '168 格应该建表：' + JSON.stringify({ n: tb.rows.length, t: tb.truncated }));
+  assert(tb.rows[0].col === 0 && tb.rows[0].row === 0 && tb.rows[167].col === 13 && tb.rows[167].row === 11, '表顺序不对（应先行后列）：' + JSON.stringify([tb.rows[0], tb.rows[167]]));
+  const tsv = clientExports.__testGridTableTsv(tb);
+  const tsvLines = tsv.split('\n');
+  assert(/^col\trow\tx_left\ty_top/.test(tsvLines[0]), 'TSV 表头不对：' + tsvLines[0]);
+  assert(tsvLines.length === 169, 'TSV 行数不对（表头 + 168）：' + tsvLines.length);
+  assert(/^8\t5\t880\t400\t935\t440$/.test(tsvLines[1 + 5 * 14 + 8]), 'TSV 里格 (8,5) 那一行不对：' + tsvLines[1 + 5 * 14 + 8]);
+  return '1px 步长不画线/不建表且说明；168 格建表 + TSV 169 行';
+});
+
+check('★ 渲染：第六页「网格计算」能真渲染（参数 + 结论 + 双向换算 + 网格图 + 速查表）', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'grid' })));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  for (const label of ['画布宽 width', '画布高 height', 'X 步长 stepX', 'Y 步长 stepY', '结论', '像素 → 格', '格 → 像素', '复制结论', '复制速查表', '恢复默认', '网格图（点一下取坐标）']) {
+    assert(text.includes(label), '网格页缺内容：' + label);
+  }
+  // 默认值：1600 / 1000 / 100 / 50（作者要的推荐比例）
+  assert(/value="1600"/.test(html) && /value="1000"/.test(html), '默认画布尺寸没填 1600×1000');
+  assert(/value="100"/.test(html) && /value="50"/.test(html), '默认步长没填 X100 / Y50');
+  // 网格图：真的是 svg（不是占位），并且走的是本页的样式类
+  assert(/<svg[^>]*viewBox="0 0 1600 1000"/.test(html), '网格图不是 1600×1000 的 svg：' + html.slice(0, 200));
+  assert(/dsh-miliastra-gridsvg/.test(html), '网格图没有样式类（会渲染成裸 svg）');
+  // 默认 800/500 → 格 (8, 10)（100/50 步长下）
+  assert(/格 \(8, 10\)/.test(text), '默认像素 (800,500) 的换算结果没出现：' + (text.match(/格 \([^)]*\)/g) || []).join(' | '));
+  // 速查表：默认 320 格 > 200 ⇒ 不铺开、但要给总数
+  assert(/320 格/.test(text) && /太多不铺开/.test(text), '速查表超上限时没如实说：' + text.slice(0, 0));
+  // 网格页不该混进别的页
+  assert(!text.includes('① 关卡') && !text.includes('图片绝对路径'), '网格页混进了别的页的内容');
+  // 反过来：初级页不该出现网格页的内容
+  const basic = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'basic' })));
+  const bText = basic.replace(/<[^>]+>/g, ' ');
+  assert(!bText.includes('X 步长 stepX'), '初级页混进了网格页的内容');
+  return 'svg + 参数 + 换算 + 速查表上限提示都在；不串页';
+});
+
+check('★ 渲染（除不尽那一档）：残格画成琥珀、图例带实际数字、界外的点画圈而不是"点不动"', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
+  // 作者给的例子：1600×1000 / X110 Y80，像素 (1550,500) 正落在右边那条残格里
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
+    __gridInit: { width: 1600, height: 1000, stepX: 110, stepY: 80, px: 1550, py: 500 },
+  })));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  // ① 结论说清残多少
+  assert(/残 60px/.test(text) && /残 40px/.test(text), '除不尽那一档的结论没报残格：' + text.slice(0, 0));
+  assert(/14 × 12 = 168 格/.test(text), '格数不对：' + (text.match(/\d+ × \d+ = \d+ 格/) || []));
+  // ② 图里两块琥珀残格（右 + 下），外加 14+1 / 12+1 条格线
+  const amber = (html.match(/rgba\(251,191,36,\.22\)/g) || []).length;
+  assert(amber === 2, '残格琥珀块应该正好 2 块（右 + 下）：' + amber);
+  const linePath = html.match(/<path[^>]*d="M0 0L0 1000/);
+  assert(linePath, '格线 path 没画出来（除不尽那一档也要画线）：' + html.slice(0, 160));
+  // ③ 图例必须带**这一档的实际数字**（不然看图的人还得回头读结论）
+  assert(/琥珀块\/琥珀圈 = 残格（界外，不算）：右边 60px/.test(text), '图例没带实际残格数字：' + (text.match(/琥珀[^。]*。/) || []));
+  assert(/下边 40px/.test(text), '图例没提下边的残格：' + (text.match(/琥珀[^。]*。/) || []));
+  // ④ 界外的点：不画"格子高亮"，改画一个琥珀圈（否则图上什么都不动，人会以为点了没反应）
+  assert(/<circle[^>]*stroke="#fbbf24"/.test(html), '界外的点没有标记（图上不会有任何反应）');
+  assert(!/fill="rgba\(249,168,212,\.35\)"/.test(html), '界外的点不该高亮某一格（它根本不在格里）');
+  assert(/⚪ 像素 \(1550, 500\)[^<]*界外（残格）不算/.test(text), '界外判定的人话没渲染出来：' + (text.match(/像素 \(1550[^。]*。/) || []));
+  assert(/第 15 格位置上/.test(text), '没说清它落在不存在的第几格：' + (text.match(/第 \d+ 格位置/) || []));
+  // ⑤ 格内灰字坐标：168 格 ⇒ 168 个 `<text>`；**默认档是「中心像素」**（0,0 格的中心 = 55,40）
+  const texts = html.match(/<text/g) || [];
+  assert(texts.length === 168, '格内坐标标签数不对（应 168）：' + texts.length);
+  assert(/>55,40</.test(html) && />1485,920</.test(html), '默认（中心像素）档的格内坐标没画：' + (html.match(/>[\d,]+</g) || []).slice(0, 4).join(' '));
+  assert(/fill="#8fa6c4"/.test(html), '格内坐标不是灰色：' + (html.match(/fill="#[0-9a-f]{6}"/gi) || []).join(' '));
+  assert(/<g[^>]*pointer-events="none"/.test(html), '标签组没关掉命中测试（点文字会变成点标签，不是点图）');
+  // ⑤b 切成「格号」档 ⇒ 画的是 col,row
+  const cellHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
+    __gridInit: { width: 1600, height: 1000, stepX: 110, stepY: 80, px: 1550, py: 500, labelMode: 'cell' },
+  })));
+  assert(/>0,0</.test(cellHtml) && />13,11</.test(cellHtml), '切成「格号」档后没画 col,row：' + (cellHtml.match(/>[\d,]+</g) || []).slice(0, 4).join(' '));
+  assert(!/>55,40</.test(cellHtml), '切成「格号」档后还在画中心像素');
+  // ⑤c 切成「不显示」⇒ 一个 text 都不画
+  const offHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
+    __gridInit: { width: 1600, height: 1000, stepX: 110, stepY: 80, labelMode: 'off' },
+  })));
+  assert(!/<text/.test(offHtml), '「不显示」档仍然画了标签');
+  // ⑤ 速查表：168 格 ≤ 200 ⇒ 真的铺开（给逐格列表入口）
+  assert(/逐格速查表（全 168 格）/.test(text), '168 格应该能铺开速查表：' + (text.match(/速查表[^ ]*/g) || []));
+  // ⑥ 整除那一档：不画琥珀、图例说"铺满"
+  const exact = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
+    __gridInit: { width: 1600, height: 1000, stepX: 100, stepY: 50 },
+  })));
+  assert(!/rgba\(251,191,36,\.22\)/.test(exact), '整除那一档不该画琥珀残格');
+  assert(/这一档整除：画布铺满，没有残格/.test(exact.replace(/<[^>]+>/g, ' ')), '整除那一档的图例没说铺满');
+  return '2 块琥珀 + 图例带 60/40 + 界外画圈（不高亮）+ 速查表铺开；整除档无琥珀';
+});
+
+check('★ 格内灰字坐标（`gridLabels`）：每格标「经纬度」，**默认中心像素**，字号按格子算，太小/太多不画', () => {
+  const L = clientExports.__testGridLabels;
+  assert(typeof L === 'function', '缺 __testGridLabels（格内坐标标签无法回归）');
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 100, stepY: 50 });
+  // ① **默认档 = 中心像素**（作者 2026-10-01 定：摆模型要的是像素坐标）
+  assert(L(g).mode === 'center' && L(g, undefined).mode === 'center', '默认档不是「中心像素」：' + L(g).mode);
+  const b = L(g, 'center');
+  assert(b.ok === true && b.items.length === 320, '默认档应该每格一个标签：' + (b.items || []).length);
+  assert(b.items[0].text === '50,25' && b.items[0].x === 50 && b.items[0].y === 25, '第 0 格的标签/位置不对：' + JSON.stringify(b.items[0]));
+  const lastB = b.items[b.items.length - 1];
+  assert(lastB.text === '1550,975' && lastB.x === 1550 && lastB.y === 975, '最后一格的标签不对：' + JSON.stringify(lastB));
+  // ② 字号必须**塞得进本格**（宽 = 每字符系数 × 字号 ≤ stepX×0.9；高 ≤ stepY×0.62）
+  assert(b.fontSize > 0 && b.fontSize <= g.stepX * 0.9 / 3.8 + 1e-9, '字号超出格宽：' + b.fontSize);
+  assert(b.fontSize <= g.stepY * 0.62 + 1e-9, '字号超出格高：' + b.fontSize);
+  // ③ 「格号」档：同样的格心，但文字短 ⇒ 字号自动更大
+  const a = L(g, 'cell');
+  assert(a.items[0].text === '0,0' && a.items[319].text === '15,19', '格号档的标签不对：' + a.items[0].text + ' / ' + a.items[319].text);
+  assert(a.fontSize > b.fontSize, '格号更短，字号该更大：' + a.fontSize + ' vs ' + b.fontSize);
+  // ④ 除不尽那一档：标签跟着**实际格号**走（14×12，没有第 15 格）
+  const g2 = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const c = L(g2, 'cell');
+  assert(c.items.length === 168, '除不尽档的标签数不对：' + c.items.length);
+  assert(c.items[167].text === '13,11', '最后一格应该是 13,11：' + c.items[167].text);
+  assert(c.items[167].x === 1485 && c.items[167].y === 920, '最后一格的格心不对：' + JSON.stringify(c.items[167]));
+  assert(L(g2, 'center').items[167].text === '1485,920', '中心像素档的最后一格不对：' + L(g2, 'center').items[167].text);
+  // ⑤ 不显示 = 真的不画（不是空字符串）
+  assert(L(g, 'off').items.length === 0 && L(g, 'off').note === '', 'off 档不该生成标签');
+  assert(L(g, '没这个档').mode === 'center', '未知档要回落到默认（不静默乱画）');
+  // ⑥ 太多格 / 格子太小 ⇒ 不画，并**说清为什么**（画出来是糊的 = 骗人）
+  const many = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 20, stepY: 25 });
+  const dm = L(many, 'cell');
+  assert(dm.items.length === 0 && /格太多/.test(dm.note) && /3200/.test(dm.note), '格太多时没如实说明：' + JSON.stringify(dm.note));
+  // 格子太小：**格数没超**，但算出来的字号 <14 ⇒ 同样不画（1×50 格，Y 只有 20px）
+  const tiny = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 1600, stepY: 20 });
+  const dt = L(tiny, 'cell');
+  assert(tiny.cells === 50 && dt.items.length === 0 && /格子太小/.test(dt.note),
+    '格子太小时没如实说明：' + JSON.stringify({ cells: tiny.cells, note: dt.note }));
+  assert(L({ ok: false, error: 'X' }, 'cell').items.length === 0, '参数不合法时不该产出标签');
+  return '默认=中心像素（320 个标签）+ 格号档字号更大 + 除不尽档跟着实际格号 + 太多/太小不画并说明';
+});
+
+check('★ 选中行与复制（`gridSelectionLine`）：三种状态都说人话，界外的点不假装选中', () => {
+  const F = clientExports.__testGridSelectionLine;
+  assert(typeof F === 'function', '缺 __testGridSelectionLine');
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const P = clientExports.__testGridPixelToCell;
+  const inCell = P(g, 880, 400);
+  const sel = F(inCell);
+  assert(/^已选中：格 \(8, 5\)/.test(sel), '选中行的格式不对：' + sel);
+  assert(/覆盖 x\[880, 990\)/.test(sel) && /中心 \(935, 440\)/.test(sel), '选中行没给覆盖范围/中心（复制出去没法用）：' + sel);
+  const rest = F(P(g, 1550, 500));
+  assert(/^没选中格：/.test(rest) && /残格/.test(rest) && !/已选中/.test(rest), '残格被说成"选中"了：' + rest);
+  const out = F(P(g, 1600, 1000));
+  assert(/^没选中格：/.test(out) && /画布外/.test(out), '画布外那一档不对：' + out);
+  assert(/不合法/.test(F(null)), '参数不合法时没说清；' + F(null));
+  assert(/必须是数字/.test(F({ ok: false, error: '像素坐标必须是数字' })), '错误要原样透出：' + F({ ok: false, error: '像素坐标必须是数字' }));
+  // 渲染层：默认档是"选中"（800,500 落在格 (8,10) 里），复制按钮可点
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(/已选中：格 \(8, 10\)/.test(text), '默认档没渲染出"已选中"：' + (text.match(/已选中[^ ]*/) || []));
+  const btn = html.match(/<button[^>]*>复制选中的格<\/button>/);
+  assert(btn, '缺「复制选中的格」按钮');
+  assert(!/disabled/.test(btn[0]), '已经选中了格，复制按钮却是禁用的：' + btn[0]);
+  // 点在残格里 ⇒ 没有选中，按钮必须**禁用**（不能让人点了才被告知没选中）
+  // ⚠️ 步长也要给 110/80：默认 100/50 下 1550 落在第 15 格里（那是"选中"，不是残格）
+  const restHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { stepX: 110, stepY: 80, px: 1550, py: 500 } })));
+  const restBtn = restHtml.match(/<button[^>]*>复制选中的格<\/button>/);
+  assert(restBtn && /disabled/.test(restBtn[0]), '没选中格时复制按钮该禁用：' + (restBtn || [])[0]);
+  assert(/没选中格：这个点落在残格里/.test(restHtml.replace(/<[^>]+>/g, ' ')), '残格档没渲染出"没选中"那句');
+  return '选中/残格/画布外 三态 + 渲染出选中行与复制按钮（选中才可点）';
+});
+
+check('★ tab 条：六等分，第六档是「网格计算」', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'basic' })));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  for (const label of ['初级功能', '高级功能', '模拟器', '预制效果', '像素画', '网格计算']) {
+    assert(text.includes(label), 'tab 条缺这一档：' + label);
+  }
+  const btns = html.match(/dsh-miliastra-vtab[ "]/g) || [];
+  assert(btns.length === 6, '切换按钮应该是 6 个（含选中态）：' + btns.length);
+  const css = styleNodes[0].textContent;
+  assert(/dsh-miliastra-viewtabs\{[^}]*repeat\(6,/.test(css), 'tab 条不是六等分（repeat(6,…)）');
+  assert(/dsh-miliastra-gridsvg\{[^}]*width:100%/.test(css), '网格图没有自适应宽度 —— 点图取坐标的线性换算就失真了');
+  assert(Array.isArray(clientExports.__testGridPresets) && clientExports.__testGridPresets.length >= 2, '缺预设按钮表');
+  const labels = clientExports.__testGridPresets.map((p) => p.label).join(' | ');
+  assert(/X100\/Y50/.test(labels), '预设里没有推荐的 X100/Y50：' + labels);
+  assert(/X110\/Y80/.test(labels), '预设里没有作者那个"除不尽"的例子：' + labels);
+  // 「点图取坐标」不许把 y 翻转（设计画布是 y 向下；左下原点那套是引擎内部舞台，别混用）
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  assert(/e\.clientY - r\.top/.test(src), '网格图的取点没按"y 向下"算（应该是 clientY - rect.top）');
+  assert(!/r\.bottom - e\.clientY/.test(src), '网格图里混进了引擎那套"左下原点"的翻转写法（两套坐标系不许混用）');
+  return '6 档 + repeat(6) + 预设 + 取点不翻转';
+});
+
+check('网格页文案：不许有 Markdown 记号（面板不渲染 Markdown），且复制正文自洽', () => {
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const p = clientExports.__testGridPixelToCell(g, 1550, 500);
+  const c = clientExports.__testGridCellToPixel(g, 8, 5);
+  const texts = clientExports.__testGridSummaryLines(g).concat([p.note, c.note]);
+  for (const t of texts) {
+    assert(!/\*\*/.test(t) && !/`/.test(t), '网格文案里混进了 Markdown 记号（会原样显示）：' + t);
+  }
+  // 渲染出来的整页也不许有（面板不认识 Markdown）
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' }));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  const gridBlock = text.slice(text.indexOf('画布与步长'), text.indexOf('网格图（点一下取坐标）'));
+  const stars = gridBlock.match(/\*\*[^*]{1,40}\*\*/g);
+  assert(!stars, '网格页渲染出来的文案里有 Markdown 记号：' + (stars || []).join(' | '));
+  assert(!/`/.test(gridBlock), '网格页渲染出来的文案里有反引号');
+  // 一键复制的正文：参数 + 结论 + 当前两个换算
+  const copy = clientExports.__testGridCopyText(g, p, c);
+  assert(/网格计算（画布 1600 × 1000，步长 X 110 \/ Y 80）/.test(copy), '复制正文没带参数：' + copy.split('\n')[0]);
+  assert(/残 60px/.test(copy) && /界外不算/.test(copy), '复制正文没带结论：' + copy);
+  assert(/格 \(8, 5\)/.test(copy) && /第 15 格位置上/.test(copy), '复制正文没带当前两个换算：' + copy);
+  return '结论/换算/整页都无 Markdown 记号；复制正文 7 行自洽';
+});
+
 console.log('');
 if (failures.length) {
   console.log('====== 失败明细 ======');
