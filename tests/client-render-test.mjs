@@ -1354,30 +1354,42 @@ check('网格线与速查表都有上限：步长很小时**如实说明**，不
   return '1px 步长不画线/不建表且说明；168 格建表 + TSV 169 行';
 });
 
-check('★ 渲染：第六页「网格计算」能真渲染（参数 + 结论 + 双向换算 + 网格图 + 速查表）', () => {
+check('★ 渲染：第六页「网格计算」能真渲染（参数 + 结论放大 + 网格图 + 多选列表）', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'grid' })));
   const text = html.replace(/<[^>]+>/g, ' ');
-  for (const label of ['画布宽 width', '画布高 height', 'X 步长 stepX', 'Y 步长 stepY', '结论', '像素 → 格', '格 → 像素', '复制结论', '复制速查表', '恢复默认', '网格图（点一下取坐标）']) {
+  for (const label of ['画布宽 width', '画布高 height', 'X 步长 stepX', 'Y 步长 stepY', '结论', '复制结论', '恢复默认', '网格图（点一下选中/取消这一格）', '选中的格（0）']) {
     assert(text.includes(label), '网格页缺内容：' + label);
   }
+  // ★ 作者 2026-10-01 要求**隐掉**的三样：速查表 / 像素 → 格 / 格 → 像素
+  for (const nope of ['逐格速查表', '像素 → 格', '格 → 像素', '复制速查表', '像素 x（右增）', '列 col（0 起）']) {
+    assert(!text.includes(nope), '作者要求隐掉的东西还在界面上：' + nope);
+  }
+  // ★ 作者要求删掉的两处小字：画布与步长卡片底部那段、网格图下面的图例
+  assert(!/步长不用整除/.test(text), '「画布与步长」底部那段说明没删掉');
+  assert(!/坐标口径 = 画布左上/.test(text), '「画布与步长」底部的口径说明没删掉');
+  assert(!/灰字 = 每一格的坐标/.test(text), '网格图下面的图例小字没删掉');
+  assert(!/该格中心像素（与格内灰字一致）/.test(text), '复制格式那段小字没删掉');
+  // ★ 结论字体放大：用专门的类（不再跟着 -log 的 10.5px 小字走）
+  assert(/dsh-miliastra-gridsum/.test(html), '结论没有用放大的字号类');
+  const css = styleNodes[0].textContent;
+  assert(/dsh-miliastra-gridsum\{[^}]*font-size:14px/.test(css), '结论字号没放大到 14px');
   // 默认值：1600 / 1000 / 100 / 50（作者要的推荐比例）
   assert(/value="1600"/.test(html) && /value="1000"/.test(html), '默认画布尺寸没填 1600×1000');
   assert(/value="100"/.test(html) && /value="50"/.test(html), '默认步长没填 X100 / Y50');
   // 网格图：真的是 svg（不是占位），并且走的是本页的样式类
   assert(/<svg[^>]*viewBox="0 0 1600 1000"/.test(html), '网格图不是 1600×1000 的 svg：' + html.slice(0, 200));
   assert(/dsh-miliastra-gridsvg/.test(html), '网格图没有样式类（会渲染成裸 svg）');
-  // 默认 800/500 → 格 (8, 10)（100/50 步长下）
-  assert(/格 \(8, 10\)/.test(text), '默认像素 (800,500) 的换算结果没出现：' + (text.match(/格 \([^)]*\)/g) || []).join(' | '));
-  // 速查表：默认 320 格 > 200 ⇒ 不铺开、但要给总数
-  assert(/320 格/.test(text) && /太多不铺开/.test(text), '速查表超上限时没如实说：' + text.slice(0, 0));
+  // 多选列表：空选中 ⇒ 两个按钮禁用，且不渲染行
+  const allBtn = html.match(/<button[^>]*>复制全部（x,y 列表）<\/button>/);
+  assert(allBtn && /disabled/.test(allBtn[0]), '空选中时「复制全部」该禁用');
   // 网格页不该混进别的页
   assert(!text.includes('① 关卡') && !text.includes('图片绝对路径'), '网格页混进了别的页的内容');
   // 反过来：初级页不该出现网格页的内容
   const basic = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'basic' })));
   const bText = basic.replace(/<[^>]+>/g, ' ');
   assert(!bText.includes('X 步长 stepX'), '初级页混进了网格页的内容');
-  return 'svg + 参数 + 换算 + 速查表上限提示都在；不串页';
+  return '网格图 + 结论放大 + 三样已隐 + 两处小字已删；不串页';
 });
 
 check('★ 渲染（除不尽那一档）：残格画成琥珀、图例带实际数字、界外的点画圈而不是"点不动"', () => {
@@ -1395,67 +1407,81 @@ check('★ 渲染（除不尽那一档）：残格画成琥珀、图例带实际
   assert(amber === 2, '残格琥珀块应该正好 2 块（右 + 下）：' + amber);
   const linePath = html.match(/<path[^>]*d="M0 0L0 1000/);
   assert(linePath, '格线 path 没画出来（除不尽那一档也要画线）：' + html.slice(0, 160));
-  // ③ 图例必须带**这一档的实际数字**（不然看图的人还得回头读结论）
-  assert(/琥珀块\/琥珀圈 = 残格（界外，不算）：右边 60px/.test(text), '图例没带实际残格数字：' + (text.match(/琥珀[^。]*。/) || []));
-  assert(/下边 40px/.test(text), '图例没提下边的残格：' + (text.match(/琥珀[^。]*。/) || []));
+  // ③ 图例那句**已按作者要求删掉**（"网格图的小字不要"）；残格的数字只在**结论**里说
+  assert(!/琥珀块/.test(text), '图例小字又回来了（作者要求删掉）：' + (text.match(/琥珀[^。]*。/) || []));
   // ④ 界外的点：不画"格子高亮"，改画一个琥珀圈（否则图上什么都不动，人会以为点了没反应）
   assert(/<circle[^>]*stroke="#fbbf24"/.test(html), '界外的点没有标记（图上不会有任何反应）');
   assert(!/fill="rgba\(249,168,212,\.35\)"/.test(html), '界外的点不该高亮某一格（它根本不在格里）');
-  assert(/⚪ 像素 \(1550, 500\)[^<]*界外（残格）不算/.test(text), '界外判定的人话没渲染出来：' + (text.match(/像素 \(1550[^。]*。/) || []));
+  assert(/像素 \(1550, 500\)[^<]*界外（残格）不算/.test(text), '界外判定的人话没渲染出来：' + (text.match(/像素 \(1550[^。]*。/) || []));
   assert(/第 15 格位置上/.test(text), '没说清它落在不存在的第几格：' + (text.match(/第 \d+ 格位置/) || []));
-  // ⑤ 格内灰字坐标：168 格 ⇒ 168 个 `<text>`；**默认档是「中心像素」**（0,0 格的中心 = 55,40）
+  // ⑤ 格内灰字坐标：168 格 ⇒ 168 个 `<text>`；**x,y 与「取哪一角」联动**（默认右下：0,0 格 = 110,80）
   const texts = html.match(/<text/g) || [];
   assert(texts.length === 168, '格内坐标标签数不对（应 168）：' + texts.length);
-  assert(/>55,40</.test(html) && />1485,920</.test(html), '默认（中心像素）档的格内坐标没画：' + (html.match(/>[\d,]+</g) || []).slice(0, 4).join(' '));
+  assert(/>110,80</.test(html) && />1540,960</.test(html), '默认（右下）档的格内坐标没画：' + (html.match(/>[\d,]+</g) || []).slice(0, 4).join(' '));
   assert(/fill="#8fa6c4"/.test(html), '格内坐标不是灰色：' + (html.match(/fill="#[0-9a-f]{6}"/gi) || []).join(' '));
   assert(/<g[^>]*pointer-events="none"/.test(html), '标签组没关掉命中测试（点文字会变成点标签，不是点图）');
+  // ⑤a ★ 联动：把角切成「左上」⇒ 格内灰字跟着变成左上角坐标（0,0 格 = 0,0）
+  const tlHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
+    __gridInit: { width: 1600, height: 1000, stepX: 110, stepY: 80, anchor: 'tl' },
+  })));
+  assert(/>0,0</.test(tlHtml) && />1430,880</.test(tlHtml), '切成左上角后格内坐标没联动：' + (tlHtml.match(/>[\d,]+</g) || []).slice(0, 4).join(' '));
+  // ⚠️ 不能拿 '110,80' 当反例 —— 那正好也是「格 (1,0) 的左上角」；用右下档独有的末格值来判断
+  assert(!/>1540,960</.test(tlHtml), '切成左上角后还在画右下角坐标（末格 1540,960 不该出现）');
   // ⑤b 切成「格号」档 ⇒ 画的是 col,row
   const cellHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
     __gridInit: { width: 1600, height: 1000, stepX: 110, stepY: 80, px: 1550, py: 500, labelMode: 'cell' },
   })));
   assert(/>0,0</.test(cellHtml) && />13,11</.test(cellHtml), '切成「格号」档后没画 col,row：' + (cellHtml.match(/>[\d,]+</g) || []).slice(0, 4).join(' '));
-  assert(!/>55,40</.test(cellHtml), '切成「格号」档后还在画中心像素');
+  assert(!/>110,80</.test(cellHtml), '切成「格号」档后还在画坐标');
   // ⑤c 切成「不显示」⇒ 一个 text 都不画
   const offHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
     __gridInit: { width: 1600, height: 1000, stepX: 110, stepY: 80, labelMode: 'off' },
   })));
   assert(!/<text/.test(offHtml), '「不显示」档仍然画了标签');
-  // ⑤ 速查表：168 格 ≤ 200 ⇒ 真的铺开（给逐格列表入口）
-  assert(/逐格速查表（全 168 格）/.test(text), '168 格应该能铺开速查表：' + (text.match(/速查表[^ ]*/g) || []));
-  // ⑥ 整除那一档：不画琥珀、图例说"铺满"
+  // ⑤d 速查表**已按作者要求从 GUI 隐掉**（代码与纯函数还在，只是不渲染）
+  assert(!/逐格速查表/.test(text) && !/复制速查表/.test(text), '速查表又回到界面上了（作者要求隐藏）');
+  // ⑥ 整除那一档：不画琥珀
   const exact = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, {
     __gridInit: { width: 1600, height: 1000, stepX: 100, stepY: 50 },
   })));
   assert(!/rgba\(251,191,36,\.22\)/.test(exact), '整除那一档不该画琥珀残格');
-  assert(/这一档整除：画布铺满，没有残格/.test(exact.replace(/<[^>]+>/g, ' ')), '整除那一档的图例没说铺满');
-  return '2 块琥珀 + 图例带 60/40 + 界外画圈（不高亮）+ 速查表铺开；整除档无琥珀';
+  return '2 块琥珀 + 无图例小字 + 界外画圈（不高亮）+ 速查表已隐；整除档无琥珀';
 });
 
-check('★ 格内灰字坐标（`gridLabels`）：每格标「经纬度」，**默认中心像素**，字号按格子算，太小/太多不画', () => {
+check('★ 格内灰字坐标（`gridLabels`）：每格标「经纬度」，**x,y 与「取哪一角」联动**，字号按最长文本算', () => {
   const L = clientExports.__testGridLabels;
   assert(typeof L === 'function', '缺 __testGridLabels（格内坐标标签无法回归）');
   const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 100, stepY: 50 });
-  // ① **默认档 = 中心像素**（作者 2026-10-01 定：摆模型要的是像素坐标）
-  assert(L(g).mode === 'center' && L(g, undefined).mode === 'center', '默认档不是「中心像素」：' + L(g).mode);
+  // ① 默认档 = 坐标 x,y，且**跟着「取哪一角」走**（默认右下）：100/50 的格 (0,0) 右下 = (100,50)
+  assert(L(g).mode === 'center' && L(g, undefined).mode === 'center', '默认档不是坐标档：' + L(g).mode);
   const b = L(g, 'center');
   assert(b.ok === true && b.items.length === 320, '默认档应该每格一个标签：' + (b.items || []).length);
-  assert(b.items[0].text === '50,25' && b.items[0].x === 50 && b.items[0].y === 25, '第 0 格的标签/位置不对：' + JSON.stringify(b.items[0]));
+  assert(b.items[0].text === '100,50' && b.items[0].x === 50 && b.items[0].y === 25, '第 0 格的标签不对（默认右下）：' + JSON.stringify(b.items[0]));
   const lastB = b.items[b.items.length - 1];
-  assert(lastB.text === '1550,975' && lastB.x === 1550 && lastB.y === 975, '最后一格的标签不对：' + JSON.stringify(lastB));
-  // ② 字号必须**塞得进本格**（宽 = 每字符系数 × 字号 ≤ stepX×0.9；高 ≤ stepY×0.62）
-  assert(b.fontSize > 0 && b.fontSize <= g.stepX * 0.9 / 3.8 + 1e-9, '字号超出格宽：' + b.fontSize);
+  assert(lastB.text === '1600,1000', '最后一格（右下）该是 1600,1000：' + lastB.text);
+  // ★ 联动：换角 ⇒ 同一格的文本跟着换（格心位置不变）
+  const corners = { tl: '0,0', tr: '100,0', bl: '0,50', br: '100,50' };
+  for (const [id, want] of Object.entries(corners)) {
+    const it = L(g, 'center', id).items[0];
+    assert(it.text === want && it.x === 50 && it.y === 25, '角 ' + id + ' 的标签该是 ' + want + '：' + JSON.stringify(it));
+  }
+  assert(L(g, 'center', '没这个角').items[0].text === '100,50', '未知角没回落到右下');
+  // ② 字号必须**塞得进本格**（宽按**真实最长文本**算：'1600,1000' 是 9 个字符）
+  assert(b.maxLen === 9, '最长文本长度算错：' + b.maxLen);
+  assert(b.fontSize > 0 && b.fontSize <= g.stepX * 0.9 / (b.maxLen * 0.58) + 1e-9, '字号超出格宽：' + b.fontSize);
   assert(b.fontSize <= g.stepY * 0.62 + 1e-9, '字号超出格高：' + b.fontSize);
-  // ③ 「格号」档：同样的格心，但文字短 ⇒ 字号自动更大
+  // ③ 「格号」档：文本短（'15,19' = 5）⇒ 字号自动更大
   const a = L(g, 'cell');
   assert(a.items[0].text === '0,0' && a.items[319].text === '15,19', '格号档的标签不对：' + a.items[0].text + ' / ' + a.items[319].text);
-  assert(a.fontSize > b.fontSize, '格号更短，字号该更大：' + a.fontSize + ' vs ' + b.fontSize);
-  // ④ 除不尽那一档：标签跟着**实际格号**走（14×12，没有第 15 格）
+  assert(a.maxLen === 5 && a.fontSize > b.fontSize, '格号更短，字号该更大：' + a.fontSize + ' vs ' + b.fontSize);
+  // ④ 除不尽那一档：标签跟着**实际格号/实际坐标**走（14×12，没有第 15 格）
   const g2 = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
   const c = L(g2, 'cell');
   assert(c.items.length === 168, '除不尽档的标签数不对：' + c.items.length);
   assert(c.items[167].text === '13,11', '最后一格应该是 13,11：' + c.items[167].text);
   assert(c.items[167].x === 1485 && c.items[167].y === 920, '最后一格的格心不对：' + JSON.stringify(c.items[167]));
-  assert(L(g2, 'center').items[167].text === '1485,920', '中心像素档的最后一格不对：' + L(g2, 'center').items[167].text);
+  assert(L(g2, 'center').items[167].text === '1540,960', '右下档最后一格该是 1540,960（不是画布边 1600/1000）：' + L(g2, 'center').items[167].text);
+  assert(L(g2, 'center', 'tl').items[167].text === '1430,880', '左上档最后一格不对：' + L(g2, 'center', 'tl').items[167].text);
   // ⑤ 不显示 = 真的不画（不是空字符串）
   assert(L(g, 'off').items.length === 0 && L(g, 'off').note === '', 'off 档不该生成标签');
   assert(L(g, '没这个档').mode === 'center', '未知档要回落到默认（不静默乱画）');
@@ -1469,40 +1495,288 @@ check('★ 格内灰字坐标（`gridLabels`）：每格标「经纬度」，**�
   assert(tiny.cells === 50 && dt.items.length === 0 && /格子太小/.test(dt.note),
     '格子太小时没如实说明：' + JSON.stringify({ cells: tiny.cells, note: dt.note }));
   assert(L({ ok: false, error: 'X' }, 'cell').items.length === 0, '参数不合法时不该产出标签');
-  return '默认=中心像素（320 个标签）+ 格号档字号更大 + 除不尽档跟着实际格号 + 太多/太小不画并说明';
+  return 'x,y 与「取哪一角」联动（四角 + 未知回落）+ 按最长文本定字号 + 除不尽档跟实际格号/坐标';
 });
 
-check('★ 选中行与复制（`gridSelectionLine`）：三种状态都说人话，界外的点不假装选中', () => {
-  const F = clientExports.__testGridSelectionLine;
-  assert(typeof F === 'function', '缺 __testGridSelectionLine');
+check('★ 「当前点」那一行（`gridPointLine`）：三种状态都说人话，界外的不假装在格里', () => {
+  const F = clientExports.__testGridPointLine;
+  assert(typeof F === 'function', '缺 __testGridPointLine');
   const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
   const P = clientExports.__testGridPixelToCell;
-  const inCell = P(g, 880, 400);
-  const sel = F(inCell);
-  assert(/^已选中：格 \(8, 5\)/.test(sel), '选中行的格式不对：' + sel);
-  assert(/覆盖 x\[880, 990\)/.test(sel) && /中心 \(935, 440\)/.test(sel), '选中行没给覆盖范围/中心（复制出去没法用）：' + sel);
+  const sel = F(P(g, 880, 400));
+  assert(/^当前点：格 \(8, 5\)/.test(sel), '当前点那一行的格式不对：' + sel);
+  assert(/覆盖 x\[880, 990\)/.test(sel) && /中心 \(935, 440\)/.test(sel), '当前点没给覆盖范围/中心：' + sel);
   const rest = F(P(g, 1550, 500));
-  assert(/^没选中格：/.test(rest) && /残格/.test(rest) && !/已选中/.test(rest), '残格被说成"选中"了：' + rest);
+  assert(/^像素 \(1550, 500\)/.test(rest) && /界外（残格）不算/.test(rest), '残格那一行没给"点在哪儿"：' + rest);
   const out = F(P(g, 1600, 1000));
-  assert(/^没选中格：/.test(out) && /画布外/.test(out), '画布外那一档不对：' + out);
+  assert(/^像素 \(1600, 1000\)/.test(out) && /画布外/.test(out), '画布外那一档不对：' + out);
   assert(/不合法/.test(F(null)), '参数不合法时没说清；' + F(null));
   assert(/必须是数字/.test(F({ ok: false, error: '像素坐标必须是数字' })), '错误要原样透出：' + F({ ok: false, error: '像素坐标必须是数字' }));
-  // 渲染层：默认档是"选中"（800,500 落在格 (8,10) 里），复制按钮可点
+  return '格内/残格/画布外 三态 + 非法输入';
+});
+
+check('★ 多选（`gridSelToggle` / `gridSelRows` / `gridSelLua`）：点格子切换、列表逐行、一起复制的格式是作者给的那个', () => {
+  const T = clientExports.__testGridSelToggle;
+  const R = clientExports.__testGridSelRows;
+  const Lua = clientExports.__testGridSelLua;
+  assert(typeof T === 'function' && typeof R === 'function' && typeof Lua === 'function', '缺多选三件套');
+  // ① 点一格 = 加入；再点同一格 = 移出（这就是"多选"的开关）
+  let sel = T([], 8, 10);
+  assert(JSON.stringify(sel) === JSON.stringify([{ col: 8, row: 10 }]), '第一次点没加入：' + JSON.stringify(sel));
+  sel = T(sel, 9, 10);
+  assert(sel.length === 2 && sel[1].col === 9, '第二次点没加进去（多选失败）：' + JSON.stringify(sel));
+  sel = T(sel, 8, 10);
+  assert(JSON.stringify(sel) === JSON.stringify([{ col: 9, row: 10 }]), '再点同一格没移出：' + JSON.stringify(sel));
+  // 不改入参、坏项丢掉
+  const orig = [{ col: 1, row: 2 }];
+  T(orig, 3, 4);
+  assert(orig.length === 1, 'gridSelToggle 改了入参（React 状态会被就地改坏）');
+  assert(T([{ col: 'x' }, null, { col: 5, row: 6 }], 7, 8).length === 2, '坏项没被丢掉：' + JSON.stringify(T([{ col: 'x' }, null, { col: 5, row: 6 }], 7, 8)));
+  // ② ★ 四角（作者 2026-10-01：「增加四角下拉选择…默认是右下」）：110/80 下格 (8,5) 覆盖 x[880,990) y[400,480)
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const corners = { br: [990, 480], bl: [880, 480], tl: [880, 400], tr: [990, 400] };
+  for (const [id, xy] of Object.entries(corners)) {
+    const r = R(g, [{ col: 8, row: 5 }], id)[0];
+    assert(r.ok && r.x === xy[0] && r.y === xy[1], '角 ' + id + ' 取错了：' + JSON.stringify(r));
+  }
+  // 默认（不传 anchor）= 右下
+  const dft = R(g, [{ col: 8, row: 5 }])[0];
+  assert(dft.x === 990 && dft.y === 480 && dft.anchor === 'br', '默认不是右下：' + JSON.stringify(dft));
+  assert(dft.anchorName === '右下', '没回角的显示名：' + dft.anchorName);
+  // 未知角回落成默认（不静默取一个奇怪的角）
+  assert(R(g, [{ col: 8, row: 5 }], '没这个角')[0].x === 990, '未知角没回落到右下');
+  const rows = R(g, [{ col: 8, row: 5 }, { col: 0, row: 0 }], 'tl');
+  assert(rows.length === 2 && rows[0].x === 880 && rows[0].y === 400, '左上角取错：' + JSON.stringify(rows[0]));
+  assert(rows[1].x === 0 && rows[1].y === 0, '格 (0,0) 的左上角该是 (0,0)：' + JSON.stringify(rows[1]));
+  // ③ ★ 一起复制的格式 = 作者给的那个（**逐字节**对，含 `, ` / ` }` / 换行）
+  const two = Lua([{ ok: true, x: 730, y: 460 }, { ok: true, x: 840, y: 540 }]);
+  assert(two === '[{x = 730, y = 460 },\n{x = 840, y = 540 }]',
+    '一起复制的格式与作者给的不一致：\n' + JSON.stringify(two));
+  assert(Lua([]) === '[]', '空选中该给 []：' + Lua([]));
+  assert(Lua([{ ok: true, x: 55, y: 40 }]) === '[{x = 55, y = 40 }]', '单个的格式不对：' + Lua([{ ok: true, x: 55, y: 40 }]));
+  // 不可用的行**不许**写进复制正文（复制出去的东西必须能用）
+  assert(Lua([{ ok: true, x: 1, y: 2 }, { ok: false, error: '没有这个格' }]) === '[{x = 1, y = 2 }]',
+    '失效的行混进了复制正文：' + Lua([{ ok: true, x: 1, y: 2 }, { ok: false, error: '没有这个格' }]));
+  // ④ 网格改小 ⇒ 原来选的格不再存在：那一行 ok:false 且**说清为什么**（不静默丢、不拿邻近格顶替）
+  //    ⚠️ 用 110/80 那一档：它只有 14 列 / 12 行，col 15 是"没有这一格"
+  const bad = R(g, [{ col: 15, row: 19 }, { col: 3, row: 3 }]);
+  assert(bad[0].ok === false && /列 0~13/.test(bad[0].error), '失效的那行没如实报错：' + JSON.stringify(bad[0]));
+  assert(bad[1].ok === true, '有效的那行被误判失效：' + JSON.stringify(bad[1]));
+  assert(R({ ok: false, error: 'X' }, [{ col: 1, row: 1 }]).length === 0, '参数不合法时不该给出选中行');
+  return '切换(加/减/不改入参) + **四角**（默认右下）+ **逐字节**格式 + 失效行不参与复制';
+});
+
+check('★ 缓存（localStorage）：读不到就回 null（默认值），存不下要能**如实回 false**', () => {
+  const G = clientExports.__testStoreGet;
+  const S = clientExports.__testStoreSet;
+  assert(typeof G === 'function' && typeof S === 'function', '缺 storeGet / storeSet');
+  // 本测试环境**没有** localStorage（假 window 只有插件真正用到的那几个成员）⇒
+  // 必须优雅降级：读回 null、写回 false —— 绝不抛，也绝不假装成功。
+  assert(G('dsh-miliastra:grid') === null, '没有 localStorage 时该回 null：' + JSON.stringify(G('dsh-miliastra:grid')));
+  assert(S('dsh-miliastra:grid', { width: '1600' }) === false, '没有 localStorage 时该回 false（好让人知道没存下）');
+  // 渲染层：存不下时**不许静默** —— 那句提示的文案要在产物里（effect 在 SSR 不跑，所以查源码常量）
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  assert(/没能存到浏览器里/.test(src), '存不下时没有如实提示（静默失败 = 让人以为"下次还在"）');
+  assert(/localStorage/.test(src) && /typeof localStorage === 'undefined'/.test(src),
+    'localStorage 没有 exists 守卫（隐私模式/被禁会直接抛）');
+  return '无 localStorage 时读 null / 写 false + 存不下有提示 + 有守卫';
+});
+
+check('★ 右键标记颜色（`gridColorToggle` / `gridSelRows` / `gridSelLua`）：导出片段要**逐字节**等于作者给的那个', () => {
+  const T = clientExports.__testGridColorToggle;
+  const Of = clientExports.__testGridColorOf;
+  const R = clientExports.__testGridSelRows;
+  const Lua = clientExports.__testGridSelLua;
+  assert(typeof T === 'function' && typeof Of === 'function', '缺颜色两件套');
+  // ① 色板：第一个就是作者例子里那个灰；都有 name + hex
+  const pal = clientExports.__testGridColors;
+  assert(Array.isArray(pal) && pal.length >= 4, '色板太短：' + (pal || []).length);
+  assert(pal[0].id === 'gray' && pal[0].name === '灰色' && pal[0].hex === '#d6d7dc',
+    '第一个色该是作者给的灰 #d6d7dc：' + JSON.stringify(pal[0]));
+  for (const c of pal) assert(/^#[0-9a-f]{6}$/.test(c.hex) && c.name && c.id, '色条不全：' + JSON.stringify(c));
+  // ② 切换：上色 → 同色再点 = 清除；换色 = 覆盖；不改入参；未知色 = 清除
+  let m = T({}, 1, 2, 'gray');
+  assert(m['1,2'] === 'gray', '第一次右键没上色：' + JSON.stringify(m));
+  assert(Object.keys(T(m, 1, 2, 'gray')).length === 0, '同色再右键没清除');
+  assert(T(m, 1, 2, 'red')['1,2'] === 'red', '换色没覆盖');
+  const keep = { '1,2': 'gray' };
+  T(keep, 3, 4, 'red');
+  assert(Object.keys(keep).length === 1 && keep['1,2'] === 'gray', 'gridColorToggle 改了入参');
+  assert(Object.keys(T(m, 1, 2, '没这个色')).length === 0, '未知色没被当成清除');
+  assert(Of(m, 1, 2).id === 'gray' && Of(m, 1, 2).hex === '#d6d7dc', 'gridColorOf 读不出来：' + JSON.stringify(Of(m, 1, 2)));
+  assert(Of(m, 9, 9) === null && Of({ '1,2': '没这个色' }, 1, 2) === null, '没标记 / 坏色 id 该回 null（不编颜色）');
+  // ③ 逐行数据带上颜色；没标记的就是 null
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 100, stepY: 50 });
+  const rows = R(g, [{ col: 3, row: 5 }, { col: 0, row: 0 }], 'br', { '3,5': 'gray' });
+  assert(rows[0].color === '#d6d7dc' && rows[0].colorName === '灰色', '第 1 行没带上颜色：' + JSON.stringify(rows[0]));
+  assert(rows[1].color === null && rows[1].colorName === null, '没标记的行不该编颜色：' + JSON.stringify(rows[1]));
+  // ④ ★ 导出的带色片段 = 作者给的那一串（**逐字节**）
+  const one = Lua([{ ok: true, x: 330, y: 560, color: '#d6d7dc', colorName: '灰色' }]);
+  assert(one === '[{x = 330, y = 560 ,color="#d6d7dc",colorName = "灰色"}]',
+    '带色的导出片段与作者给的不一致：\n' + JSON.stringify(one));
+  // 混着来：带色的与不带的都对
+  const mix = Lua([
+    { ok: true, x: 330, y: 560, color: '#d6d7dc', colorName: '灰色' },
+    { ok: true, x: 840, y: 540 },
+  ]);
+  assert(mix === '[{x = 330, y = 560 ,color="#d6d7dc",colorName = "灰色"},\n{x = 840, y = 540 }]',
+    '混合导出不对：\n' + JSON.stringify(mix));
+  return '色板 8 色（首色=作者的灰）+ 切换/覆盖/清除 + 逐行带色 + **逐字节**导出';
+});
+
+check('★ 网格图交互（渲染层 + 源码）：左键拖动平移 / 右键标记 / 色板 / 标记画在图上', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  // ① 左键按住拖动 = 平移：mousedown 落在图上，位移超过 3px 才算拖，拖过就把随后那次 click 吃掉
+  assert(/onMouseDown: onGridDown/.test(src), '网格图没挂 onMouseDown（拖不动）');
+  assert(/Math\.abs\(dx\) \+ Math\.abs\(dy\) < 3/.test(src), '没有 3px 阈值（会把点击当成拖动）');
+  assert(/suppressClick\.current = true/.test(src) && /if \(suppressClick\.current\) \{ suppressClick\.current = false; return; \}/.test(src),
+    '拖完没有吃掉那次 click ⇒ 松手会顺手选/取消一格');
+  // ⚠️ 每次按下必须清零：不然"拖到格子外面松手"会把标记留到下一次（下一次点击被白吃一次）
+  assert(/suppressClick\.current = false;\s*\n\s*panRef\.current = \{ x: e\.clientX/.test(src),
+    'mousedown 没有清零 suppressClick（拖到图外松手后，下一次点击会被白吃）');
+  assert(/el\.scrollLeft = d\.sl - dx/.test(src) && /el\.scrollTop = d\.st - dy/.test(src), '平移没改滚动位置');
+  assert(/cursor:grabbing/.test(styleNodes[0].textContent), '拖动时没有 grabbing 光标');
+  // ② 右键 = 用当前笔刷标记（并且顺手选上，否则导出列表里看不到它）
+  assert(/onContextMenu: onGridContext/.test(src), '网格图没挂 onContextMenu（右键标记无效）');
+  assert(/e\.preventDefault\(\);\s*\n\s*var cell = cellAtEvent\(e\);/.test(src), '右键没阻止浏览器菜单 / 没取格');
+  assert(/gridColorToggle\(cur, cell\.col, cell\.row, brush\)/.test(src), '右键没走 gridColorToggle');
+  assert(/gridSelToggle\(cur, cell\.col, cell\.row\)/.test(src), '右键标记后没把那一格选上');
+  // ③ 渲染层：色板 8 个方块 + 当前笔刷打勾；注入颜色与笔刷 ⇒ 图上画出色块、列表带上 color
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
+  assert((html.match(/dsh-miliastra-swatch[ "]/g) || []).length === 8, '色板方块数不对：' + (html.match(/dsh-miliastra-swatch[ "]/g) || []).length);
+  assert(/dsh-miliastra-swatch-on/.test(html), '当前笔刷没标出来');
+  assert(/右键标记：/.test(html.replace(/<[^>]+>/g, ' ')), '没有色板那一行（右键标记入口）');
+  const marked = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { sel: [{ col: 3, row: 5 }], colors: { '3,5': 'gray' } } })));
+  // ⚠️ React 会把正文里的 `"` 转义成 `&quot;` —— 比对文本前先还原（否则断言永远不匹配）
+  const mText = marked.replace(/<[^>]+>/g, ' ').replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+  assert(/fill="#d6d7dc" fill-opacity="0.45"/.test(marked), '标记的格没画成色块：' + (marked.match(/fill="#[0-9a-f]{6}"/gi) || []).join(' '));
+  assert(/1\. 格 \(3, 5\)　右下 \{x = 400, y = 300 ,color="#d6d7dc",colorName = "灰色"\}/.test(mText),
+    '列表行没显示带色片段：' + mText.slice(mText.indexOf('1. 格'), mText.indexOf('1. 格') + 90));
+  // ④ 颜色 / 笔刷都进缓存
+  assert(/colors: colors, brush: brush/.test(src), '颜色 / 笔刷没有进缓存快照');
+  return '平移(3px 阈值 + 吃掉 click + 滚动) + 右键标记并选上 + 色板 8 块 + 图上色块 + 列表带 color';
+});
+
+check('★ 多选列表与复制按钮（渲染层）：三行 + 四角下拉（默认右下）+ 「复制」「移除」「复制全部」「清空选择」', () => {
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { sel: [{ col: 8, row: 10 }, { col: 0, row: 0 }] } })));
+  const text = html.replace(/<[^>]+>/g, ' ');
+  assert(/选中的格（2）/.test(text), '没渲染出「选中的格（N）」：' + (text.match(/选中的格[^ ]*/) || []));
+  // 默认角 = 右下：格 (8,10) 覆盖 x[800,900) y[500,550) ⇒ 右下 (900,550)
+  assert(/1\. 格 \(8, 10\)　右下 \{x = 900, y = 550 \}/.test(text), '第 1 行不对：' + (text.match(/\d\. 格 \([^)]*\)[^ ]*/) || []));
+  assert(/2\. 格 \(0, 0\)　右下 \{x = 100, y = 50 \}/.test(text), '第 2 行不对：' + (text.match(/\d\. 格 \([^)]*\)[^ ]*/g) || []));
+  const copies = html.match(/<button[^>]*>复制<\/button>/g) || [];
+  assert(copies.length === 2, '每行都该有一个「复制」（单独复制）：' + copies.length);
+  assert((html.match(/>移除<\/button>/g) || []).length === 2, '每行都该有一个「移除」');
+  assert(/复制全部（x,y 列表）/.test(text), '缺「复制全部」按钮');
+  assert(/清空选择/.test(text), '缺「清空选择」按钮');
+  // ★ 四角下拉：四个选项、默认选中「右下」
+  const opts = html.match(/<option[^>]*>(左上|左下|右上|右下)<\/option>/g) || [];
+  assert(opts.length === 4, '四角下拉应该有 4 个选项：' + JSON.stringify(opts));
+  assert(/<select[^>]*>/.test(html), '没有下拉控件（四角选择）');
+  assert(/<option value="br" selected="">右下<\/option>/.test(html), '四角下拉的默认不是「右下」：' + (html.match(/<option[^>]*>右下/) || []));
+  // 切到左上 ⇒ 每一行的 x,y 都跟着换成左上（值真的跟着下拉走）
+  const tl = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { sel: [{ col: 8, row: 10 }], anchor: 'tl' } })));
+  const tlText = tl.replace(/<[^>]+>/g, ' ');
+  assert(/1\. 格 \(8, 10\)　左上 \{x = 800, y = 500 \}/.test(tlText), '切到左上后行没跟着变：' + (tlText.match(/\d\. 格 \([^)]*\)[^ ]*/) || []));
+  assert(/<option value="tl" selected="">左上<\/option>/.test(tl), '下拉没停在「左上」');
+  // 选中集合里那几格的标签要变成亮粉加粗（多选高亮）
+  assert((html.match(/fill="#ffd6ec" font-weight="700"/g) || []).length === 2, '选中的两格没都变成亮粉加粗');
+  // 空选中：两个按钮都禁用，且不渲染列表
+  const empty = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { sel: [] } })));
+  assert(/选中的格（0）/.test(empty.replace(/<[^>]+>/g, ' ')), '空选中没显示（0）');
+  const allBtn = empty.match(/<button[^>]*>复制全部（x,y 列表）<\/button>/);
+  assert(allBtn && /disabled/.test(allBtn[0]), '空选中时「复制全部」该禁用:' + (allBtn || [])[0]);
+  return '2 行 + 四角下拉（默认右下 / 切换生效）+ 复制·移除·复制全部·清空 + 选中标签亮粉';
+});
+
+check('★ 网格图**单独滚轮缩放**：原生非 passive 监听 + 只缩图 + 夹取 + 读数 / 复位', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  // ① 必须用原生 addEventListener + passive:false（React 的 onWheel 是 passive，preventDefault 不生效）
+  assert(/addEventListener\('wheel', onWheel, \{ passive: false \}\)/.test(src),
+    '滚轮没走原生非 passive 监听 ⇒ 面板会跟着一起滚');
+  assert(!/onWheel:/.test(src), '还挂着 React 的 onWheel（passive，preventDefault 无效）');
+  assert(/el\.removeEventListener\('wheel', onWheel\)/.test(src), '滚轮监听没有清理（重挂会叠加）');
+  // ② 缩放范围夹取 + 步进（垃圾值 ⇒ 回 100%，不是夹到最小 —— 存的数坏了就该当没存过）
+  const C = clientExports.__testGridZoomClamp;
+  assert(typeof C === 'function', '缺 gridZoomClamp');
+  assert(C(1.12) === 1.12 && C(0.01) === 0.25 && C(99) === 8, '夹取不对：' + [C(1.12), C(0.01), C(99)].join(' / '));
+  assert(C('abc') === 1 && C(-3) === 1 && C(0) === 1, '非法输入没兜成 100%：' + [C('abc'), C(-3), C(0)].join(' / '));
+  // ③ 只缩图：svg 的宽度走 inline（zoom%），盒子自己滚
+  assert(/className: PLUGIN \+ '-gridsvg'/.test(src) && /style: \{ width: \(Math\.round\(zoom \* 10000\) \/ 100\) \+ '%' \}/.test(src),
+    '缩放没有落到网格图自己的宽度上');
+  const css = styleNodes[0].textContent;
+  assert(/dsh-miliastra-gridbox\{[^}]*overflow:auto/.test(css), '网格图没有独立滚动盒子（放大后没法平移）');
+  assert(/dsh-miliastra-gridbox\{[^}]*max-height:min\(420px,52vh\)/.test(css), '滚动盒子没有高度上限（放大后会把面板撑长）');
+  // ④ 渲染层：默认 100% 读数 + 点一下回 100%（读数是按钮，面板里看得见）
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
+  assert(/缩放 100%/.test(html.replace(/<[^>]+>/g, ' ')), '没有缩放读数');
+  assert(/dsh-miliastra-gridbox/.test(html), '网格图没包在滚动盒子里');
+  // 注入 200% ⇒ 读数与宽度都跟着变（说明它真的把这个值用在图上了）
+  const zoomed = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { zoom: 2 } })));
+  assert(/缩放 200%/.test(zoomed.replace(/<[^>]+>/g, ' ')), '缩放读数没跟着 zoom 走');
+  assert(/style="width:200%"/.test(zoomed), '网格图宽度没跟着 zoom 走：' + (zoomed.match(/width:\d+%/) || []));
+  // ⑤ 缩放与四角都记住
+  assert(/anchor: anchor, zoom: zoom/.test(src), '缩放 / 四角没有进缓存快照');
+  return '非 passive 滚轮 + 夹取 0.25~8 + 只缩图（滚动盒子）+ 读数与复位 + 都进缓存';
+});
+
+check('★ 面板：常驻（点外面不关）+ 尺寸回到 880×600 + 开合/常驻都记住', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
   const text = html.replace(/<[^>]+>/g, ' ');
-  assert(/已选中：格 \(8, 10\)/.test(text), '默认档没渲染出"已选中"：' + (text.match(/已选中[^ ]*/) || []));
-  const btn = html.match(/<button[^>]*>复制选中的格<\/button>/);
-  assert(btn, '缺「复制选中的格」按钮');
-  assert(!/disabled/.test(btn[0]), '已经选中了格，复制按钮却是禁用的：' + btn[0]);
-  // 点在残格里 ⇒ 没有选中，按钮必须**禁用**（不能让人点了才被告知没选中）
-  // ⚠️ 步长也要给 110/80：默认 100/50 下 1550 落在第 15 格里（那是"选中"，不是残格）
-  const restHtml = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
-    Object.assign({}, base, { __gridInit: { stepX: 110, stepY: 80, px: 1550, py: 500 } })));
-  const restBtn = restHtml.match(/<button[^>]*>复制选中的格<\/button>/);
-  assert(restBtn && /disabled/.test(restBtn[0]), '没选中格时复制按钮该禁用：' + (restBtn || [])[0]);
-  assert(/没选中格：这个点落在残格里/.test(restHtml.replace(/<[^>]+>/g, ' ')), '残格档没渲染出"没选中"那句');
-  return '选中/残格/画布外 三态 + 渲染出选中行与复制按钮（选中才可点）';
+  // ① 头部有常驻开关，且**默认就是常驻**
+  assert(/📌 常驻/.test(text), '头部没有「常驻」按钮：' + (text.match(/📌[^ ]*/) || []));
+  assert(/dsh-miliastra-pin-on/.test(html), '默认不是常驻（作者要"一直展示在旁边，点外面别关"）');
+  // ② 官方 hook 的**开关位**必须真的被用上（否则"常驻"是个装饰）
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  assert(/useDismissOnOutsidePointer\(rootRef, open && !pinned, setOpen\)/.test(src),
+    '常驻没有接到 useDismissOnOutsidePointer 的开关位（按钮会是个装饰）');
+  assert((src.match(/useDismissOnOutsidePointer\(/g) || []).length === 1,
+    'useDismissOnOutsidePointer 只能有一处调用（条件调用会被 react-hooks 规则拦）');
+  // ③ 尺寸回到原样：880×600（作者 2026-10-01：「还是改回原来的大小其他不变」）
+  const css = styleNodes[0].textContent;
+  assert(/dsh-miliastra-panel\{[^}]*width:min\(880px,94vw\)/.test(css), '面板宽度没回到 880px');
+  assert(/dsh-miliastra-panel\{[^}]*height:min\(600px,82vh\)/.test(css), '面板高度没回到 600px');
+  assert(/dsh-miliastra-panel\{[^}]*min-width:420px/.test(css), '拖拽缩小的下限该回到 420×340');
+  // ④ 开合与常驻**都写盘记住**（不然刷新就丢）
+  assert(/panelPrefSet\(PANEL_OPEN_KEY, open\)/.test(src), '开合状态没有记住');
+  assert(/panelPrefSet\(PANEL_PIN_KEY, pinned\)/.test(src), '常驻开关没有记住');
+  assert(/panelPref\(PANEL_OPEN_KEY, false\)/.test(src), '首次仍该是**关闭**态（作者早先"不该一上来就糊一层"）');
+  assert(/panelPref\(PANEL_PIN_KEY, true\)/.test(src), '常驻的默认值该是**开**');
+  return '默认常驻 + 接到 hook 开关位 + 回到 880×600 + 两个开关都记住（首次仍不自动弹）';
+});
+
+check('★ 面板可以拖拉（按住头部挪位置 / 双击回原位 / 位置记住）', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  // ① 头部真的挂了拖动handler（挂在头部而不是整块面板 —— 否则拖内容也会把面板拽走）
+  assert(/className: PLUGIN \+ '-head', key: 'head',\s*\n\s*onMouseDown: onHeadDown, onDoubleClick: onHeadDouble/.test(src),
+    '头部没挂 onMouseDown / onDoubleClick（拖不动）');
+  // ② 拖的是位置：拖过之后用 left/top，且必须把 bottom 让开（同时给会拉成"从 top 到 bottom"）
+  assert(/anchorStyle = \{ left: dragPos\.left, top: dragPos\.top, bottom: 'auto' \}/.test(src),
+    '拖动后没切到 left/top（或没让开 bottom）');
+  // ③ 位置记住 + 双击清掉
+  assert(/PANEL_POS_KEY = 'dsh-miliastra:panel-pos'/.test(src), '位置没有自己的存储键');
+  assert(/storeSet\(PANEL_POS_KEY, dragPos\)/.test(src), '拖动后没把位置存下来');
+  assert(/storeSet\(PANEL_POS_KEY, null\)/.test(src), '双击没清掉记住的位置');
+  // ④ 拖出屏幕也要留得下（不然面板和它的 × 一起找不回来了）
+  assert(/Math\.max\(-\(w - 60\), Math\.min\(window\.innerWidth - 60/.test(src), '拖动没有"至少留 60px 在屏幕里"的夹取');
+  assert(/Math\.max\(0, Math\.min\(window\.innerHeight - 32/.test(src), '纵向拖动没有夹取（会拖到标题栏上面去）');
+  // ⑤ 头部光标 + 拖起来不选字
+  const css = styleNodes[0].textContent;
+  assert(/dsh-miliastra-head\{[^}]*cursor:move/.test(css), '头部没有 cursor:move（看不出能拖）');
+  assert(/dsh-miliastra-dragging\{[^}]*user-select:none/.test(css), '拖动时没有禁用选字（会拉出一片蓝）');
+  assert(/dsh-miliastra-head button[^{]*\{[^}]*cursor:pointer/.test(css), '头部的按钮没有恢复普通光标（看起来像能拖）');
+  // ⑥ 视图模式（inline）不参与拖 —— 它是铺满会话区的，没有"挪位置"这回事
+  assert(/if \(inline\) return;\s*\n\s*try \{/.test(src), 'inline 视图没有短路（会在会话区里拖出一层浮层）');
+  return '头部拖动 + left/top 切换 + 位置记住 + 双击回原位 + 不拖出屏幕 + inline 短路';
 });
 
 check('★ tab 条：六等分，第六档是「网格计算」', () => {
