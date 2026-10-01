@@ -56,7 +56,11 @@ const graph = (name, domain, kind, id, nodeCount, links) => {
     vint(1, i + 1),
     msg(2, vint(1, 10001), vint(2, domain), vint(3, 22000), vint(5, 75)),
     msg(3, vint(1, 10001), vint(2, domain), vint(3, 22000), vint(5, 75)),
-    ...(i < (links || 0) ? [msg(4, vint(1, i + 1), vint(4, 2))] : []),
+    // 引脚实例（字段 4）：字段 1/2 = 引脚签名{字段1=kind}；字段 5 = 连接{字段1=目标节点索引, 2/3=目标脚}
+    ...(i < (links || 0) ? [msg(4,
+      msg(1, vint(1, 2)), msg(2, vint(1, 2)),
+      msg(5, vint(1, i + 2), msg(2, vint(1, 1)), msg(3, vint(1, 1))),
+    )] : []),
     ...(nodeCount == null ? [] : [])));
   return msg(1, msg(1, identity(domain, kind, id), str(2, name), ...nodes));
 };
@@ -232,6 +236,21 @@ check('②f 配置条目 / 阵营 / 资源树：名字与**能确证的关联**�
   assert(/资源分类树/.test(tpl.kindLabelSource || ''), '出处没写清：' + tpl.kindLabelSource);
   assert(r.unverified.some((s) => s.includes('还没出处') && s.includes('10003004')), '没出处的号没被点名：' + JSON.stringify(r.unverified));
   return r.configs[0].name + ' ↔ ' + r.configLinked[0] + '；分类 ' + r.resourceCategories.join('/');
+});
+
+check('①c 引脚与**连线**：字段 4 块 = 引脚实例，其字段 5 = 连接（目标节点索引）', () => {
+  const r = readGilNodeFacts(gilPath);
+  const g = r.graphNodeLists['关卡实体信号'];
+  assert(g && g.length === 9, 'fixture 节点数不对：' + (g ? g.length : 'null'));
+  const withPin = g.filter((n) => (n.pins || []).length);
+  eq(withPin.length, 1, '有引脚的节点数（fixture 只给第 1 个节点放了 1 条连接）');
+  eq(withPin[0].pins[0].kindShell, 2, '引脚签名 kind');
+  eq(withPin[0].pins[0].conns[0].to, 2, '连接的目标节点索引');
+  eq(withPin[0].pins[0].conns[0].toShell, 1, '目标脚 shell');
+  const edges = g.flatMap((n) => n.outEdges || []);
+  eq(edges.length, 1, '出边条数');
+  eq([edges[0].from, edges[0].to], [1, 2], '边的 from→to');
+  return '节点 9 个 / 引脚 1 个 / 边 1 条（1→2）';
 });
 
 /* ---------- ③ 诚实：读不出来就说读不出来 ---------- */

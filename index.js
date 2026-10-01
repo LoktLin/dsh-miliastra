@@ -2205,8 +2205,8 @@ const TOOLS = [
         const eq = args.entity ? String(args.entity) : '';
         const wantVars = !!eq || args.summaryOnly === false;
         const facts = readGilNodeFacts(gilPath, {
-          graphLimit: Number.isFinite(args.limit) ? Number(args.limit) : 40,
-          entityLimit: Number.isFinite(args.limit) ? Number(args.limit) : 30,
+          graphLimit: Number.isFinite(args.limit) ? Number(args.limit) : 200,
+          entityLimit: Number.isFinite(args.limit) ? Number(args.limit) : 400,
           withVariables: wantVars,
         });
         if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
@@ -2251,12 +2251,20 @@ const TOOLS = [
           if (gq) {
             const pick = Object.keys(facts.graphNodeLists || {}).filter(function (k) { return k.includes(gq); });
             const nodeDetail = {};
-            for (const k of pick) nodeDetail[k] = facts.graphNodeLists[k];
+            const edgeDetail = {};
+            for (const k of pick) {
+              nodeDetail[k] = facts.graphNodeLists[k];
+              edgeDetail[k] = facts.graphNodeLists[k].flatMap(function (n) { return n.outEdges || []; });
+            }
             out.nodes = nodeDetail;
+            out.edges = edgeDetail;
             out.nodeTotal = pick.reduce(function (s, k) { return s + nodeDetail[k].length; }, 0);
-            out.nodesNote = '每节点给：index / declaredIndex / shell·kernel 引用 / 引脚 kind 与引脚数 / 引用到的实体·图 / x·y 坐标 / '
+            out.edgeTotal = pick.reduce(function (s, k) { return s + edgeDetail[k].length; }, 0);
+            out.nodesNote = '每节点给：index / declaredIndex / shell·kernel 引用 / x·y 坐标 / pins（引脚实例）/ outEdges（出边）/ '
               + 'doc（拿 runtimeId 去官方节点词典查到的名字，查不到为 null）。'
-              + '⚠️ 引脚/连线的**语义未确证**（只回"引脚 kind 号 / 引脚数 / 引用了哪些 id"这类事实）。';
+              + '**连线**：edges[图名] = [{from, to, toShell, toKernel, fromPinKind}]，与 gia.proto 的 NodeConnection 一致'
+              + '（2026-10-01 在 266 节点的图上钉出来：连接挂在引脚的字段 5，字段 1 = 目标节点索引）。'
+              + '⚠️ 仍未确证的：引脚 kind 号到"输入/输出参数"的**名字**、节点字段 7（附加块）的语义、引脚值（valueRef）。';
           }
         }
         if (wantEnts) {
