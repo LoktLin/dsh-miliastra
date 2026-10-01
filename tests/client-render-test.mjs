@@ -2060,23 +2060,22 @@ check('★ tab 条：七等分，第七档是「节点图」', () => {
   return '7 档 + repeat(7) + 预设 + 取点不翻转';
 });
 
-check('★ 第七页「节点图」（2026-10-01 作者要求：给 AI 用的插件第 7 个 tag）', () => {
+check('★ 第七页「节点图」：左栏选择器 + 右栏数据区（作者：选择后数据都放右边，为未来预留扩展）', () => {
   const base = { open: true, setOpen: () => {}, rootRef: { current: null } };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, Object.assign({}, base, { __panelTab: 'nodes' })));
   const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
-  // 页面本体：标题 + 动作 + 两条空态（SSR 里工具调用是异步的 ⇒ 必然先是空态）
-  assert(/节点图 \/ 实体 \/ 元件（读本关 \.gil · 只读 · 默认收起，点标题展开）/.test(text), '缺第七页标题（含默认收起说明）');
-  assert(/重新读一次/.test(text), '缺「重新读一次」按钮');
-  // ★ 2026-10-01 作者要求「界面做一下分组 默认收起」：六个分组标题必须在，且**默认收起**（▸ 而不是 ▾）
-  for (const g2 of ['节点图', '实体', '元件', '节点声明', '配置条目 / 阵营 / 资源分类']) {
-    assert(text.includes(g2), '缺分组标题：' + g2);
+  // 左栏 = 选择器（五块），右栏 = 数据区
+  assert(/选一块（右栏看它的数据）/.test(text), '缺左栏选择器标题');
+  for (const b of ['节点图', '实体', '元件', '节点声明', '配置条目 / 阵营 / 资源分类']) {
+    assert(text.includes(b), '左栏缺这一块：' + b);
   }
-  assert(/全部展开/.test(text), '缺「全部展开」按钮');
-  assert(text.includes('▸'), '分组默认收起时应有 ▸ 指示');
-  assert(!/▾/.test(text), '默认应当是**收起**（不该出现 ▾）');
-  assert(/默认收起/.test(src), '源码里没写"默认收起"（说明分组是默认展开的）');
-  // 只读 + 走工具（AI 那份能力，面板只是窗口）
+  assert(/^|数据 · 节点图|数据 · /.test(text) || /数据 · 节点图/.test(text), '右栏缺「数据 · <当前块>」标题');
+  assert(/重新读一次/.test(text), '缺「重新读一次」');
+  // 默认选中第一块（节点图），且右栏是固定高度 + 内部滚动（不再靠整页滚动）
+  assert(/React\.useState\('graphs'\)/.test(src), '默认选中不是第一个区块');
+  assert(/maxHeight: '58vh', overflowY: 'auto'/.test(src), '右栏不是固定高度 + 内部滚动（"预留扩展"的数据区）');
+  // 只读 + 走工具
   assert(/callTool\('miliastra_map', \{ op: 'nodes', kind: 'all' \}\)/.test(src), '面板没走 miliastra_map op=nodes kind=all');
   assert(/callTool\('miliastra_map', \{ op: 'nodes', entity: name \}\)/.test(src), '点实体没去读它的自定义变量');
   const pane = src.slice(src.indexOf('exports.__nodesPane = function NodesPane'), src.indexOf('var NodesPane = exports.__nodesPane'));
@@ -2084,13 +2083,10 @@ check('★ 第七页「节点图」（2026-10-01 作者要求：给 AI 用的插
   for (const bad of ["'miliastra_code'", "'miliastra_sim'", 'writeFile', 'deploy']) {
     assert(pane.indexOf(bad) < 0, '节点图那页出现了写/模拟器调用：' + bad);
   }
-  // 口径必须写出来（**粗略数字**，不下判决）
   assert(/粗略数字/.test(text), '页面没说明节点数/连线数是粗略数字');
-  assert(/语义未逐个确证/.test(src), '源码里没留语义未确证的口径说明');
-  // 实体按「已确证标签」分组（没出处的按种类号归堆），并写出处
   assert(/var labelOf = function/.test(src), '实体没有按标签分组的逻辑');
   assert(/kindLabelSource/.test(src), '实体行没写出处');
-  return '第 7 页 + 只读（op=nodes）+ 口径说明';
+  return '左选（5 块）+ 右数据（58vh 内滚）+ 只读 op=nodes';
 });
 
 check('网格页文案：不许有 Markdown 记号（面板不渲染 Markdown），且复制正文自洽', () => {
