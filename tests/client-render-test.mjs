@@ -1624,6 +1624,49 @@ check('★ 右键标记颜色（`gridColorToggle` / `gridSelRows` / `gridSelLua`
   return '色板 8 色（首色=作者的灰）+ 切换/覆盖/清除 + 逐行带色 + **逐字节**导出';
 });
 
+check('★ 回归：右键标记**不许**把已选中的格踢出列表（作者报「点了一次之后就不让复制了」）', () => {
+  const Add = clientExports.__testGridSelAdd;
+  const Prune = clientExports.__testGridSelPrune;
+  assert(typeof Add === 'function' && typeof Prune === 'function', '缺 gridSelAdd / gridSelPrune');
+  // ① 只加不减：已选中的格再"加"一次 ⇒ **原样返回**（同一个引用，也还在里面）
+  const sel1 = [{ col: 3, row: 5 }];
+  const again = Add(sel1, 3, 5);
+  assert(again === sel1, 'gridSelAdd 对已在列表里的格没有原样返回：' + JSON.stringify(again));
+  assert(Add(sel1, 4, 5).length === 2, 'gridSelAdd 没加进去：' + JSON.stringify(Add(sel1, 4, 5)));
+  assert(sel1.length === 1, 'gridSelAdd 改了入参');
+  // ★ 这就是那个 bug 的形状：toggle 会把已选中的踢掉，add 不会
+  assert(clientExports.__testGridSelToggle(sel1, 3, 5).length === 0, '（前提变了：toggle 现在不删了？）');
+  assert(Add(sel1, 3, 5).length === 1, 'gridSelAdd 把已选中的格踢掉了 —— 正是那个 bug');
+  // ② 失效行清理：只保留当前网格里还存在的
+  const g = clientExports.__testGridPlan({ width: 1600, height: 1000, stepX: 110, stepY: 80 });
+  const mixed = [{ col: 3, row: 3 }, { col: 15, row: 19 }, { col: 0, row: 0 }];
+  const kept = Prune(g, mixed);
+  assert(kept.length === 2 && kept[0].col === 3 && kept[1].col === 0, 'gridSelPrune 没清对：' + JSON.stringify(kept));
+  assert(mixed.length === 3, 'gridSelPrune 改了入参');
+  assert(Prune({ ok: false, error: 'X' }, mixed).length === 3, '参数不合法时不该乱清');
+  // ③ 接线：右键必须走 gridSelAdd（走 toggle 就是那个 bug 复发）
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  const ctx = src.slice(src.indexOf('var onGridContext'), src.indexOf('var onGridClick'));
+  assert(/gridSelAdd\(cur, cell\.col, cell\.row\)/.test(ctx), '右键标记没走 gridSelAdd');
+  assert(!/gridSelToggle\(cur, cell\.col, cell\.row\)/.test(ctx), '右键标记又用回了 toggle（会把已选中的踢出去）');
+  // ④ 渲染层：既选中又标了色的格 ⇒ 列表还在、「复制全部」可点（"一直能复制"）
+  const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
+  const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { sel: [{ col: 3, row: 5 }], colors: { '3,5': 'gray' } } })));
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/&quot;/g, '"');
+  assert(/选中的格（1）/.test(text), '选中 + 标记的那一格没留在列表里：' + (text.match(/选中的格[^ ]*/) || []));
+  const allBtn = html.match(/<button[^>]*>复制全部（x,y 列表）<\/button>/);
+  assert(allBtn && !/disabled/.test(allBtn[0]), '有有效选中时「复制全部」却是灰的');
+  assert(!/移除失效行/.test(text), '没有失效行时不该出现「移除失效行」按钮');
+  // ⑤ 步长改小留下失效行 ⇒ 出现「移除失效行（N）」，一键清掉（不清的话列表一直占着、也复制不了）
+  const bad = renderToStaticMarkup(React.createElement(clientExports.__testPanel,
+    Object.assign({}, base, { __gridInit: { stepX: 110, stepY: 80, sel: [{ col: 15, row: 19 }, { col: 3, row: 3 }] } })));
+  const badText = bad.replace(/<[^>]+>/g, ' ');
+  assert(/移除失效行（1）/.test(badText), '有失效行时没给「移除失效行」按钮：' + (badText.match(/移除失效行[^ ]*/) || []));
+  assert(/选中的格（1）　⚠️ 1 个现在没有对应格/.test(badText), '失效行的提示不对：' + (badText.match(/选中的格[^取]*/) || []));
+  return 'gridSelAdd（只加不减）+ gridSelPrune（清失效）+ 右键接线 + 选中且标色仍能复制 + 失效行一键清';
+});
+
 check('★ 网格图交互（渲染层 + 源码）：左键拖动平移 / 右键标记 / 色板 / 标记画在图上', () => {
   const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
   // ① 左键按住拖动 = 平移：mousedown 落在图上，位移超过 3px 才算拖，拖过就把随后那次 click 吃掉
@@ -1640,7 +1683,7 @@ check('★ 网格图交互（渲染层 + 源码）：左键拖动平移 / 右键
   assert(/onContextMenu: onGridContext/.test(src), '网格图没挂 onContextMenu（右键标记无效）');
   assert(/e\.preventDefault\(\);\s*\n\s*var cell = cellAtEvent\(e\);/.test(src), '右键没阻止浏览器菜单 / 没取格');
   assert(/gridColorToggle\(cur, cell\.col, cell\.row, brush\)/.test(src), '右键没走 gridColorToggle');
-  assert(/gridSelToggle\(cur, cell\.col, cell\.row\)/.test(src), '右键标记后没把那一格选上');
+  assert(/gridSelAdd\(cur, cell\.col, cell\.row\)/.test(src), '右键标记没走 gridSelAdd（只加不减）');
   // ③ 渲染层：色板 8 个方块 + 当前笔刷打勾；注入颜色与笔刷 ⇒ 图上画出色块、列表带上 color
   const base = { open: true, setOpen: () => {}, rootRef: { current: null }, __panelTab: 'grid' };
   const html = renderToStaticMarkup(React.createElement(clientExports.__testPanel, base));
