@@ -43,6 +43,7 @@ async function check(label, fn) {
   }
 }
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+const eq = (got, want, msg) => { if (got !== want) throw new Error(msg + '（期望 ' + JSON.stringify(want) + '，实际 ' + JSON.stringify(got) + '）'); };
 
 const { TOOLS } = await import('../index.js');
 const { snapshotFreshness, localTimeText } = await import('../lib/freshness.mjs');
@@ -147,7 +148,63 @@ await check('P1-4 ③ 加了两类提示后，brief 回执仍 < 1024 B（它是"
   const r = await health.execute({ brief: true }, {});
   const b = bytesOf(r);
   assert(b < 1024, 'brief 涨到 ' + b + ' B：' + JSON.stringify(r).slice(0, 200));
-  return b + ' B（含 0 字节 + 未挂载两类提示）';
+  // ★ 2026-10-02：brief 档**不再有** `currentEvidence` / `currentAlternatives`（实测那两项 285+294 B，
+  //   路径与备选都已在 luaDir/gil/logDir 与完整档里）⇒ 合成一行 `currentWhy`；钉住这个形状，别被改回去。
+  assert(!('currentEvidence' in r) && !('currentAlternatives' in r),
+    'brief 档又把 currentEvidence/currentAlternatives 放回来了（体积）');
+  assert(typeof r.currentWhy === 'string' && r.currentWhy.length > 0, 'brief 缺 currentWhy');
+  return b + ' B（含 0 字节 + 未挂载两类提示；备选压成一行）';
+});
+
+await check('P1-4 ③c `editorHint` 是**纯函数**：两条判据各自命中 + `same` 判定（不许把"最近改动"当"当前图"）', async () => {
+  const { editorHint } = await import('../lib/locate.mjs');
+  const lv = (id, gilMs, liveMs) => ({ levelId: id, gil: { path: id + '.gil', size: 10, mtimeMs: gilMs }, luaFiles: [{ name: 'x.lua', mtimeMs: liveMs }], newestMs: Math.max(gilMs, liveMs) });
+  const a = editorHint([lv('A', 200, 100), lv('B', 100, 300)]);
+  eq(a.byGilSave.levelId, 'A', 'byGilSave 没取 .gil 最新的');
+  eq(a.byLiveFile.levelId, 'B', 'byLiveFile 没取活文件最新的');
+  eq(a.same, false, '两张图不同却说 same');
+  eq(a.evidence, 'indirect', '没标"间接证据"');
+  assert(typeof a.askHuman === 'string' && a.askHuman.length > 4, '没给"该问人什么"');
+  assert(!/当前图就是/.test(JSON.stringify(a)), '不许下"当前图"的结论');
+  const b = editorHint([lv('A', 300, 200), lv('B', 100, 50)]);
+  eq(b.same, true, '同一张图时 same 应为 true');
+  eq(editorHint([]).byGilSave, null, '空列表应给 null');
+  return 'A/B 各自命中 + same 判定 + 空列表安全';
+});
+
+await check('P1-4 ③b **多活文件**下 brief 仍**有界**（2026-10-02：真实环境 11 个活文件时实测 1348 B，旧测试只测夹具⇒漏了）', async () => {
+  const luas = {};
+  for (let i = 1; i <= 12; i += 1) luas['game_' + String(i).padStart(2, '0') + '.lua'] = '-- x\n';
+  const fake = fakeLevel({
+    levelId: '1073741950',
+    gils: [makeGil({ levelId: 1073741950, scripts: [{ mappingId: 1073741825, name: 'game_01', file: 'game_01.lua' }] })],
+    luas,
+  });
+  const prev = process.env.MILIASTRA_LOCALLOW;
+  process.env.MILIASTRA_LOCALLOW = fake.root;
+  // ★ 再来一张**更近**的图（同一 root 下）⇒ 逼出"备选"那一行，钉住"备选压成一行"的形状
+  const lv2 = path.join(fake.root, '原神', 'BeyondLocal', '201170108', 'Beyond_Local_Save_Level', '1073741951');
+  fs.mkdirSync(path.join(lv2, 'external_lua_file'), { recursive: true });
+  fs.writeFileSync(path.join(lv2, '1073741951.gil'), makeGil({ levelId: 1073741951, scripts: [{ mappingId: 1073741825, name: 'b', file: 'b.lua' }] }));
+  for (let i = 1; i <= 3; i += 1) fs.writeFileSync(path.join(lv2, 'external_lua_file', 'b' + i + '.lua'), '-- x\n', 'utf8');
+  // 把第二张图的时间**拨回一小时** ⇒ 它只当"备选"，当前图仍是 12 活文件那张（不然当前图会变成它）
+  const old = new Date(Date.now() - 3600 * 1000);
+  for (const f of fs.readdirSync(path.join(lv2, 'external_lua_file'))) fs.utimesSync(path.join(lv2, 'external_lua_file', f), old, old);
+  fs.utimesSync(path.join(lv2, '1073741951.gil'), old, old);
+  try {
+    const r = await health.execute({ brief: true }, {});
+    const b = bytesOf(r);
+    // 上限 1536 B：**实测口径**（12 个活文件 + 歧义警告 + 目录），不是"理想的 1KB"
+    assert(b <= 1536, '12 个活文件时 brief 涨到 ' + b + ' B（上限 1536）');
+    assert(/备选/.test(String(r.currentWhy)), '备选没折进 currentWhy：' + r.currentWhy);
+    // 活文件多于 8 个 ⇒ 逐条 `bytes` 不给了（省 ~180 B），但**名字一个不许少**
+    assert(r.luaFiles.length === 12, '活文件少了：' + r.luaFiles.length);
+    assert(r.luaFiles.every((f) => !('bytes' in f)), '多于 8 个活文件时仍逐条给了 bytes');
+    assert(r.luaFiles.every((f) => typeof f.name === 'string'), '名字丢了');
+    return b + ' B（12 个活文件 · 只给名字不给字节 · 备选一行）';
+  } finally {
+    if (prev === undefined) delete process.env.MILIASTRA_LOCALLOW; else process.env.MILIASTRA_LOCALLOW = prev;
+  }
 });
 
 await check('P1-4 ④ .gil 挂载表读不到时**一个都不标**（mountKnown:false，不猜）', async () => {

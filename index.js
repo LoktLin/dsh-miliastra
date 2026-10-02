@@ -39,7 +39,7 @@ import pathMod from 'node:path';
 import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
-import { scanLevels, pickCurrent, findLevel, localLowRoot, currentLevelDecision } from './lib/locate.mjs';
+import { scanLevels, pickCurrent, findLevel, localLowRoot, currentLevelDecision, editorHint } from './lib/locate.mjs';
 import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt, pickLiveFile, compareLiveSources, normalizeLiveName } from './lib/codefile.mjs';
 import { scanRects, compareRects, expandDriverRefs } from './lib/rects.mjs';
 import { snapshotFreshness } from './lib/freshness.mjs';
@@ -1534,7 +1534,7 @@ async function pixelArtOp(args = {}) {
  */
 export const PROMPT_SKIP = new Set(['miliastra_echo']);   // 纯调试工具：不需要在开场提示里指路
 export const PROMPT_GUIDE = [
-  { tool: 'miliastra_health', when: '先用它定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）' },
+  { tool: 'miliastra_health', when: '先用它定位「当前关卡 / 活文件 / 地图 / 日志目录」（路径随账号与换图变化，禁止写死）；★ **编辑器没有"正在编辑哪张图"的通道**（窗口标题不含关卡名 / `.gil` 不锁 / 无自动保存 / 编辑器配置为空）⇒ `editorHint` 只是**间接证据**（`gil`=最近存盘、`live`=活文件最近改动，**后者会被 deploy 污染**）：**改码/部署前先问作者一句"现在在哪张图"**' },
   { tool: 'miliastra_code', when: '改完本地 lua 用 op=deploy 投进沙箱（自动备份 + SHA 校验 + 无 BOM；还会跑 Lua 结构校验）；op=inspect 看有没有被编辑器写回旧版；op=read 给 source=<绝对路径> 就只读看任意本地 .lua（不在沙箱里也行）' },
   { tool: 'miliastra_map', when: '判断「哪些控件能被脚本动态创建」用 op=clientui（只看无父节点的独立模板）；**"这张节点图在做什么"用 `op=anatomy`** —— 各类型节点多少个（事件/执行/查询/运算/分支）、入口事件、引用到的实体、关键词都能直接读（类型只覆盖随包词典命中的节点，未命中的如实计 Unknown）；要节点明细与引脚连线用 `op=nodes`' },
   { tool: 'miliastra_kb', when: '**遇到"为什么不生效/不触发/收不到"先用它**：`op=qa` 给症状关键词就回**离线蒸馏**的排查清单（先问哪几个问题 + 有序排查 + 常见误判 + 出处）；`op=node` 离线查节点说明与端口；`op=list/doc/search` 才是在线问第三方知识库（会把 query 发出去）。它**只给排查路径、不下结论**' },
@@ -1672,6 +1672,12 @@ const TOOLS = [  {
        */
       if (args.brief === true) {
         const curDecision = currentLevelDecision(levels);
+        /*
+         * ★ 2026-10-02（作者要 (a)）：**"编辑器现在开着哪张图"没有直接通道**（五条候选全排除，见 `editorHint()` 的注释）。
+         *   这一档**只放两个号**（`gil` = 最近存盘 / `live` = 活文件最近改动）—— 它是"先调它"的入口，**必须继续 < 1KB**，
+         *   所以详细版（时间 / 字节 / 为什么是间接证据 / 该问人什么）只在**完整档**给。
+         */
+        const eh = editorHint(levels);
         const proc = clientProcesses();
         /*
          * ★ P1-4（2026-09-26）：`luaFiles` 从**字符串数组**改成 `[{name, bytes}]`，并标出两种"看着像有、其实没用"的活文件：
@@ -1684,9 +1690,11 @@ const TOOLS = [  {
         const live = cur ? cur.luaFiles.filter((f) => !f.auxiliary) : [];
         const mountKnown = !!(gi && gi.mountKnown === true);
         const mountedSet = new Set(mountKnown ? gi.mountedNames.map((n) => normalizeLiveName(n)) : []);
-        const luaFiles = live.map((f) => ({
+        const luaFiles = live.map((f, i) => ({
           name: f.name,
-          bytes: f.size,
+          /* ★ 2026-10-02 压体积：活文件多（本机实测 11 个）时 `bytes` 逐条累计约 180 B —— 只在 ≤8 个时给，
+           *   多于 8 个时**只给名字**（要字节数用完整档）。理由：brief 的用途是"我在哪、有哪几个脚本"。 */
+          ...(live.length <= 8 ? { bytes: f.size } : {}),
           ...(f.size === 0 ? { empty: true } : {}),
           ...(mountKnown && !mountedSet.has(normalizeLiveName(f.name)) ? { mounted: false } : {}),
         }));
@@ -1703,11 +1711,20 @@ const TOOLS = [  {
            *   ⇒ 面板只能绕道 `miliastra_echo` 去取（多一次调用，还得解释为什么）。工具该给的字段就给。 */
           version: VERSION,
           current: cur ? { brand: cur.brand, accountId: cur.accountId, levelId: cur.levelId } : null,
-          /* ★ E7：「当前关卡」是猜的 —— 判据 / 证据 / 备选 / 歧义警告都摆出来（写盘前请显式传 `level`） */
+          /* ★ E7：「当前关卡」是猜的 —— 判据 / 证据 / 备选 / 歧义警告都摆出来（写盘前请显式传 `level`）
+           *   ★ 2026-10-02 压体积：`currentEvidence`（实测 285 B，含一串绝对路径）与 `currentAlternatives`
+           *   （实测 294 B，三个含 ISO 时间戳的对象）**在 brief 档合成一行 `currentWhy`**（≈90 B）——
+           *   路径本来就有 `luaDir` / `gil` / `logDir` 三个字段在，备选也只留 id + 时间 + 活文件数。
+           *   完整版（含全部路径与 3 个备选对象）在**非 brief 档**照旧给。 */
           currentDecidedBy: curDecision.decidedBy,
-          currentEvidence: curDecision.evidence,
-          currentAlternatives: curDecision.alternatives,
+          currentWhy: (curDecision.decidedBy || '')
+            + ((curDecision.alternatives || []).length
+              ? '；备选：' + curDecision.alternatives.slice(0, 2).map((a) => a.levelId + '（'
+                + String(a.newestMs || '').slice(5, 16).replace('T', ' ') + ' · ' + a.luaFileCount + ' 活文件）').join(' ')
+              : ''),
           currentWarning: curDecision.warning,
+          /* ★ 两个"间接判据"（作者要 (a)）：`gil` = .gil 最近存盘、`live` = 活文件最近改动（**会被 deploy 污染**） */
+          editorHint: { gil: eh.byGilSave ? String(eh.byGilSave.levelId) : null, live: eh.byLiveFile ? String(eh.byLiveFile.levelId) : null },
           luaFiles,
           note: notes.length ? notes.join('；') : null,
           mountKnown,
@@ -1740,6 +1757,8 @@ const TOOLS = [  {
         host: hostSummary(),
         levelCount: levels.length,
         current: cur ? brief(cur) : null,
+        /* ★ (a) 完整档给**详细版**：两条间接判据 + 证据档 + "该问人什么"（brief 档只给两个号，见上） */
+        editorHint: editorHint(levels),
         levels: (args.all ? levels : levels.slice(0, 12)).map(brief),
         // `ErrorLog.txt` 巡检：**循环调用 / 挂载失败这类错不进 `.gia`**，只写这个文件。
         // 「没有」也要如实显示 —— 省一次人工翻目录，也避免把「.gia 干净」当成「没事」。
