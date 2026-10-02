@@ -765,6 +765,17 @@ const STRUCTURAL_NAME = /客户端控件容器|布局|HierarchyRoot|小地图|�
 const CLIENT_CONTROL_NAME = /^(容器节点|文本框|文本视窗|图片|界面动效|全屏界面动效|预设按钮|按键提示|光标检测区域|网格视窗|模板引用控件)$/;
 
 /**
+ * 子树的**深度**（根 = 0；叶子回 0）。贪婪扫（`op=clientui kind:"all"`）用。
+ * @param {any} node `clientUiSubtree()` 的产物
+ */
+function maxDepthOf(node) {
+  if (!node) return 0;
+  let d = 0;
+  for (const c of node.children || []) d = Math.max(d, maxDepthOf(c) + 1);
+  return d;
+}
+
+/**
  * 从控件记录里挑出「可能可被脚本动态创建」的候选。
  * ⚠️ 「无父节点」只是**必要**条件，不是充分条件：
  *    容器节点 的独立记录通常是客户端控件容器的画布根节点（画布实例，不可创建）。
@@ -2636,6 +2647,39 @@ const TOOLS = [  {
             standaloneCount: c.standalone.length,
             note: 'summaryOnly：省掉了 `records`（每条控件一行）与 `rendered`（谱系文字），'
               + '只留计数与「可能能动态创建的模板」。要全量就去掉 summaryOnly。',
+          };
+        }
+        /*
+         * ★★ 2026-10-02（作者：「**贪婪模式**都通过插件能扫出来」）：
+         *   `kind:"all"` = **贪婪扫** —— 把**每一条** standalone 记录的**完整子树**都摊开（不再受 40 节点上限），
+         *   外加一份 `greedy` 汇总（总节点数 / 最深 / 名字直方图 / 谁是叶子）。
+         *   ⚠️ **不新增 schema 参数**：复用已有的 `kind`（枚举里本来就有 `all`）与 `limit`（默认 200 棵树，`limit:0` = 不限）。
+         *   ⚠️ 回执会很大（本机 `1073741842`：90 条 standalone、单棵最大 197 节点）⇒ 要计数就用 `summaryOnly`。
+         */
+        if (String(args.kind || '') === 'all') {
+          const cap = Number.isFinite(Number(args.limit)) ? Number(args.limit) : 200;
+          const all = c.standalone.map((r) => {
+            const tree = subtreeOf(r.id);
+            const nodes = subtreeNodeCount(tree);
+            const nameAcc = {};
+            (function walk(n) { nameAcc[n.name || '?'] = (nameAcc[n.name || '?'] || 0) + 1; for (const k of n.children || []) walk(k); })(tree);
+            return { rootId: r.id, name: r.name, role: (c.likelyTemplates.some((t) => t.id === r.id) ? 'likelyTemplate' : 'other'), nodes, depth: maxDepthOf(tree), names: nameAcc, tree };
+          }).sort((a, b) => b.nodes - a.nodes);
+          const shown = cap > 0 ? all.slice(0, cap) : all;
+          return {
+            ok: true, op, path: gilPath, level: gil.level,
+            greedy: {
+              controlCount: gil.clientUI.length,
+              standaloneRoots: all.length,
+              treesShown: shown.length,
+              treesOmitted: all.length - shown.length,
+              totalNodes: all.reduce((s, t) => s + t.nodes, 0),
+              biggest: all.length ? { rootId: all[0].rootId, name: all[0].name, nodes: all[0].nodes, depth: all[0].depth } : null,
+              note: '贪婪扫：每条 standalone 记录的**完整子树**都摊开（不再有 40 节点上限）。'
+                + '⚠️ `nodes` 是**整棵子树**的节点数（含深层），不是"直接子控件数"（那看 `tree.childCount`）。',
+            },
+            trees: shown,
+            hint: base.hint,
           };
         }
         return {

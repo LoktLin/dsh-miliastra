@@ -168,6 +168,29 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ 贪婪扫 `op=clientui kind:"all"`（作者 2026-10-02）：所有 standalone 的**完整子树**一次扫完 + 不占新 schema', async () => {
+  const { TOOLS } = await import('../index.js');
+  const t = TOOLS.find((x) => x.name === 'miliastra_map');
+  // schema 侧：`kind` / `limit` 是**已有**参数 ⇒ 贪婪模式不许新增参数（棘轮 34 KB）
+  const props = Object.keys((t.parameters && t.parameters.properties) || {});
+  assert(props.includes('kind') && props.includes('limit'), '缺 kind/limit');
+  assert(!props.includes('greedy') && !props.includes('root'), '贪婪模式**不该**新增顶层参数（会顶穿 schema 棘轮）');
+  const lv = (await import('../lib/locate.mjs')).scanLevels().find((l) => String(l.levelId) === '1073741842' && l.gil);
+  if (!lv) return 'schema 侧通过（本机没有 1073741842，跳过真数据那条）';
+  const r = await t.execute({ op: 'clientui', level: '1073741842', kind: 'all', limit: 2 });
+  assert(r.greedy && r.greedy.standaloneRoots > 0, '缺 greedy 汇总');
+  eq(r.trees.length, 2, 'limit 没生效');
+  assert(r.trees.every((x) => x.nodes > 0 && x.tree && x.tree.id === x.rootId), '某棵树的 root/nodes 不对');
+  assert(r.trees[0].nodes >= r.trees[1].nodes, '没按 nodes 倒序（最大的在前）');
+  assert(r.greedy.biggest && r.greedy.biggest.nodes > 0, '缺 biggest');
+  // lossless：不许出现 undefined 值（smoke 抓过同类）
+  assert(!JSON.stringify(r).includes('undefined'), '回执里出现了 undefined');
+  const s = await t.execute({ op: 'clientui', level: '1073741842', summaryOnly: true });
+  assert(s.trees === undefined, 'summaryOnly 时仍回 trees（体积）');
+  return 'standaloneRoots=' + r.greedy.standaloneRoots + ' · totalNodes=' + r.greedy.totalNodes
+    + ' · 最大 ' + r.greedy.biggest.name + '(' + r.greedy.biggest.nodes + ' 节点/深 ' + r.greedy.biggest.depth + ')';
+});
+
 await check('★ 模板子树（作者 2026-10-02：「只有最顶层的客户端模板能读取到，要递归子树」）`clientUiSubtree` 递归/防环/限深/missing', async () => {
   const { clientUiSubtree, subtreeNodeCount } = await import('../lib/gil.mjs');
   const recs = [
