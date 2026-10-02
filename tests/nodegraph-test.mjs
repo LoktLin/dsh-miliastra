@@ -12,7 +12,7 @@
  * 用法：node tests/nodegraph-test.mjs
  */
 import fs from 'node:fs';
-import { readGilNodeFacts, readGraphMounts } from '../lib/gilnodes.mjs';
+import { readGilNodeFacts, readGraphMounts, signalInventory } from '../lib/gilnodes.mjs';
 import { parseMessage } from '../lib/wire.mjs';
 import { scanLevels, pickCurrent } from '../lib/locate.mjs';
 import {
@@ -232,6 +232,27 @@ await check('⑨ 「挂在 XX 上的图能做到什么」：入口事件 + **执
     assert(Number.isFinite(g.actionTotal) && g.actionTotal >= g.actions.length, 'actionTotal 不对');
     return '入口 ' + g.entryEvents.length + ' 个 · 动作 ' + g.actions.join('/') + '（共 ' + g.actionTotal + ' 个执行节点）';
   });
+});
+
+await check('⑩ 信号清单（作者 2026-10-02：「能不能读取结构体 还有信号」）：**信号能读**、**结构体如实说读不到**', () => {
+  // 合成：`#10.#2` 引用表里的可读串 = 引脚名 + 真信号名（前缀 `侦_`）
+  const facts = {
+    signalRefCount: 3,
+    signalRefs: [
+      { index: 0, labels: ['名称', '数值', '信号名', '侦_整数'] },
+      { index: 1, labels: ['侦_浮点数列表_新增', '目标玩家', '其它参数名'] },
+    ],
+  };
+  const inv = signalInventory(facts, { prefix: '侦_' });
+  eq(inv.names.map((n) => n.name), ['侦_浮点数列表_新增', '侦_整数'], '信号名没按前缀筛对（或排序不对）');
+  eq(inv.names.find((n) => n.name === '侦_整数').count, 1, '同名计数不对');
+  assert(!inv.names.some((n) => n.name === '名称' || n.name === '信号名'), '引脚名混进信号名了');
+  assert(inv.otherCandidates.includes('其它参数名'), '没被前缀筛中的候选没摆出来（人就无法核）');
+  eq(inv.patterns['浮点数列表'], true, '列表类没识别');
+  eq(inv.patterns['布尔值'], false, '不存在的类被报成有');
+  assert(/不是官方字段号/.test(inv.unverified), '没写清口径不是官方字段号');
+  assert(/结构体定义.*读不到/.test(inv.unverified), '结构体读不到这件事没写进回执');
+  return '前缀筛选 + 引脚排除 + 计数 + 八类匹配 + 口径与结构体声明';
 });
 
 await check('⑦ 真 `.gil`：逐图相加 == 整关（含覆盖率），且入口都是事件类', () => {

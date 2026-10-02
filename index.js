@@ -51,7 +51,7 @@ import { globalWrites } from './lib/lua-audit.mjs';
 import { lintLua, lintSummary } from './lib/lualint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
 import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
-import { readGilNodeFacts } from './lib/gilnodes.mjs';
+import { readGilNodeFacts, signalInventory } from './lib/gilnodes.mjs';
 import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS, triggersOf, actionsOf } from './lib/nodegraph.mjs';
 import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
 import { kbSearch, kbCatalog, kbEntry, kbSources, KB_ENTRIES } from './lib/kbqa.mjs';
@@ -2352,6 +2352,10 @@ const TOOLS = [  {
           })),
           brief: '整关 ' + totals.nodes + ' 个节点（' + totals.graphs + ' 张图）：' + totals.byTypeLabelText
             + '　·　词典覆盖 ' + known + '/' + totals.nodes,
+          /* ★ 2026-10-02（作者问「能不能读取结构体 还有信号」）：
+           *   信号 = **能读**（`#10.#2` 引用表 − 固定引脚名 − 现场前缀 `侦_`，口径是启发式，见 `signalInventory` 的 unverified）；
+           *   结构体 = **读不到定义**（同表里有「结构体」字样，但字段名+类型没找到）⇒ 如实说，不编。 */
+          signals: (args.summaryOnly === true) ? undefined : signalInventory(facts),
           mountSummary: {
             graphsWithOwner: Object.keys(facts.graphOwners || {}).length,
             graphsTotal: (facts.graphs || []).length,
