@@ -40,6 +40,7 @@ import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot, currentLevelDecision, editorHint } from './lib/locate.mjs';
+import { createHash } from 'node:crypto';
 import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt, pickLiveFile, compareLiveSources, normalizeLiveName } from './lib/codefile.mjs';
 import { scanRects, compareRects, expandDriverRefs } from './lib/rects.mjs';
 import { snapshotFreshness } from './lib/freshness.mjs';
@@ -651,20 +652,35 @@ function shaAllFiles(cur, mirror) {
   const rows = liveFiles.map((f) => {
     const live = inspect(f.path);
     const name = f.name;
+    /*
+     * ★★ 2026-10-02 修：**比较存盘状态时必须去掉 UTF-8 BOM**。
+     *   实测（侦探0.0.3 `1073741842`）：11 条活文件**全都带 BOM**，而 `.gil` 里嵌的是**去 BOM 的那份**
+     *   （`.gil` 的字节数恰好每条少 3）⇒ 直接比 sha 会把**刚存过盘的图也判成"该存盘了"**。
+     *   判据：`sha256(活文件[3:]) == 嵌入 sha` —— 实测 **10/10 命中**（内容一致，只差 BOM）。
+     *   ⚠️ `背景层 bg.lua` 那种 **3 字节 = 只有 BOM、没有内容** 的，`.gil` 侧是 0 字节 + 无 sha ⇒ 两边都无内容可对。
+     */
+    const buf = (() => { try { return fsMod.readFileSync(f.path); } catch (e) { return null; } })();
+    const hasBom = !!(buf && buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf);
+    const noBomSha = hasBom ? createHash('sha256').update(buf.slice(3)).digest('hex').toUpperCase() : null;
+    const liveShaCmp = noBomSha || live.sha256;         // 比较用：有 BOM 就用去 BOM 的那份
     const hit = mirrorDir && mirrorNames.length
       ? mirrorNames.find((n) => normalizeLiveName(n) === normalizeLiveName(name)) : null;
     const mInfo = hit ? inspect(pathMod.join(mirrorDir, hit)) : null;
     const emb = pickScriptMapping(mappings, name);
     const mapping = emb.mapping || null;
     const cmp = compareLiveSources({
-      live: { name, sha256: live.sha256, bytes: live.size },
+      live: { name, sha256: liveShaCmp, bytes: live.size },
       mirror: mInfo ? { name: hit, sha256: mInfo.sha256, bytes: mInfo.size } : null,
       embedded: mapping ? { name: mapping.name, file: mapping.file, sha256: mapping.sha256, bytes: mapping.bytes } : null,
       embeddedCount: mappings.length,
     });
     return {
       file: name,
-      liveSha: live.sha256 ? live.sha256.slice(0, 12) : null,
+      liveSha: liveShaCmp ? liveShaCmp.slice(0, 12) : null,
+      /* ★ 原始 sha 也留着（有 BOM 时两者不同）—— 谁要查"到底差在哪"，这两个值就是答案 */
+      liveShaRaw: hasBom && live.sha256 ? live.sha256.slice(0, 12) : undefined,
+      bomStripped: hasBom || undefined,
+      liveBytes: live.size,
       mirrorSha: mInfo ? mInfo.sha256.slice(0, 12) : null,
       embeddedSha: mapping ? String(mapping.sha256 || '').slice(0, 12) : null,
       verdict: cmp.verdict,

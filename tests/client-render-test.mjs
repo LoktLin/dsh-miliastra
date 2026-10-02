@@ -210,6 +210,24 @@ check('样式已注入 <style data-plugin="dsh-miliastra">，且带 id 便于回
   return 'style ' + s.textContent.length + ' 字符（含内容指纹 data-sig）';
 });
 
+check('★ 存盘状态比较：**只差 BOM 算已存盘**；**只有 BOM 的空文件**要说清原因（2026-10-02 实测 1073741842 全 11 条带 BOM）', () => {
+  const sv = clientExports.__testSaveVerdict;
+  assert(typeof sv === 'function', '没导出 __testSaveVerdict');
+  // ① 只差 BOM ⇒ 算"已存盘"，并在提示里说明（不许默默算一致、也不许算成不一致）
+  const only = sv({ ok: true, rows: [{ file: 'a.lua', liveSha: 'AAA', embeddedSha: 'AAA', mounted: true, bomStripped: true }] });
+  assert(only.state === 'saved', '只差 BOM 没算已存盘：' + only.state);
+  assert(/BOM/.test(only.hint), '已存盘时没说明"只差 BOM"：' + only.hint);
+  // ② 真不一致 ⇒ 仍是"该存盘了"（别把 BOM 归一化顺手放过真差异）
+  const bad = sv({ ok: true, rows: [{ file: 'a.lua', liveSha: 'AAA', embeddedSha: 'BBB', mounted: true, bomStripped: true }] });
+  assert(bad.state === 'dirty', '真不一致却被算成 dirty 以外的状态：' + bad.state);
+  // ③ 3 字节 = 只有 BOM、没内容 ⇒ 说清"两边都没内容可对"，而不是"读不到 sha"
+  const empty = sv({ ok: true, rows: [{ file: '背景层 bg.lua', liveSha: 'BBB', embeddedSha: null, mounted: true, liveBytes: 3 }] });
+  assert(empty.state === 'unknown', 'BOM-only 空文件应归"说不清"：' + empty.state);
+  assert(/只有 BOM、没有内容/.test(empty.hint), '没说清原因：' + empty.hint);
+  assert(!/sha 没读到/.test(empty.hint), '还在用"sha 没读到"这种不准确的说法');
+  return '只差 BOM=已存盘 · 真差异=dirty · BOM-only 空文件=说清原因';
+});
+
 check('**样式里没有裸色值**：每个 var(--dsw-*) 都带 fallback', () => {
   const css = styleNodes[0].textContent;
   const vars = css.match(/var\(--dsw-[a-z0-9-]+/g) || [];
