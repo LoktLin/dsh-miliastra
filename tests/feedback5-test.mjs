@@ -156,6 +156,18 @@ await check('P1-4 ③ 加了两类提示后，brief 回执仍 < 1024 B（它是"
   return b + ' B（含 0 字节 + 未挂载两类提示；备选压成一行）';
 });
 
+await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备份名能推断目标**就以它为准，认不出回 null（不猜）', async () => {
+  const { inferLiveNameFromBackup } = await import('../lib/codefile.mjs');
+  const L = ['表现 view.lua', '背景层 bg.lua', '主控 main.lua', 'aa.lua', 'a.lua'];
+  eq(inferLiveNameFromBackup('C:\\b\\背景层 bg.bak', L), '背景层 bg.lua', '固定名没认出来');
+  eq(inferLiveNameFromBackup('C:\\b\\表现 view.bak', L), '表现 view.lua', '固定名没认出来（表现）');
+  eq(inferLiveNameFromBackup('C:\\b\\主控 main.20261002-113000_备份.lua', L), '主控 main.lua', '时间戳名没认出来');
+  eq(inferLiveNameFromBackup('C:\\b\\随便一个.bak', L), null, '认不出却猜了一个');
+  eq(inferLiveNameFromBackup('C:\\b\\.bak', L), null, '空 stem 不该命中');
+  eq(inferLiveNameFromBackup('C:\\b\\aa.bak', L), 'aa.lua', '短名抢了长名的备份（会还原错文件）');
+  return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
+});
+
 await check('P1-4 ③c `editorHint` 是**纯函数**：两条判据各自命中 + `same` 判定（不许把"最近改动"当"当前图"）', async () => {
   const { editorHint } = await import('../lib/locate.mjs');
   const lv = (id, gilMs, liveMs) => ({ levelId: id, gil: { path: id + '.gil', size: 10, mtimeMs: gilMs }, luaFiles: [{ name: 'x.lua', mtimeMs: liveMs }], newestMs: Math.max(gilMs, liveMs) });

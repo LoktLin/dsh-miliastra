@@ -41,7 +41,7 @@ import { fileURLToPath } from 'node:url';
 const SELF_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 import { scanLevels, pickCurrent, findLevel, localLowRoot, currentLevelDecision, editorHint } from './lib/locate.mjs';
 import { createHash } from 'node:crypto';
-import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt, pickLiveFile, compareLiveSources, normalizeLiveName } from './lib/codefile.mjs';
+import { inspect, deploy as deployFile, pickLuaFile, rankLuaFiles, defaultBackupDir, backupFile, listBackups, restore as restoreFile, restoreCommand, stripBomFile, writeDeployFingerprint, readDeployFingerprint, fingerprintDelta, DEPLOY_FINGERPRINT_NAME, readLuaAt, pickLiveFile, compareLiveSources, normalizeLiveName, inferLiveNameFromBackup } from './lib/codefile.mjs';
 import { scanRects, compareRects, expandDriverRefs } from './lib/rects.mjs';
 import { snapshotFreshness } from './lib/freshness.mjs';
 import { lintUiFiles } from './lib/uilint.mjs';
@@ -2000,10 +2000,39 @@ const TOOLS = [  {
       }
       if (op === 'restore') {
         if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
+        /*
+         * ★★ P0 修复（使用反馈 2026-10-02 第 2 条 —— **真实事故**：还原 0 字节的 `背景层 bg.lua` 时没传 `file`，
+         *   工具按 `.gil` 挂载名挑目标，把 **表现 view.lua 覆盖成 3936 B**，靠 safetyBackup + 镜像才修回）。
+         *   规矩：**备份文件名能推断出它属于哪个活文件时，就以它为准**；推断出来的目标与"当前挑中的目标"不一致 ⇒
+         *   **报错，不写盘**（写错活文件 = 不可逆）。推不出来（既不是 `<原名>.bak` 也不是 `<原名>.<戳>_备份.lua`）
+         *   就照旧走 `file=` / 挑选，但把 `targetInferredFrom` 如实回报。
+         */
+        const liveNames = (lv.luaFiles || []).map((f) => pathBasenameOf(f.path));
+        const inferred = inferLiveNameFromBackup(args.backup, liveNames);
+        const pickedName = pathBasenameOf(destPath);
+        if (inferred && !args.file && inferred !== pickedName) {
+          // 备份名说了它是谁的 ⇒ 以备份名为准（这是"最不容易错"的证据）
+          const cand = (lv.luaFiles || []).find((f) => pathBasenameOf(f.path) === inferred);
+          if (cand) {
+            destPath = cand.path;
+            // ⚠️ 这里**保持 `picked` 的原形**（typecheck 会查）——只改说明性字段，不动 `selectedFile/candidates`
+            picked = { ...picked, pickedBy: 'backupName', selectedFile: inferred };
+          }
+        } else if (inferred && args.file && inferred !== pickedName) {
+          return {
+            ok: false, op, code: 'RESTORE_TARGET_MISMATCH',
+            level: { levelId: lv.levelId },
+            backup: args.backup, backupBelongsTo: inferred, wanted: pickedName,
+            error: '备份「' + pathBasenameOf(args.backup) + '」是 **' + inferred + '** 的，但你指定的目标是 **' + pickedName + '**'
+              + ' ⇒ **拒绝写盘**（写错活文件不可逆）。',
+            howTo: '要么把 `file` 改成 `' + inferred + '`，要么换一份属于 `' + pickedName + '` 的备份（`op=backups` 列出来）。',
+          };
+        }
         // backup 可不传 = 用固定名那份（<原名>.bak）。这是「固定统一备份名」的用处：还原有确定目标。
         const r = restoreFile(args.backup || null, destPath, { backupDir: args.backupDir });
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
+          targetInferredFrom: inferred || null,
           error: r.error || (r.errors || [])[0] || null,
           restoreWith: restoreCommand(null, destPath),
           usedFixedBackup: r.usedFixedBackup === true,
