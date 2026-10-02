@@ -1,6 +1,27 @@
 ## [未发布]
 
+### 新增功能
+
+- ★ **`miliastra_health` 的 `editorHint` —— "编辑器正在编辑哪张图"只有间接证据**（作者 2026-10-02：「插件没有这条通道?」）：
+  **五条候选通道全部实测排除** —— 编辑器窗口标题只有「千星沙箱」（不含关卡名）/ `.gil` **不被占用**（11 张全可独占打开）/
+  **无自动保存心跳**（监听 10 秒零写入）/ 编辑器自己的目录 `%LOCALAPPDATA%\BeyondEditor` **是空的**、Chromium Local Storage 里
+  **没有** `lastLevel/currentLevel/levelId/关卡/地图/projectPath` 任何键 / `BeyondLocal\<账号>\Temp\<id>.gil` 每张图一份且
+  **mtime 与 `Save_Level\<id>\<id>.gil` 逐条一致**（同一事件的副本）。
+  ⇒ 新增 `lib/locate.mjs` 的 **`editorHint(levels)`**：`byGilSave`（`.gil` 最近存盘 = 最强信号）+
+  `byLiveFile`（活文件最近改动，**会被 deploy 污染**）+ `same` + `evidence:'indirect'` + `note` + **`askHuman`**（该问人什么）。
+  完整档给详细版；**brief 档只给两个号** `editorHint:{gil,live}`（40 B）。
+  **系统提示段**（`PROMPT_GUIDE`）同步写明：**改码/部署前先问作者一句"现在在哪张图"**，别把 `editorHint` 当"当前图"。
+
 ### 修复
+
+- ★ **brief 档实测 1951 B —— 远超"< 1 KB"的自我要求，而两条 `< 1024 B` 的断言跑的是夹具（1~2 个活文件）⇒ 真实环境从未被测到**：
+  字段账 `luaFiles` 461 + `currentAlternatives` 294 + `currentEvidence` 285 + `currentWarning` 215 + 目录 244。
+  **压缩（不改信息量，只去重复）**：brief 里 `currentEvidence` + `currentAlternatives`（含一串绝对路径 + 3 个 ISO 时间戳对象）
+  合成一行 **`currentWhy`**（路径本来就有 `luaDir`/`gil`/`logDir`；备选只留 id + 时间 + 活文件数）；
+  活文件 **> 8 个**时逐条 `bytes` 不再给（**名字一个不少**）。
+  ⇒ 实测 **1951 → 1348 B**（真实环境 11 活文件）、**1247 B**（合成 12 活文件 + 备选场景）。
+  测试补上真实形状：`feedback5-test` 的 P1-4 ③ 断言 brief **不许再有** `currentEvidence/currentAlternatives`；
+  新增 ③b（12 活文件 + 备选 ≤ 1536 B、只给名字）与 ③c（`editorHint` 纯函数：两条判据各自命中 + `same` 判定 + 不许下结论）。
 
 - ★ **面板第 7 页的关卡默认口径：改成「最近存盘的地图存档（`.gil`）」**（作者 2026-10-02：「不管坦克大战」）：
   原来是「最近改动」（`newestMs`，**活文件也算**）⇒ 实测那一刻落到了 **坦克大战 `1073741837`**，
