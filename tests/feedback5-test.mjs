@@ -168,6 +168,28 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ 模板子树（作者 2026-10-02：「只有最顶层的客户端模板能读取到，要递归子树」）`clientUiSubtree` 递归/防环/限深/missing', async () => {
+  const { clientUiSubtree, subtreeNodeCount } = await import('../lib/gil.mjs');
+  const recs = [
+    { id: 1, name: '声望值', parent: null, children: [2, 3] },
+    { id: 2, name: '图片', parent: 1, children: null },
+    { id: 3, name: '图片', parent: 1, children: [4, 5] },
+    { id: 4, name: '图片', parent: 3, children: null },
+    { id: 5, name: '图片', parent: 3, children: [3] },          // 环：指回祖先
+  ];
+  const t = clientUiSubtree(recs, 1);
+  eq(t.id, 1, '根不对');
+  eq(t.childCount, 2, '一级子数不对');
+  eq(t.children[1].childCount, 2, '二级子数不对');
+  eq(subtreeNodeCount(t), 6, '节点数不对：应为 6（含根 + 那张**指回祖先的重复记录**也算一条，免得"数不出来"）');
+  assert(t.children[1].children[1].children[0].cycle === true, '指回祖先的环没被标出来（会无限递归）');
+  const m = clientUiSubtree(recs, 99);
+  assert(m.missing === true, '查不到的 id 没标 missing');
+  const d = clientUiSubtree(recs, 1, { maxDepth: 1 });
+  assert(d.children[1].truncatedChildren === 2, '限深后没给 truncatedChildren');
+  return '递归展开 + 环标记 + missing + 限深 四种情形都对';
+});
+
 await check('P1-4 ③c `editorHint` 是**纯函数**：两条判据各自命中 + `same` 判定（不许把"最近改动"当"当前图"）', async () => {
   const { editorHint } = await import('../lib/locate.mjs');
   const lv = (id, gilMs, liveMs) => ({ levelId: id, gil: { path: id + '.gil', size: 10, mtimeMs: gilMs }, luaFiles: [{ name: 'x.lua', mtimeMs: liveMs }], newestMs: Math.max(gilMs, liveMs) });

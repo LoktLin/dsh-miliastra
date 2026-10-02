@@ -50,7 +50,7 @@ import { checkLuaSyntax } from './lib/lua-syntax.mjs';
 import { globalWrites } from './lib/lua-audit.mjs';
 import { lintLua, lintSummary } from './lib/lualint.mjs';
 import { uiWarnings, uiWarningsOfFiles, UI_WARN_DOC } from './lib/uiwarn.mjs';
-import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping } from './lib/gil.mjs';
+import { readGil, renderClientUI, extractStrings, compareScriptSnapshot, mountStatusOf, pickScriptMapping, clientUiSubtree, subtreeNodeCount } from './lib/gil.mjs';
 import { readGilNodeFacts, signalInventory } from './lib/gilnodes.mjs';
 import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS, triggersOf, actionsOf } from './lib/nodegraph.mjs';
 import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
@@ -2252,10 +2252,10 @@ const TOOLS = [  {
         op: {
           type: 'string',
           enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'anatomy', 'regions', 'nodedb'],
-          description: '默认 summary。`nodes`=节点图/实体/元件/场景物件明细；`anatomy`=节点图能力画像（各类型节点 + 入口 + 引用）；`regions`=顶层区地图（这张图里都有什么）。',
+          description: '默认 summary。`nodes`=节点图/实体/元件/场景物件明细；`anatomy`=节点图能力画像；`regions`=顶层区地图。',
         },
         q: { type: 'string', description: 'op=nodedb：搜节点关键词（中/英/标识符；空格=AND）。不给 q 只回分类清单与计数。' },
-        nodeId: { type: 'number', description: 'op=nodedb：按**官方节点 id** 取一条（注意：与 .gil 里那种关卡内分配的声明号**不是一套**）。' },
+        nodeId: { type: 'number', description: 'op=nodedb：按**官方节点 id** 取一条（与 .gil 里的声明号不是一套）。' },
         system: { type: 'string', enum: ['Server', 'Client'], description: 'op=nodedb：只看服务端 / 客户端节点。' },
         domain: { type: 'string', description: 'op=nodedb：按分类过滤（Execution / Control / Query / Arithmetic / Trigger …）。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡。' },
@@ -2598,11 +2598,27 @@ const TOOLS = [  {
       }
       if (op === 'clientui') {
         const c = classifyControls(gil.clientUI);
+        /*
+         * ★★ 2026-10-02（作者：「**模板子树**这个估计要开发下 —— 现在只有**最顶层**的客户端模板能读取到，要**递归子树**」）：
+         *   子控件 id 本来就在记录里（`#503` → `children`），这里**按它递归展开**。
+         *   · `subtreeOf` 给某个 id 的整棵子树（作者点名的 5 个素材各有 A/B 两条同名记录，靠子树才分得清）；
+         *   · 默认回执里给**每条 standalone 的子树节点数**（大子树只给计数 + `subtreeTruncated`，体积有界；
+         *     `summaryOnly` 时连这个也不给）。
+         */
+        const subtreeOf = (id) => clientUiSubtree(gil.clientUI, id);
+        const countOf = (id) => subtreeNodeCount(subtreeOf(id));
+        const bound = 40;                      // 单棵子树节点数上限（超过只给计数，防回执爆掉）
+        const withTree = (r) => {
+          const n = countOf(r.id);
+          return Object.assign({}, r, n <= bound
+            ? { subtree: subtreeOf(r.id), subtreeNodes: n }
+            : { subtreeNodes: n, subtreeTruncated: '子树 ' + n + ' 个节点（> ' + bound + '）⇒ 省略正文，要正文请点名 `root=' + r.id + '`' });
+        };
         const base = {
           ok: true, op, path: gilPath,
           level: gil.level,
           count: gil.clientUI.length,
-          likelyTemplates: c.likelyTemplates,
+          likelyTemplates: c.likelyTemplates.map(withTree),
           likelyContainers: c.likelyContainers,
           structural: c.structural,
           hint: '能被 game.InstantiateClientUIControl 创建的，只有「在客户端控件模板库里【添加客户端控件】存为模板」的独立控件。'
@@ -2622,7 +2638,15 @@ const TOOLS = [  {
               + '只留计数与「可能能动态创建的模板」。要全量就去掉 summaryOnly。',
           };
         }
-        return { ...base, standalone: c.standalone, records: gil.clientUI, rendered: renderClientUI(gil) };
+        return {
+          ...base,
+          /* ★ 每条 standalone 的**子树节点数**（不展开正文）—— 一眼看出"A 条带几个子控件、B 条带几个" */
+          standalone: c.standalone.map((r) => ({ id: r.id, name: r.name, childCount: (r.children || []).length, subtreeNodes: countOf(r.id) })),
+          records: gil.clientUI, rendered: renderClientUI(gil),
+          /* ★ 点名某条 id 时给**整棵子树**（不限深；防环/限深在 clientUiSubtree 里）。
+           *   ⚠️ 没点名时**不许留 `subtree: undefined`** —— lossless 契约会判它（smoke 抓到过）。 */
+          ...(args.root != null && args.root !== '' ? { subtree: subtreeOf(Number(args.root)) } : {}),
+        };
       }
       if (op === 'script') {
         const cur = args.level || !args.path ? resolveLevel(args.level) : null;
