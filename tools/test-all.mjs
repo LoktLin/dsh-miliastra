@@ -62,6 +62,7 @@ export const SUITES = [
   { name: 'pixelart-test（生成器：图片转像素画 —— 合并/量化/序列化 + 模拟器端到端）', args: ['tests/pixelart-test.mjs'] },
   { name: 'vfx-test（生成器：粒子特效 op=vfx-lua —— 13 预设/落程池子/驱动层逐字 + 模拟器端到端）', args: ['tests/vfx-test.mjs'] },
   { name: 'fx-hardening-test（真机实战 5 个坑：缺 container / op=errors / 落盘提示 / 部署降噪 / preflight）', args: ['tests/fx-hardening-test.mjs'] },
+  { name: 'uilint-test（P0-1 UI 门禁 op=lint-ui：**纯夹具**，四条判据 + summaryOnly）', args: ['tests/uilint-test.mjs'] },
   { name: 'sounds-test（音效库：1997 条目录 + 中英模糊搜索）', args: ['tests/sounds-test.mjs'] },
   { name: 'catalog-test（图片资源库：分类/颜色档/有无图/可渲染 + 三个新 op 的接线）', args: ['tests/catalog-test.mjs'] },
   { name: 'icon-search-test（图标语义检索：三档回执 / 严格诚实口径 / 错误路径 / summaryOnly 只去正文）', args: ['tests/icon-search-test.mjs'] },
