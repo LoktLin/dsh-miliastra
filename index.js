@@ -2332,7 +2332,7 @@ const TOOLS = [  {
       properties: {
         op: {
           type: 'string',
-          enum: ['summary', 'clientui', 'script', 'strings', 'nodes', 'anatomy', 'regions', 'nodedb'],
+          enum: ['summary', 'clientui', 'audit-template', 'script', 'strings', 'nodes', 'anatomy', 'regions', 'nodedb'],
           description: '默认 summary。`nodes`=节点图/实体/元件/场景物件明细；`anatomy`=节点图能力画像；`regions`=顶层区地图。',
         },
         q: { type: 'string', description: 'op=nodedb：搜节点关键词（中/英/标识符；空格=AND）。不给 q 只回分类清单与计数。' },
@@ -2760,6 +2760,73 @@ const TOOLS = [  {
           /* ★ 点名某条 id 时给**整棵子树**（不限深；防环/限深在 clientUiSubtree 里）。
            *   ⚠️ 没点名时**不许留 `subtree: undefined`** —— lossless 契约会判它（smoke 抓到过）。 */
           ...(args.root != null && args.root !== '' ? { subtree: subtreeOf(Number(args.root)) } : {}),
+        };
+      }
+      if (op === 'audit-template') {
+        /*
+         * ★★ 2026-10-04（《插件调用优化方向》第 6 条「内置模板审计」）：作者本轮为回答
+         *   "模板组件是否都用 id/名字引用""`?` 是哪个节点""槽位在哪"，手写了 3 个一次性脚本解析 gil dump。
+         *   这里把那些问法固化成一条 op（**全部来自 `.gil` 记录本身，不猜**）：
+         *     · `tree`            = 子树（递归子控件；`nodeId` 给根，缺省取「名字含 `q`」或第一个独立控件）
+         *     · `map`             = id → { name, parent, 深度 } 便于对照代码里的引用
+         *     · `sameNameSameParent` = **同父重名**（`GetChild(名字)` 会歧义 ⇒ 必须用 id 或改名字）
+         *     · `duplicateRoots`  = **同名多条独立控件**（就是 §7 那 5 组 A/B 记录的形态）
+         *     · `idExists`        = 点名的 id 在不在记录表里
+         *     · `nameRefs`        = 可选：`q` 给逗号分隔的名字清单，报「有 / 没有 / 有几条（歧义）」
+         *   ⚠️ **图源**字段（"会不会渲染成 `?`"）目前**没逆出来** ⇒ 回执里明写 `imageSource: 'unverified'`，**不编**。
+         */
+        const recs = gil.clientUI || [];
+        const byId = new Map(recs.map((r) => [r.id, r]));
+        const depthOf = (id) => { let d = 0; let cur = byId.get(id); const seen = new Set(); while (cur && cur.parent != null) { if (seen.has(cur.id)) break; seen.add(cur.id); cur = byId.get(cur.parent); d += 1; if (d > 64) break; } return d; };
+        const rootId = Number.isFinite(args.nodeId) ? Number(args.nodeId) : null;
+        const q = args.q == null ? '' : String(args.q).trim();
+        let root = rootId != null ? byId.get(rootId) : null;
+        if (!root && q) root = recs.find((r) => r.parent == null && String(r.name || '').includes(q)) || null;
+        if (!root && rootId == null && !q) root = recs.find((r) => r.parent == null) || null;
+        // 同父重名（父可为 null = 独立控件那一层）
+        const buckets = new Map();
+        for (const r of recs) {
+          const k = String(r.parent == null ? 'root' : r.parent) + '\u0000' + String(r.name || '');
+          if (!buckets.has(k)) buckets.set(k, []);
+          buckets.get(k).push(r);
+        }
+        const sameNameSameParent = [...buckets.values()].filter((v) => v.length > 1)
+          .map((v) => ({ parent: v[0].parent, name: v[0].name, count: v.length, ids: v.map((x) => x.id) }))
+          .sort((a, b) => b.count - a.count);
+        const nameHist = new Map();
+        for (const r of recs) if (r.parent == null) nameHist.set(r.name, (nameHist.get(r.name) || 0) + 1);
+        const duplicateRoots = [...nameHist.entries()].filter(([, n]) => n > 1)
+          .map(([name, count]) => ({ name, count, ids: recs.filter((r) => r.parent == null && r.name === name).map((r) => r.id) }));
+        const nameRefs = q && !root
+          ? null
+          : (q ? q.split(',').map((s) => s.trim()).filter(Boolean).map((nm) => {
+            const hits = recs.filter((r) => String(r.name || '') === nm);
+            return { name: nm, count: hits.length, ids: hits.map((r) => r.id), ambiguous: hits.length > 1 };
+          }) : null);
+        const tree = root ? clientUiSubtree(recs, root.id) : null;
+        return {
+          ok: true, op, path: gilPath, level: gil.level,
+          controlCount: recs.length,
+          rootId: root ? root.id : null,
+          rootName: root ? root.name : null,
+          tree,
+          subtreeNodes: tree ? subtreeNodeCount(tree) : null,
+          idExists: rootId != null ? byId.has(rootId) : null,
+          parentOfRoot: root ? root.parent : null,
+          depthOfRoot: root ? depthOf(root.id) : null,
+          sameNameSameParent: args.summaryOnly === true ? sameNameSameParent.length : sameNameSameParent,
+          sameNameSameParentCount: sameNameSameParent.length,
+          duplicateRoots: args.summaryOnly === true ? duplicateRoots.length : duplicateRoots,
+          duplicateRootsCount: duplicateRoots.length,
+          nameRefs,
+          imageSource: 'unverified',
+          imageSourceNote: '⚠️ **图源字段还没逆出来**。"这个节点会不会渲染成 `?`"目前**判不了** —— '
+            + '要判它得先钉"图源号存在 `.gil` 哪一段"（合法值域 = 平台图片资源库 100001~112042，可用 `miliastra_asset op=catalog` 对照）。'
+            + '在那之前本 op **不猜**：只报子树与重名这两类**能证伪**的事实。',
+          hint: '同父重名 ⇒ `GetChild(名字)` 有歧义（改用 id，或把名字改唯一）；同名多条独立控件 ⇒ '
+            + '正是"另存为 / 复制一份"留下的形态（本轮 §7 的 5 组 A/B 记录就是这个）。',
+          next: '看某个具体 id：`{"op":"audit-template","level":"<关卡>","nodeId":1073745047}`；'
+            + '按名字找根：`{"op":"audit-template","q":"声望值"}`；比对代码引用：`q:"名字A,名字B"`（逗号分隔）。',
         };
       }
       if (op === 'script') {

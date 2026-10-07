@@ -168,6 +168,45 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方向》第 6 条）：子树 / 同父重名 / id 存在性 / **图源如实标未解**', async () => {
+  const { TOOLS } = await import('../index.js');
+  const t = TOOLS.find((x) => x.name === 'miliastra_map');
+  // ⚠️ 前面几个夹具用例会改 `MILIASTRA_LOCALLOW`（指向临时夹具）⇒ 这里**临时清掉**，让 `scanLevels()` 看真沙箱
+  const savedLow = process.env.MILIASTRA_LOCALLOW;
+  delete process.env.MILIASTRA_LOCALLOW;
+  try {
+  const lv0 = (await import('../lib/locate.mjs')).scanLevels().filter((l) => l.gil && l.gil.path);
+  if (!lv0.length) return '本机没有 .gil ⇒ 如实跳过';
+  // ⚠️ **不写死关卡**：挑一张**真有客户端控件**的图（.gil 随存盘变，id 与关卡号都不能当契约）
+  let r = null;
+  let lv = null;
+  for (const cand of lv0) {
+    const probe = await t.execute({ op: 'audit-template', level: cand.levelId, summaryOnly: true });
+    if (probe.ok === true && probe.controlCount > 0) { r = probe; lv = cand; break; }
+  }
+  if (!r) return '这几张图的 .gil 里都没有客户端控件记录 ⇒ 如实跳过';
+  assert(r.ok === true, 'op 没进对分支：' + JSON.stringify(r).slice(0, 160));
+  assert(r.controlCount > 0, '控件数为 0，读错地方了');
+  // 不依赖任何**活 id**的结构性断言（.gil 会随存盘变，不能把 id 当契约）
+  assert(typeof r.sameNameSameParentCount === 'number' && r.sameNameSameParentCount >= 0, '缺同父重名计数');
+  assert(typeof r.duplicateRootsCount === 'number' && r.duplicateRootsCount >= 0, '缺同名多条计数');
+  eq(r.imageSource, 'unverified', '图源字段还没逆出来，必须如实标 unverified（不许编"能判 ?"）');
+  assert(/没逆出来|还没逆/.test(r.imageSourceNote), '图源未解这件事没写进回执');
+  // 不存在的 id：如实回 idExists:false + tree:null（不报假警、也不抛）
+  const bad = await t.execute({ op: 'audit-template', level: lv.levelId, nodeId: 999999999, summaryOnly: true });
+  eq(bad.ok, true, '不存在的 id 不该整条报错');
+  eq(bad.idExists, false, '不存在的 id 必须 idExists:false');
+  eq(bad.tree, null, '不存在的 id 不该编出子树');
+  // 缺省根（不给 nodeId/q）也要能给出一个根 + 非空子树
+  assert(r.rootId != null && r.tree && r.subtreeNodes > 0, '缺省根/子树不对：' + JSON.stringify({ id: r.rootId, n: r.subtreeNodes }));
+  eq(r.tree.id, r.rootId, '子树根与 rootId 不一致');
+  return '控件 ' + r.controlCount + ' · 同父重名 ' + r.sameNameSameParentCount + ' 组 · 缺省根 ' + r.rootId + '（子树 ' + r.subtreeNodes + ' 节点）· 图源=unverified';
+  } finally {
+    if (savedLow === undefined) delete process.env.MILIASTRA_LOCALLOW;
+    else process.env.MILIASTRA_LOCALLOW = savedLow;
+  }
+});
+
 await check('★ #3 `.gia` 半截快照判据（《插件调用优化方向》第 3 条）：**有字节但解不出记录**要能判出来', async () => {
   const { readGia } = await import('../lib/gia.mjs');
   const fs = await import('node:fs');
