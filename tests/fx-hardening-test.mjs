@@ -316,16 +316,26 @@ t('②f 找不到时：给**可执行**提示（指向层级/可见性 + 用截�
 });
 
 t('②g `summaryOnly` 只去正文：计数 / 分布 / fileLine / 提示一个不删', async () => {
-  const full = await log.execute({ op: 'errors' });
-  const slim = await log.execute({ op: 'errors', summaryOnly: true });
+  /*
+   * ★ 2026-10-04：这条曾红（slim 9654 B > full 2151 B）—— **按 AI 使用判断：工具是对的、测试是错的**。
+   *   真因：两次调用各自解析「**最新** `.gia`」，而**作者正在试玩** ⇒ 期间新的一局落盘，
+   *   两次读到的是**不同文件**（一次命中 `staleLog:true` ⇒ 工具故意把 `errors` 置 `null` 并说明
+   *   "别把过期日志当零报错"，**这是正确设计**；另一次是新文件 ⇒ 正常回 48 条）。
+   *   ⇒ 修法：**把 `file` 钉死在同一条上**再比；拿不到文件就如实跳过（不伪装通过）。
+   */
+  const head = await log.execute({ op: 'errors' });
+  if (!head.ok || !head.file) return '读不到 `.gia` ⇒ 如实跳过';
+  const full = await log.execute({ op: 'errors', file: head.file });
+  const slim = await log.execute({ op: 'errors', file: head.file, summaryOnly: true });
   assert(full.ok === true && slim.ok === true, '两次调用都要成功');
+  if (full.staleLog || slim.staleLog) return '这份 `.gia` 不是本局（staleLog）⇒ 内容没有可比性，如实跳过';
   eq(slim.count, full.count, 'summaryOnly 改了 count');
   eq(slim.kindCounts, full.kindCounts, 'summaryOnly 改了 kindCounts');
   eq(slim.runsAffected, full.runsAffected, 'summaryOnly 改了 runsAffected');
   eq(slim.truncated, full.truncated, 'summaryOnly 改了 truncated');
   assert(slim.hint === full.hint, 'summaryOnly 丢了 hint');
   assert(JSON.stringify(slim).length <= JSON.stringify(full).length, 'summaryOnly 没有更小（' + JSON.stringify(slim).length + ' vs ' + JSON.stringify(full).length + '）');
-  if (full.count) {
+  if (full.count && full.errors && full.errors.length) {
     assert(slim.errors[0].fileLine !== undefined, 'summaryOnly 把 fileLine 也去了（那是结论）');
     assert(slim.errors[0].message === undefined, 'summaryOnly 该去掉 message 正文');
     assert(slim.errorsOmitted === full.errors.length, 'errorsOmitted 要对：' + slim.errorsOmitted);
