@@ -56,7 +56,7 @@ import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS, triggers
 import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
 import { kbSearch, kbCatalog, kbEntry, kbSources, KB_ENTRIES } from './lib/kbqa.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
-  findErrorRecords, parseFileLine, attachFileLines, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
+  findErrorRecords, parseFileLine, attachFileLines, pairCommandsWithUi, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
   playtestSummary, shouldHit, logSize,
@@ -2943,7 +2943,7 @@ const TOOLS = [  {
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics', 'errors'], description: '默认 tail。' },
+        op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics', 'errors', 'run-analysis'], description: '默认 tail。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep/runs/errors：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
@@ -3176,6 +3176,37 @@ const TOOLS = [  {
         };
       }
 
+      if (op === 'run-analysis') {
+        /*
+         * ★★ 2026-10-04（《插件调用优化方向》第 10 条）：**命令应答 ↔ 画面变化**配对。
+         *   关键词由调用方给（工具不猜业务词）：
+         *     · `pattern` = **命令类**关键词（正则，缺省 `/命令|点击|按下|Invoke|Pressed/`）
+         *     · `tag`     = **画面/UI 类**关键词（正则，缺省 `/渲染|显形|收起|SetVisible|界面层|覆盖层|更新/`）
+         *   ⚠️ 这是**日志层面**的配对，**不等于"画面真的没变"** ⇒ 判画面用 `miliastra_shot`（回执里明写）。
+         */
+        const src = runQ ? withMsg.filter((r) => String(r.instance || '').includes(runQ)) : withMsg;
+        const withIdx = src.map((r, i) => ({ ...r, i }));
+        let cmdRe = null;
+        let uiRe = null;
+        try { cmdRe = new RegExp(args.pattern || '命令|点击|按下|Invoke|Pressed', 'i'); } catch (e) { return { ok: false, op, error: 'pattern 不是合法正则：' + ((e && e.message) || e) }; }
+        try { uiRe = new RegExp(args.tag || '渲染|显形|收起|SetVisible|界面层|覆盖层|更新', 'i'); } catch (e) { return { ok: false, op, error: 'tag 不是合法正则：' + ((e && e.message) || e) }; }
+        const paired = pairCommandsWithUi(withIdx, { cmdRe, uiRe, window: clampNum(args.limit, 12, 1, 200) });
+        return {
+          ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
+          ...staleFields,
+          runFilter: runQ,
+          scanned: withIdx.length,
+          keywords: { command: cmdRe.source, ui: uiRe.source, window: paired.window },
+          commands: paired.commands,
+          uiRecords: paired.uiRecords,
+          noUiAfterCount: paired.noUiAfterCount,
+          noUiAfter: args.summaryOnly === true ? paired.noUiAfterCount : paired.noUiAfter,
+          pairs: args.summaryOnly === true ? paired.pairs.length : paired.pairs,
+          note: paired.note,
+          hint: '想看某一局的：传 `run=<epoch 秒 或 instance 片段>`；改关键词：`pattern`（命令类）/ `tag`（画面类），都是正则。'
+            + '**"画面真的变没变"必须另用 `miliastra_shot` 取帧差** —— 日志只能证明"这条记录有没有出现"。',
+        };
+      }
       if (op === 'tags') {
         /*
          * ★ P2-4（2026-09-26）：按 **`[...]` 前缀**聚合。

@@ -168,6 +168,29 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10 条）：命令 ↔ 画面配对，点名"有命令无画面"', async () => {
+  const { pairCommandsWithUi } = await import('../lib/gia.mjs');
+  const rows = [
+    { i: 0, time: 't', channel: 'A', message: '命令 图鉴快捷' },
+    { i: 1, time: 't', channel: 'A', message: '渲染 时间=1' },
+    { i: 2, time: 't', channel: 'A', message: '命令 详情' },
+    { i: 3, time: 't', channel: 'A', message: '（这条跟画面无关）' },
+    { i: 4, time: 't', channel: 'A', message: '命令 关掉' },
+    { i: 5, time: 't', channel: 'A', message: '收起 完成' },
+  ];
+  const r = pairCommandsWithUi(rows, { cmdRe: /命令/, uiRe: /渲染|收起/, window: 2 });
+  eq(r.commands, 3, '命令数不对');
+  eq(r.pairs.length, 3, '配对数不对');
+  eq(r.pairs[0].uiFound, true, '第一条命令后面有渲染，该判 found');
+  // 第二条命令后面 2 行内没有画面记录（`window:2`）⇒ 必须点名
+  eq(r.pairs[1].uiFound, false, '窗口内没有画面记录时必须判 false');
+  eq(r.noUiAfterCount, 1, '「有命令无画面」的点名数不对');
+  eq(r.noUiAfter[0].i, 2, '点名的不是第二条命令');
+  assert(/不等于"画面真的没变"/.test(r.note), 'note 必须说清"日志配对 ≠ 画面真的没变"');
+  assert(/miliastra_shot/.test(r.note), 'note 必须指路帧差取证');
+  return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
+});
+
 await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方向》第 6 条）：子树 / 同父重名 / id 存在性 / **图源如实标未解**', async () => {
   const { TOOLS } = await import('../index.js');
   const t = TOOLS.find((x) => x.name === 'miliastra_map');
