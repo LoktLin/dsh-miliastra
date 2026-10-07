@@ -255,7 +255,15 @@ function deployNextStep(ms, rec, destPath) {
         + '，与本次的 ' + name + ' 对不上 → 先用 miliastra_health 看清这个关卡下有哪些活文件，'
         + '确认哪个才是你正在改的（也可以直接传 file 指定）'
       : '先在编辑器里存盘（地图里嵌的还不是这一版）→ 再重新试玩一局');
-  return ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
+  /*
+   * ★★ 2026-10-04（《插件调用优化方向》第 1 条）：把「**存盘 → 试玩 → 对账**」三步**固化**进 `nextStep`
+   *   （作者本轮靠对账两次，才分清"没存盘"和"真 bug"）。挂在原有结论后面，不替换它 —— 原有结论回答
+   *   "这一次该做什么"，这三步回答"怎么确认游戏里真的跑的是这一版"。
+   */
+  const chain = '　★ 三步别省：**① 编辑器存盘**（游戏跑的是存盘时嵌进 `.gil` 的那份，不是活文件）'
+    + ' → **② 让人点试玩** → **③ `miliastra_map op=script` 看 `match:true`**（false = 他试的是旧代码，别急着查脚本）。';
+  const tail = ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
+  return tail + chain;
 }
 
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
@@ -1809,15 +1817,15 @@ const TOOLS = [  {
     parameters: {
       type: 'object',
       properties: {
-        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects', 'lint-ui', 'preflight'], description: '默认 inspect。`source` 给 op=read 读那个文件（只读）；`dir` 给 op=rects / op=lint-ui / op=preflight 扫那个目录。' },
+        op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects', 'lint-ui', 'preflight'], description: '默认 inspect。`dir` 给 op=rects / op=lint-ui / op=preflight。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
-          description: '指定活文件名（省略=该关卡最近改动的那个 .lua；**试玩探针源码/备份这类附属文件自动跳过**）。',
+          description: '指定活文件名（省略=该关卡最近改动的那个 .lua）。',
         },
         source: {
           type: 'string',
-          description: 'op=deploy：要投进去的本地文件**绝对路径**（正反斜杠都认）。**op=read 时也可以**（只读）；不给就读沙箱里的活文件。',
+          description: 'op=deploy：要投进去的本地文件**绝对路径**；op=read 也可以（只读）。',
         },
         backup: {
           type: 'string',
@@ -1836,6 +1844,10 @@ const TOOLS = [  {
           type: 'string',
           enum: ['strict', 'warn', 'off'],
           description: 'op=deploy：Lua 结构校验强度。strict（默认）=不通过就拒绝部署；warn=只提示照投；off=不校验。',
+        },
+        withGates: {
+          type: 'boolean',
+          description: 'op=deploy：写盘前先跑内置 preflight，没过就**不写盘**并回放失败门。',
         },
         head: { type: 'number', description: 'op=read：只返回前 N 行（默认 80，0=全文）。活文件与 source 两条路都听它。' },
         stage: {
@@ -2105,6 +2117,42 @@ const TOOLS = [  {
         picked = pickedFields({ ...wpick, pickedNote: wpick.note });
         picked.destBasenameMatchesSource = wpick.destBasenameMatchesSource;
         if (wpick.basenameMismatch) picked.basenameMismatch = true;
+        /*
+         * ★★ 2026-10-04（《插件调用优化方向》第 1 条「deploy 前自动门禁」）：
+         *   `withGates:true` ⇒ **写盘前**先跑内置 `preflight`（语法 / 作用域 / 全局写审计，全是纯函数、不写盘）。
+         *   没过就**不写盘**并把失败门原样回放 —— 省掉"构建 → 门禁 → deploy"里那 3~4 次往返。
+         *   ⚠️ 只在显式要求时生效（默认行为一个字节不变）。
+         */
+        if (args.withGates === true) {
+          let gate = null;
+          let gateErr = null;
+          try {
+            gate = runPreflightOp({ dir: pathMod.dirname(pathMod.resolve(String(args.source))), scope: 'dir', args: {}, level: lv });
+          } catch (e) { gateErr = (e && e.message) || String(e); }
+          const gateCounts = (gate && gate.counts) || null;
+          const gateBad = !!gateErr || !gate || gate.ok !== true || gate.passed === false
+            || (gateCounts && Number(gateCounts.error || 0) > 0);
+          if (gateBad) {
+            return {
+              ok: false, op, code: 'PRECHECK_FAILED',
+              level: { levelId: lv.levelId },
+              dest: destPath, ...pickedFields(wpick),
+              error: gateErr
+                ? ('写盘前门禁**跑不起来**：' + gateErr + ' ⇒ 按"宁可失败不许写错"处理，**没有写盘**。')
+                : ('写盘前门禁没过（error ' + String((gateCounts && gateCounts.error) || 0) + ' 条）⇒ **没有写盘**。'),
+              gates: gate ? {
+                passed: gate.passed, counts: gate.counts,
+                // 只回**前几条**失败项（回放失败门，但不把整个回执灌满）
+                failing: Object.entries(gate.checks || {})
+                  .filter(([, v]) => Array.isArray(v) && v.length)
+                  .map(([k, v]) => ({ check: k, count: v.length, first: v.slice(0, 3) }))
+                  .filter((x) => /error/i.test(x.check) || x.count > 0)
+                  .slice(0, 5),
+              } : null,
+              nextStep: '先修掉上面的门禁项，再原样重跑这条 deploy（`withGates:true` 会在这里拦住，不会写盘）。',
+            };
+          }
+        }
         const r = deployFile(args.source, destPath, {
           backupDir: args.backupDir,
           noBackup: args.noBackup === true,
