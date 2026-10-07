@@ -2957,12 +2957,12 @@ const TOOLS = [  {
         const cap = clampNum(args.limit, 200, 1, 1000);
         const found = findErrorRecords(pool, { limit: cap });
         /*
-         * ★★ 2026-10-04（《插件调用优化方向》第 4 条，**本轮实测复现**）：
-         *   报错记录**自己**往往没有位置 —— 实测那份 `.gia`（428 条）里 **48 条 `attempt-call` 的 `fileLine` 全是 null**，
-         *   因为位置在**另一条**记录上（紧邻的 `stack traceback` / `特效 fx:428: in function '…'`）。
-         *   ⇒ 只补正则是**治不好**的；正解是**跨记录拼接**：按「同 channel + `seq` 最近」把位置记录关到报错记录上。
+         * ⚠️ 2026-10-04：本轮给 `errors[]` 补过「跨记录借位置」+ 逐条清单，**结果把 `summaryOnly` 的
+         *   契约弄坏了**（fx-hardening ②g：slim 9687 B > full 2247 B —— 每条 `fileLine` 填上后多出
+         *   `file/line/raw` 三字段 × N 条）。⇒ **回执回退到原形**；真因（`parseFileLine` 缺一条
+         *   不锚行首的形态）已经修在 `lib/gia.mjs`，实测 48/48 拿到位置 —— 那才是价值所在。
+         *   `attachFileLines()` 仍然导出、仍有测试（feedback5），要逐条清单时再单独接。
          */
-        const foundWithLines = attachFileLines(pool, found.errors);
         const kinds = Object.entries(found.kindCounts).map(([kind, count]) => ({
           kind, count, what: ERROR_KIND_LABELS[kind] || null,
         })).sort((a, b) => b.count - a.count);
@@ -2987,10 +2987,7 @@ const TOOLS = [  {
           kindCounts: found.kindCounts,
           kinds,
           forms: ERROR_FORMS.map((f) => ({ kind: f.kind, what: ERROR_KIND_LABELS[f.kind] || null })),
-          errors: foundWithLines.errors,
-          /** ★ 跨记录拼出来的位置：`[{index, file, line, fromIndex, raw}]`（报错记录自己没位置时，从邻居借） */
-          fileLinesFromNeighbours: foundWithLines.patched,
-          fileLinesFromNeighboursNote: foundWithLines.note,
+          errors: found.errors,
           summaryOnly: slim,
         };
         /*
