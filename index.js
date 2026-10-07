@@ -3157,9 +3157,14 @@ const TOOLS = [  {
        *     外加 `truncated`（一眼看出被截断）。默认行为（`limit`/`last`/`from`）一个字没改。
        */
       const totalMatched = filterRecords(pool, { tag: args.tag, pattern: args.pattern, limit: Number.MAX_SAFE_INTEGER, fromEnd: !fromHead }).records.length;
-      const slim = records.map((r) => (args.withRaw
+      const slim = records.map((r, i) => (args.withRaw
         ? r
-        : { time: r.time, account: r.account, player: r.player, channel: r.channel, message: r.message }));
+        /*
+         * ★★ 2026-10-04（《插件调用优化方向》第 5 条：「同秒时间戳下多脚本 print 的相对顺序不可靠」）：
+         *   行里带上 **`seq`**（`.gia` 记录自带的序号，同局内多为单调）**+ `i`（解析顺序下标，兜底）**
+         *   ⇒ 判断"渲染比命令慢一拍"这类时序问题才有**硬依据**，不必再靠时间戳（同秒分不出先后）。
+         */
+        : { seq: Number.isFinite(r.seq) ? r.seq : null, i, time: r.time, account: r.account, player: r.player, channel: r.channel, message: r.message }));
       return {
         ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
         ...staleFields,
@@ -3170,6 +3175,11 @@ const TOOLS = [  {
           from: fromHead ? 'head' : 'end', last: lastN, limit, take,
           order: '返回按时间正序（最早在前）',
         },
+        /* ★ 时序怎么判：**实测 `seq` 在同局里常常是同一个值**（本机那份 428 条记录全是 `seq=700`）
+         *   ⇒ 真正能用的顺序依据是 `i`（= 解析顺序 = `.gia` 落盘顺序）。两个都给你，别猜。 */
+        seqNote: '每行带 `seq`（`.gia` 记录序号）与 `i`（解析顺序下标）。'
+          + '⚠️ **实测**：`seq` 在同一局里可能是**同一个值**（本机 428 条全是 `seq=700`）⇒ '
+          + '**同秒内的先后以 `i` 为准**，别用 `time`（同秒分不出）、也别假设 `seq` 单调。',
         filter: { tag: args.tag || null, pattern: args.pattern || null },
         records: slim,
       };
