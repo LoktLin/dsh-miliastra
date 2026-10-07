@@ -168,6 +168,20 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ #8 两条按形状自动挂的已知坑（《插件调用优化方向》第 8 条）：`applyVars` ⇒ 慢一拍 · `SetAsLastSibling` ⇒ 返回值可能恒 false', async () => {
+  const { uiWarnings } = await import('../lib/uiwarn.mjs');
+  const code = ['local function tick()', '  applyVars(c:GetChild("T"), t)', '  local ret = node:SetAsLastSibling()', 'end'].join('\n');
+  const r = uiWarnings(code, 'view.lua');
+  const rules = r.map((w) => w.rule);
+  assert(rules.includes('vars-write-lags-one-frame'), '`applyVars` 没挂上"慢一拍"提示：' + JSON.stringify(rules));
+  assert(rules.includes('set-as-last-sibling-may-return-false'), '`SetAsLastSibling` 没挂上"返回值恒 false"提示：' + JSON.stringify(rules));
+  const vars = r.find((w) => w.rule === 'vars-write-lags-one-frame');
+  assert(/直推|Invoke/.test(vars.fix), '修法必须给出**直推**这条出路：' + vars.fix);
+  assert(vars.line === 2, '行号不对：' + vars.line);
+  eq(uiWarnings('local x = 1\n', 'view.lua').length, 0, '干净代码不该误报');
+  return '两条形状各自命中（带行号 + 修法），干净代码 0 命中';
+});
+
 await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10 条）：命令 ↔ 画面配对，点名"有命令无画面"', async () => {
   const { pairCommandsWithUi } = await import('../lib/gia.mjs');
   const rows = [
