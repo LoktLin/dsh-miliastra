@@ -168,6 +168,28 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ #4 fileLine（《插件调用优化方向》第 4 条，**实测真因**）：报错行**行首还挂着别的内容**时也要提取 + 跨记录兜底', async () => {
+  const { parseFileLine, attachFileLines } = await import('../lib/gia.mjs');
+  // 真机原文（实测 48 条全 null 的那一行）：行首第一个冒号后面**不是数字** ⇒ 旧兜底（锚 `^`）不命中
+  const real = '[侦探1/view] 三态按钮[ovB1] 事件注册失败(容器默认/…CursorEnter): 表现 view:580: attempt to call a nil value';
+  const r = parseFileLine(real);
+  assert(r && r.file === '表现 view' && r.line === 580, '真机原文没提取到（这正是 48 条 fileLine=null 的真因）：' + JSON.stringify(r));
+  // 时间戳不许被当文件行号（旧③的另一半职责，加了④之后仍然要成立）
+  eq(parseFileLine('01:36:27 开跑'), null, '时间戳被误认成 `文件:行号`');
+  // 跨记录兜底：报错记录自己没位置 ⇒ 从**同 channel 的邻居**借（并说明是借来的）
+  const pool = [
+    { index: 0, channel: 'A', seq: 100, message: 'attempt to index a nil value' },
+    { index: 1, channel: 'A', seq: 101, message: "特效 fx:428: in function 'requireHandover'" },
+    { index: 2, channel: 'B', seq: 102, message: '特效 other:9: in function x' },
+  ];
+  const st = attachFileLines(pool, [{ index: 0, channel: 'A', seq: 100, message: pool[0].message, fileLine: null }]);
+  eq(st.errors[0].fileLine.line, 428, '没从邻居借到行号');
+  eq(st.errors[0].fileLineFrom.index, 1, '没记清位置是**从哪条借的**（人就无法回原文核对）');
+  eq(st.errors[0].fileLine.file, '特效 fx', '借来的文件名不对');
+  assert(st.patched.length === 1, 'patched 清单不对');
+  return '真机原文命中 + 时间戳排除 + 跨记录借位置（带 fileLineFrom）';
+});
+
 await check('★ 贪婪扫 `op=clientui kind:"all"`（作者 2026-10-02）：所有 standalone 的**完整子树**一次扫完 + 不占新 schema', async () => {
   const { TOOLS } = await import('../index.js');
   const t = TOOLS.find((x) => x.name === 'miliastra_map');

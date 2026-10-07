@@ -56,7 +56,7 @@ import { graphAnatomy, anatomyTotals, graphOwnerNote, NODE_TYPE_LABELS, triggers
 import { searchNodes, nodeById, nodeDbMeta, nodeDbFacets } from './lib/nodedb.mjs';
 import { kbSearch, kbCatalog, kbEntry, kbSources, KB_ENTRIES } from './lib/kbqa.mjs';
 import { readGia, listGia, filterRecords, groupRuns, playRunsOf, summarizeRuns, compareRuns, giaRunEpochs, logFreshness, giaLandingState,
-  findErrorRecords, parseFileLine, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
+  findErrorRecords, parseFileLine, attachFileLines, ERROR_KIND_LABELS, ERROR_FORMS, NO_ERRORS_HINT, ERRORS_TAG_HINT, landingMisleadingHint } from './lib/gia.mjs';
 import {
   playtestLogPath, scanLog, readIncrement, reduceLogLines, createPlaytestState,
   playtestSummary, shouldHit, logSize,
@@ -2125,7 +2125,18 @@ const TOOLS = [  {
         // ⚠️ 写指纹失败**不影响部署成败**，只降级成一条 warning。
         let fp = null;
         let rec = null;
+        /*
+         * ★★ 2026-10-04（《插件调用优化方向》第 2 条「改产物 vs 改源」防呆）：
+         *   真事故是「grep 定位到改动点，改的其实是**构建产物**」⇒ 下次 build 静默覆盖，白干。
+         *   判据最硬的一条：**这次投进去的内容与上一次投进去的逐字节相同** ⇒ 你的改动根本没进来
+         *   （改了源没 build，或改的是产物）。⇒ 回执给 `prodUnchanged` + 一句人话。
+         */
+        let prodUnchanged = null;
         if (r.ok && destPath) {
+          const before = readDeployFingerprint(destPath, { backupDir: args.backupDir });
+          const beforeSha = before && before.record ? (before.record.sha256 || before.record.sha || null) : null;
+          const nowSha = inspect(destPath) ? inspect(destPath).sha256 : null;
+          if (beforeSha && nowSha) prodUnchanged = String(beforeSha) === String(nowSha);
           fp = writeDeployFingerprint(destPath, inspect(destPath), { backupDir: args.backupDir, source: args.source });
           if (!fp.ok) {
             r.warnings = (r.warnings || []).concat(['部署已成功，但写「部署指纹」失败（只影响「活文件被外部改写」的检测）：' + fp.error]);
@@ -2168,6 +2179,17 @@ const TOOLS = [  {
           ...(mismatchWarning ? { warning: mismatchWarning } : {}),
           ok: r.ok, op, level: { levelId: lv.levelId }, dest: destPath, ...pickedSlim, ...r,
           ...(mismatchNote ? { note: mismatchNote } : {}),
+          /*
+           * ★★ 《插件调用优化方向》第 2 条：**这次投进去的与上次逐字节相同** ⇒ 你的改动没进产物
+           *   （改了源没 build / 改的是构建产物）—— 一句话省一轮。
+           */
+          ...(prodUnchanged === null ? {} : {
+            prodUnchanged,
+            prodNote: prodUnchanged
+              ? '⚠️ **这次部署的内容与上一次逐字节相同**（sha 未变）⇒ 你的改动**没进这份产物**：'
+                + '大概率是「改了源但没 build」，或者「改的是构建产物、下次 build 还会被覆盖」。先确认改的是哪一份。'
+              : '内容与上次不同（改动确实进来了）。',
+          }),
           // ★ P1-3：已知坑（对象）与既有告警（字符串）并存在这里；**不阻断**，`ok` 语义不变
           warnings: warnings.length ? warnings : (r.warnings || []),
           knownPitCount: pit.warnings.length,
@@ -2934,6 +2956,13 @@ const TOOLS = [  {
         const slim = args.summaryOnly === true;
         const cap = clampNum(args.limit, 200, 1, 1000);
         const found = findErrorRecords(pool, { limit: cap });
+        /*
+         * ★★ 2026-10-04（《插件调用优化方向》第 4 条，**本轮实测复现**）：
+         *   报错记录**自己**往往没有位置 —— 实测那份 `.gia`（428 条）里 **48 条 `attempt-call` 的 `fileLine` 全是 null**，
+         *   因为位置在**另一条**记录上（紧邻的 `stack traceback` / `特效 fx:428: in function '…'`）。
+         *   ⇒ 只补正则是**治不好**的；正解是**跨记录拼接**：按「同 channel + `seq` 最近」把位置记录关到报错记录上。
+         */
+        const foundWithLines = attachFileLines(pool, found.errors);
         const kinds = Object.entries(found.kindCounts).map(([kind, count]) => ({
           kind, count, what: ERROR_KIND_LABELS[kind] || null,
         })).sort((a, b) => b.count - a.count);
@@ -2958,7 +2987,10 @@ const TOOLS = [  {
           kindCounts: found.kindCounts,
           kinds,
           forms: ERROR_FORMS.map((f) => ({ kind: f.kind, what: ERROR_KIND_LABELS[f.kind] || null })),
-          errors: found.errors,
+          errors: foundWithLines.errors,
+          /** ★ 跨记录拼出来的位置：`[{index, file, line, fromIndex, raw}]`（报错记录自己没位置时，从邻居借） */
+          fileLinesFromNeighbours: foundWithLines.patched,
+          fileLinesFromNeighboursNote: foundWithLines.note,
           summaryOnly: slim,
         };
         /*
