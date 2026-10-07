@@ -168,6 +168,22 @@ await check('P0（使用反馈 2026-10-02 #2）`inferLiveNameFromBackup`：**备
   return '固定名/时间戳名/认不出/最长匹配 四种情形都对';
 });
 
+await check('★ #3 `.gia` 半截快照判据（《插件调用优化方向》第 3 条）：**有字节但解不出记录**要能判出来', async () => {
+  const { readGia } = await import('../lib/gia.mjs');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-gia-'));
+  const bad = path.join(d, 'half.gia');
+  fs.writeFileSync(bad, Buffer.from([0xff, 0xfe, 0xfd, 0xfc, 0x00, 0x01, 0x02]));   // 有字节、连头都解不出来（半截/坏文件的常态）
+  const g = readGia(bad);
+  eq(g.size > 0, true, 'size 该 > 0');
+  eq(g.emptyButHasBytes, true, '**没判出"有字节但解不动"** —— 半截快照就会被当成"没有报错"');
+  eq(g.complete, false, 'complete 该是 false（这条早退路径也要带判据）');
+  fs.rmSync(d, { recursive: true, force: true });
+  return 'emptyButHasBytes=true · complete=false（半截/坏文件的判据可验证，不是猜）';
+});
+
 await check('★ #4 fileLine（《插件调用优化方向》第 4 条，**实测真因**）：报错行**行首还挂着别的内容**时也要提取 + 跨记录兜底', async () => {
   const { parseFileLine, attachFileLines } = await import('../lib/gia.mjs');
   // 真机原文（实测 48 条全 null 的那一行）：行首第一个冒号后面**不是数字** ⇒ 旧兜底（锚 `^`）不命中

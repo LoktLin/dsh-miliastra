@@ -2954,6 +2954,16 @@ const TOOLS = [  {
       const staleFields = Object.assign({
         staleLog: staleness.staleLog,
         logBelongsTo: staleness.logBelongsTo,
+        /*
+         * ★★ 《插件调用优化方向》第 3 条：**半截快照要显式说**（`.gia` 一局结束才落盘；局中读到的可能是半截）。
+         *   判据是**可验证**的：文件有字节、却一条记录都解不出来 ⇒ 不能把"没有报错"当结论。
+         */
+        ...(gia && gia.emptyButHasBytes ? {
+          partialSnapshot: true,
+          partialSnapshotNote: '⚠️ 这个 `.gia` **有字节但解不出任何记录**：要么是**正在写**（`.gia` 一局结束才落盘，'
+            + '局中读到的是半截快照），要么文件坏了 ⇒ **"这里没有报错"不能当结论** —— '
+            + '等这一局**结束**（停试玩）后再读一次；判"在不在试玩"用 `miliastra_playtest op=status`。',
+        } : {}),
       }, landingHint ? { landingHint } : {}, staleness.staleLog ? {
         staleLogWarning: '⚠️ 这份日志**不属于本次会话**：' + staleness.logFreshnessNote
           + '（本局 epochSec ' + (staleness.sessionEpochSec == null ? '未知' : staleness.sessionEpochSec) + '）',
