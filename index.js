@@ -2819,10 +2819,37 @@ const TOOLS = [  {
           duplicateRoots: args.summaryOnly === true ? duplicateRoots.length : duplicateRoots,
           duplicateRootsCount: duplicateRoots.length,
           nameRefs,
-          imageSource: 'unverified',
-          imageSourceNote: '⚠️ **图源字段还没逆出来**。"这个节点会不会渲染成 `?`"目前**判不了** —— '
-            + '要判它得先钉"图源号存在 `.gil` 哪一段"（合法值域 = 平台图片资源库 100001~112042，可用 `miliastra_asset op=catalog` 对照）。'
-            + '在那之前本 op **不猜**：只报子树与重名这两类**能证伪**的事实。',
+          /*
+           * ★★ 图源（2026-10-04 逆出来了，**有对照证据**）：控件记录子树里落在**平台图片号段 100001~112042**
+           *   的 varint = 该控件的图源号。证据：日志报 `图片图源=106045`，而 `.gil` 里 106045 **恰好出现 29 次**、
+           *   且落在 29 条控件记录里 ⇒ **与运行时日志对得上**。名字含「图片」却没有号 ⇒ **会渲染成 `?`**。
+           *   ⚠️ 字段号仍未钉死（只钉了"值域 + 在记录子树内"）⇒ 标 `heuristic`，但这对"有没有图"是可证伪的。
+           */
+          imageSource: 'heuristic-verified',
+          imageSourceNote: '图源号 = 控件记录子树内落在**平台图片号段 100001~112042** 的 varint（`miliastra_asset op=catalog` 同号段）；'
+            + '对照证据：日志报 `图片图源=106045`，`.gil` 里 106045 出现 29 次且落在 29 条控件里。'
+            + '⚠️ 字段号未钉死 ⇒ 标 heuristic；但「**图片控件一个号都没有 ⇒ 会渲染成 `?`**」这条是可证伪的。',
+          imageSourceMissingCount: (() => {
+            const isImg = (n) => /图片|Image/i.test(String(n || ''));
+            const walk = (node) => {
+              let n = 0;
+              if (isImg(node.name) && !(node.imageIds || []).length) n += 1;
+              for (const c of node.children || []) n += walk(c);
+              return n;
+            };
+            return tree ? walk(tree) : null;
+          })(),
+          imageSourceMissingSample: (() => {
+            const isImg = (n) => /图片|Image/i.test(String(n || ''));
+            const out = [];
+            const walk = (node) => {
+              if (out.length >= 20) return;
+              if (isImg(node.name) && !(node.imageIds || []).length) out.push({ id: node.id, name: node.name });
+              for (const c of node.children || []) walk(c);
+            };
+            if (tree) walk(tree);
+            return out;
+          })(),
           hint: '同父重名 ⇒ `GetChild(名字)` 有歧义（改用 id，或把名字改唯一）；同名多条独立控件 ⇒ '
             + '正是"另存为 / 复制一份"留下的形态（本轮 §7 的 5 组 A/B 记录就是这个）。',
           next: '看某个具体 id：`{"op":"audit-template","level":"<关卡>","nodeId":1073745047}`；'

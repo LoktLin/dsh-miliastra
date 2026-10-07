@@ -191,7 +191,7 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
-await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方向》第 6 条）：子树 / 同父重名 / id 存在性 / **图源如实标未解**', async () => {
+await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方向》第 6 条）：子树 / 同父重名 / id 存在性 / **图源已逆出**', async () => {
   const { TOOLS } = await import('../index.js');
   const t = TOOLS.find((x) => x.name === 'miliastra_map');
   // ⚠️ 前面几个夹具用例会改 `MILIASTRA_LOCALLOW`（指向临时夹具）⇒ 这里**临时清掉**，让 `scanLevels()` 看真沙箱
@@ -213,8 +213,11 @@ await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方�
   // 不依赖任何**活 id**的结构性断言（.gil 会随存盘变，不能把 id 当契约）
   assert(typeof r.sameNameSameParentCount === 'number' && r.sameNameSameParentCount >= 0, '缺同父重名计数');
   assert(typeof r.duplicateRootsCount === 'number' && r.duplicateRootsCount >= 0, '缺同名多条计数');
-  eq(r.imageSource, 'unverified', '图源字段还没逆出来，必须如实标 unverified（不许编"能判 ?"）');
-  assert(/没逆出来|还没逆/.test(r.imageSourceNote), '图源未解这件事没写进回执');
+  eq(r.imageSource, 'heuristic-verified', '图源口径该是 heuristic-verified（本轮已逆出，有对照证据）');
+  assert(/106045/.test(r.imageSourceNote), '图源口径必须把**对照证据**写出来（日志 106045 ↔ .gil 里 29 次）');
+  assert(typeof r.imageSourceMissingCount === 'number', '缺号计数必须是数字（判"会渲染成 ?"就靠它）');
+  assert(Array.isArray(r.imageSourceMissingSample), '缺号样例该是数组');
+  assert(Array.isArray(r.tree.imageIds), '树节点该带 imageIds（哪怕为空数组）');
   // 不存在的 id：如实回 idExists:false + tree:null（不报假警、也不抛）
   const bad = await t.execute({ op: 'audit-template', level: lv.levelId, nodeId: 999999999, summaryOnly: true });
   eq(bad.ok, true, '不存在的 id 不该整条报错');
@@ -223,7 +226,7 @@ await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方�
   // 缺省根（不给 nodeId/q）也要能给出一个根 + 非空子树
   assert(r.rootId != null && r.tree && r.subtreeNodes > 0, '缺省根/子树不对：' + JSON.stringify({ id: r.rootId, n: r.subtreeNodes }));
   eq(r.tree.id, r.rootId, '子树根与 rootId 不一致');
-  return '控件 ' + r.controlCount + ' · 同父重名 ' + r.sameNameSameParentCount + ' 组 · 缺省根 ' + r.rootId + '（子树 ' + r.subtreeNodes + ' 节点）· 图源=unverified';
+  return '控件 ' + r.controlCount + ' · 同父重名 ' + r.sameNameSameParentCount + ' 组 · 缺省根 ' + r.rootId + '（子树 ' + r.subtreeNodes + ' 节点）· 图源=' + r.imageSource + '（缺号 ' + r.imageSourceMissingCount + '）';
   } finally {
     if (savedLow === undefined) delete process.env.MILIASTRA_LOCALLOW;
     else process.env.MILIASTRA_LOCALLOW = savedLow;
