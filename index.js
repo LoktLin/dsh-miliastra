@@ -71,7 +71,7 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
-import { minifyReceipt, withFallbackCode, ReceiptCode } from './lib/receipt.mjs';
+import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS } from './lib/constants.mjs';
 import { colorMode, blobsFromGrid } from './lib/measure.mjs';
 import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
@@ -2658,7 +2658,11 @@ const TOOLS = [  {
             + (summaryOnly ? '' : '　想省上下文：`summaryOnly:true` 只给每关一行的数字摘要（不带平台坐标），再 `stage=N` 钻进去。'),
         };
       }
-      throw new Error('未知 op：' + op);
+      return fail(ReceiptCode.BAD_PARAM, '未知 op：' + op, {
+
+        nextStep: '看 `miliastra_map` 的 description 里 op 的合法取值（summary / clientui / audit-template / script / strings / nodes / anatomy / regions / nodedb）。',
+
+      });
     },
   },
 
@@ -2727,7 +2731,11 @@ const TOOLS = [  {
       }
       const gilPath = args.path || (() => {
         const lv = resolveLevel(args.level);
-        if (!lv.gil) throw new Error(`关卡 ${lv.levelId} 下没有 .gil。`);
+        if (!lv.gil) return fail(ReceiptCode.NOT_FOUND, `关卡 ${lv.levelId} 下没有 .gil。`, {
+
+          nextStep: '先在编辑器里存一次盘（.gil 是存盘时才写的），或显式传 level= 指定另一张图。',
+
+        });
         return lv.gil.path;
       })();
       if (op === 'strings') {
@@ -2747,12 +2755,12 @@ const TOOLS = [  {
          */
         const gq = args.graph ? String(args.graph) : '';
         const facts = readGilNodeFacts(gilPath, { graphLimit: 400, entityLimit: 1 });
-        if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
+        if (!facts.ok) return { ok: false, op, code: ReceiptCode.FAILED, path: gilPath, error: facts.error };
         const graphNames = Object.keys(facts.graphNodeLists || {});
         const picked = gq ? graphNames.filter((n) => n.includes(gq)) : graphNames;
         if (gq && !picked.length) {
           return {
-            ok: false, op, path: gilPath,
+            ok: false, op, code: ReceiptCode.FAILED, path: gilPath,
             error: '没有图名含「' + gq + '」的节点图',
             candidates: graphNames.slice(0, 40),
           };
@@ -2834,7 +2842,7 @@ const TOOLS = [  {
          * 这是"这张图里到底都有些什么"的自助入口，也是发现"某个区我没解"的最快方式。
          */
         const facts = readGilNodeFacts(gilPath, {});
-        if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
+        if (!facts.ok) return { ok: false, op, code: ReceiptCode.FAILED, path: gilPath, error: facts.error };
         const slim = args.summaryOnly === true;
         return {
           ok: true, op, path: gilPath, size: facts.size,
@@ -2869,7 +2877,7 @@ const TOOLS = [  {
           entityLimit: Number.isFinite(args.limit) ? Number(args.limit) : 400,
           withVariables: wantVars,
         });
-        if (!facts.ok) return { ok: false, op, path: gilPath, error: facts.error };
+        if (!facts.ok) return { ok: false, op, code: ReceiptCode.FAILED, path: gilPath, error: facts.error };
         const graphs = gq ? facts.graphs.filter((g) => g.name.includes(gq)) : facts.graphs;
         const entities = eq ? facts.entities.filter((e) => e.name.includes(eq)) : facts.entities;
         const detailed = args.summaryOnly === false || !!gq || !!eq;
@@ -2990,7 +2998,7 @@ const TOOLS = [  {
         return out;
       }
       const gil = readGil(gilPath);
-      if (!gil.ok) return { ok: false, op, path: gilPath, error: gil.error };
+      if (!gil.ok) return { ok: false, op, code: ReceiptCode.FAILED, path: gilPath, error: gil.error };
       if (op === 'summary') {
         const c = classifyControls(gil.clientUI);
         // 「真正的模板」= 独立、且不是容器节点（容器节点那几条是画布根节点）
@@ -3303,7 +3311,11 @@ const TOOLS = [  {
               : ''),
         };
       }
-      throw new Error('未知 op：' + op);
+      return fail(ReceiptCode.BAD_PARAM, '未知 op：' + op, {
+
+        nextStep: '看 `miliastra_map` 的 description 里 op 的合法取值（summary / clientui / audit-template / script / strings / nodes / anatomy / regions / nodedb）。',
+
+      });
     },
   },
 
@@ -4311,7 +4323,11 @@ const TOOLS = [  {
             : '部署失败，活文件未被改动。',
         };
       }
-      throw new Error('未知 op：' + op);
+      return fail(ReceiptCode.BAD_PARAM, '未知 op：' + op, {
+
+        nextStep: '看 `miliastra_map` 的 description 里 op 的合法取值（summary / clientui / audit-template / script / strings / nodes / anatomy / regions / nodedb）。',
+
+      });
     },
   },
 
