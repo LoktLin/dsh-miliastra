@@ -91,6 +91,10 @@
     "lint": "node tools/lint.mjs",
     "typecheck": "node tools/typecheck.mjs",
     "test": "node tools/test-all.mjs",
+    "test:fast": "node tools/test-all.mjs --fast",
+    "test:par": "node tools/test-all.mjs --jobs 4",
+    "test:seq": "node tools/test-all.mjs --jobs 1",
+    "test:with-engine": "node tools/test-all.mjs --with-engine",
     "test:engine": "node --test \"engine/**/*.test.mjs\"",
     "build:sim-play": "node tools/build-sim-play.mjs",
     "prepublishOnly": "node tools/build-sim-play.mjs --check && npm test"
