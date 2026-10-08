@@ -3380,7 +3380,23 @@ const TOOLS = [  {
     async execute(args = {}) {
       const op = String(args.op || 'tail');
       const lv = resolveLevel(args.level);
-      const dir = lv.logDir;
+      let dir = lv.logDir;
+      /*
+       * ★★ 2026-10-07 修（本轮实测的真 bug）：**显式给了 `file` 却还要先过"当前关卡"这一关** ——
+       *   调用方给了 `.gia` 的**绝对路径**，但 `resolveLevel()` 挑中的关卡没有 `Beyond_Debug_Log` 目录
+       *   ⇒ 直接 `throw`（实测：`关卡 1073741911 没有关联的 Beyond_Debug_Log 目录。`），
+       *   而那份文件**明明读得到**（`op=sessions` 能把它列出来）。
+       *   口径：**显式参数优先** —— `file` 是存在的绝对路径 ⇒ 用它的目录；只是文件名且 `dir` 拿不到 ⇒ 退回账号级日志目录。
+       */
+      const fileArg = args.file == null ? '' : String(args.file).trim();
+      if (fileArg) {
+        if (pathMod.isAbsolute(fileArg) && fsMod.existsSync(fileArg)) dir = pathMod.dirname(fileArg);
+        else if (!dir) {
+          // 退回**本账号**的日志目录：任一有 `logDir` 的关卡给的都指向同一个 `Beyond_Debug_Log`（不猜、不拼路径）
+          const any = scanLevels().find((l) => l.logDir);
+          if (any) dir = any.logDir;
+        }
+      }
       if (!dir) throw new Error(`关卡 ${lv.levelId} 没有关联的 Beyond_Debug_Log 目录。`);
       if (op === 'sessions') {
         const files = listGia(dir, Number.isFinite(args.limit) ? args.limit : 40);
@@ -3554,6 +3570,20 @@ const TOOLS = [  {
           out.errors = found.errors.map((e) => ({
             time: e.time, run: e.run, channel: e.channel, kind: e.kind, fileLine: e.fileLine,
           }));
+        }
+        /*
+         * ★★ 2026-10-07（作者拍板选 A）：**两档必须对同一份日志给同一个结论**。
+         *
+         * 症状（本轮重启后实测）：`staleLog` 守卫在**全量档**把 `errors` 置 `null`（正确：过期日志不能当证据），
+         *   但上面 `slim` 分支**又从原始结果把数组填了回来** ⇒ 同一份数据 `full` 说"没有意义"、`slim` 给 48 条
+         *   带 `fileLine` 的报错 —— **AI 会去追一个不属于本局的旧行号**（实测 `表现 view:580`）。
+         * 口径（A）：`errorsMeaningless === true` ⇒ **两档都回 `errors:null`**，`count` / `kindCounts` / `runsAffected` /
+         *   `errorsNote` 照旧保留（**结论没丢，只是"没意义的报错"不再端出来**）。
+         * ⚠️ 放在汇合处（`return out` 之前）收口 ⇒ 不可能再出现第二个填回点。
+         */
+        if (out.errorsMeaningless === true) {
+          if (out.errors && out.errors.length) out.errorsOmitted = out.errors.length;
+          out.errors = null;
         }
         return out;
       }

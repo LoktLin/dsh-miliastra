@@ -324,6 +324,50 @@ await check('★ P1-3（《上下文瘦身设计》）`runWorkspaceGates`：跑�
   return '工作区外 ⇒ GATES_NO_TOOLS · 真文件 ⇒ scope/style 结论自洽（ok=' + r.ok + '）';
 });
 
+await check('★ 2026-10-07 作者拍板 A：`staleLog` 时**三档对同一份日志给同一个结论**（不许 slim 把"没意义的报错"填回来）', async () => {
+  const { TOOLS } = await import('../index.js');
+  const log = TOOLS.find((t) => t.name === 'miliastra_log');
+  let full = null;
+  let slim = null;
+  let min = null;
+  /*
+   * ★ **先发现、再钉住**：不写死关卡/文件名（换图换账号都不会假红）—— 从 `op=sessions` 拿最新那份 `.gia`，
+   *   然后三档都显式传 `file` ⇒ 比的**是同一份日志**（这正是这条测试要钉的东西）。
+   */
+  let file = null;
+  /*
+   * ⚠️ 前面那些夹具用例会把 `MILIASTRA_LOCALLOW` 指到临时目录 ⇒ 这里必须**临时清掉**才看得到真日志
+   *   （不清就永远"没扫到 .gia"，测试形同虚设 —— 本轮踩过），跑完照原样放回。
+   */
+  const prevLow = process.env.MILIASTRA_LOCALLOW;
+  delete process.env.MILIASTRA_LOCALLOW;
+  try {
+    const s = await log.execute({ op: 'sessions' });
+    const list = (s && (s.sessions || s.files)) || [];
+    if (list.length) file = typeof list[0] === 'string' ? list[0] : (list[0].path || list[0].file || null);
+  } catch (e) { file = null; } finally {
+    if (prevLow !== undefined) process.env.MILIASTRA_LOCALLOW = prevLow;
+  }
+  if (!file) return '（本机没扫到 .gia ⇒ 跳过真数据那半段，不伪装通过）';
+  try {
+    full = await log.execute({ op: 'errors', file });
+    slim = await log.execute({ op: 'errors', file, summaryOnly: true });
+    min = await log.execute({ op: 'errors', file, receipt: 'min' });
+  } catch (e) { return '（读这份 .gia 报错 ⇒ 跳过：' + ((e && e.message) || e) + '）'; }
+  if (!full || full.ok !== true) return '（本机读不到 .gia ⇒ 跳过）';
+  // 只有 staleLog（= errorsMeaningless）时才要求三档一致为 null；新鲜的日志当然要给 errors
+  if (full.errorsMeaningless === true) {
+    eq(full.errors, null, '全量档该回 null');
+    eq(slim.errors, null, '**瘦身档把"没意义的报错"填回来了**（就是这个 bug）');
+    if (min) eq(min.errors, null, 'min 档也不该给');
+    eq(typeof full.count, 'number', '`count` 是结论，必须保留');
+    assert(full.kindCounts, '`kindCounts` 是结论，必须保留');
+  } else {
+    assert(Array.isArray(full.errors), '日志新鲜时该给 errors');
+  }
+  return '三档一致（errorsMeaningless=' + full.errorsMeaningless + ' · count=' + full.count + ' · kindCounts=' + JSON.stringify(full.kindCounts) + '）';
+});
+
 await check('★ P0-2（《上下文瘦身设计》）`receipt:"min"`：精简骨架档 —— 结论字段全在、**非名单 op 一字节不变**', async () => {
   const { TOOLS, minifyReceipt } = await import('../index.js');
   const log = TOOLS.find((t) => t.name === 'miliastra_log');
