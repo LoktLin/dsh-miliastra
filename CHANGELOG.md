@@ -1,3 +1,26 @@
+## [未发布]
+
+### 重构（《架构规划 2026-10-08》阶段 0-4；分支 `refactor/arch`）
+
+- ★ **统一回执契约**（对应 Java 的 `R<T>` + `ErrorCode`）：
+  - 新增 **`lib/receipt.mjs`**：`ReceiptCode` 枚举 · `ok()` · `fail(code, error, meta)` · `withFallbackCode()` · `minifyReceipt`（**原文搬移**，一个字符没改）；
+  - 新增 **`lib/constants.mjs`**：`TOOL`（12 个工具名）· `OP` · `LIMIT`（阈值唯一出处）· `MIN_KIND` / `MIN_OPS`（**用 `TOOL.X` 计算键**，改名/新增工具不再静默失效）；
+  - **工具出口统一收口**：任何 `execute` 抛异常 ⇒ `{ok:false, code:"TOOL_THREW", tool, op, error, nextStep}` —— **绝不把异常抛给调用方**（抛出去会打断调用方一整轮）；失败档 **必带 `code`**；
+  - **逐族补语义码**（`NOT_FOUND` / `BAD_PARAM` / `FAILED` / `GATE_FAILED` / `NO_EVIDENCE`）：`code` / `map` / `log` / `kb` / `shot` / `sim` 六族共 **25 处**；另把 **10 处 `execute` 直下的 `throw` 改成 `fail(ReceiptCode.X, 原文案, {nextStep})`** ⇒ **工具回执的「缺 code」清零**（余下 13 处是辅助函数返回、1 处内部对象、8 处 HTTP 信封，均已定性）。
+
+- **拆文件（阶段 3，进行中）**：
+  - `TITLE` / `renderJson` 这两个**全工具共享**的符号搬进 `lib/constants.mjs` / **`lib/render.mjs`**（否则每个 `lib/tools/*.mjs` 都要反向 import `index.js` ⇒ 循环依赖 + TDZ 风险）；
+  - **`miliastra_asset` 整族**（工具对象 + 调度器 `assetOp` + `measureImage`）搬到 **`lib/tools/asset.mjs`**：机械搬移、依赖自动解析（7 模块 / 16 符号）、**行为零改动**；
+  - `index.js`：**4930 → 4819 行**；其余 11 个工具按依赖数递增逐个搬（一族一提交）。
+
+- **测试**：
+  - 新增 **`tests/audit-test.mjs`**（**38 条只读用例**）并登记进 `tools/test-all.mjs` —— 把「任何 op 都不许抛异常 / 失败必带 `code`」变成**门禁**（原本是手工审计，曾一次抓出 10 条抛异常的 op）；
+  - 新增 **`tests/_harness.mjs`**：把 `gen` / `pixelart` / `vfx` 三份重复的 `throws` 助手合一（语义取并集：抛异常 **或** 回执 `ok:false`）；
+  - 5 个套件从「断言该抛异常」改成「断言 `{ok:false}` 回执」（与新的出口契约对齐）。
+
+- **文档**：删掉包内 **4 处「死指针」**（指向本包外 / 已不存在的文件，如 README 里那段「…**不在本包里**，故不作链接…」）。**规则：没有的东西就不写。**
+
+- **验证口径**：每个提交都跑 `lint`（21 条硬规则）+ `typecheck`（我们自己的文件 0 错）+ **全量 `npm test` 37 套件 / 0 失败**；重构全程**行为零改动**（除契约新增的 `code` 字段）。
 ## [0.7.2] - 2026-10-07
 
 ### 其他变更
