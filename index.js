@@ -3973,7 +3973,7 @@ const TOOLS = [  {
         }
         if (args.confirm !== true) {
           return Object.assign({
-            ok: false, dryRun: false,
+            ok: false, code: ReceiptCode.FAILED, dryRun: false,
             error: '真删要同时传 dryRun:false 与 confirm:true —— 截图删了不可恢复。',
           }, base);
         }
@@ -4158,7 +4158,7 @@ const TOOLS = [  {
       if (!r.ok) {
         const procs = clientProcesses();
         return {
-          ok: false, op, target: targetKey, process: processName, dir,
+          ok: false, op, code: ReceiptCode.NOT_FOUND, target: targetKey, process: processName, dir,
           error: r.error || '截图失败',
           stderr: r.stderr || null,
           // PS 侧把**所有**候选窗口列出来了 —— 「一个进程有多个窗口」是这个功能最容易出错的地方，
@@ -4450,7 +4450,7 @@ const TOOLS = [  {
          *   否则**整轮被打断**；而全仓其它工具是回 `{ok:false,error}`。
          *   **消息一个字不改**，只把"形式"换成回执（AI 拿到的信息量不减、但不会再炸掉调用）。
          */
-        return { ok: false, error: String((e && e.message) || e) };
+        return { ok: false, code: ReceiptCode.FAILED, error: String((e && e.message) || e) };
       }
       /*
        * ★ E10（2026-09-29 实战反馈）：**模拟器不渲染富文本**（`<color=#…>` / `<size=…>` 在画面上是原始标签），
@@ -4665,7 +4665,7 @@ const TOOLS = [  {
       if (op === 'qa') {
         const byId = args.id ? kbEntry(String(args.id)) : null;
         if (args.id && !byId) {
-          return { ok: false, op, error: '没有这条：' + String(args.id), candidates: kbCatalog().map((e) => e.id) };
+          return { ok: false, op, code: ReceiptCode.NOT_FOUND, error: '没有这条：' + String(args.id), candidates: kbCatalog().map((e) => e.id) };
         }
         const asked = String(args.q || '').trim();
         // 不给关键词也不给标签 ⇒ 回**完整目录**（让人/模型先挑，而不是硬塞 5 条）
@@ -4716,18 +4716,18 @@ const TOOLS = [  {
       // —— 以下三个 op 走**在线**第三方知识库（会把 query 发出去；取不到就如实说取不到）——
       if (op === 'doc') {
         const titles = Array.isArray(args.titles) ? args.titles.map(String) : (args.q ? [String(args.q)] : []);
-        if (!titles.length) return { ok: false, op, error: 'op=doc 要给 `titles`（文档标题数组）或 `q`（单个标题）' };
+        if (!titles.length) return { ok: false, op, code: ReceiptCode.BAD_PARAM, error: 'op=doc 要给 `titles`（文档标题数组）或 `q`（单个标题）' };
         return await kbOnline('get_document', { titles });
       }
       if (op === 'list') {
         return await kbOnline('list_documents', { keywords: args.q ? [String(args.q)] : [] });
       }
       if (op === 'search') {
-        if (!args.q) return { ok: false, op, error: 'op=search 要给 `q`（自然语言问题）' };
+        if (!args.q) return { ok: false, op, code: ReceiptCode.BAD_PARAM, error: 'op=search 要给 `q`（自然语言问题）' };
         const k = Number.isFinite(args.topK) ? Math.min(20, Math.max(1, Number(args.topK))) : 5;
         return await kbOnline('rag_search', { queries: [String(args.q)], top_k: k });
       }
-      return { ok: false, op, error: '不认识的 op：' + op };
+      return { ok: false, op, code: ReceiptCode.BAD_PARAM, error: '不认识的 op：' + op };
     },
   },
 
