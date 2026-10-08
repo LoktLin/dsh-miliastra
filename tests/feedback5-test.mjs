@@ -205,6 +205,38 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
+await check('★ P0-2（《上下文瘦身设计》）`receipt:"min"`：精简骨架档 —— 结论字段全在、**非名单 op 一字节不变**', async () => {
+  const { TOOLS, minifyReceipt } = await import('../index.js');
+  const log = TOOLS.find((t) => t.name === 'miliastra_log');
+  const code = TOOLS.find((t) => t.name === 'miliastra_code');
+  assert(Object.keys((log.parameters || {}).properties || {}).includes('receipt'), 'log 缺 receipt 参数');
+  assert(Object.keys((code.parameters || {}).properties || {}).includes('receipt'), 'code 缺 receipt 参数');
+  // ⚠️ 用**纯函数**钉骨架（不依赖本机日志目录 —— 换图/清日志都不会假红）
+  const full = {
+    ok: true, op: 'errors', file: 'x.gia', count: 48, returned: 48, truncated: false, runsAffected: 1,
+    kindCounts: { 'attempt-call': 48 }, errors: [{ kind: 'attempt-call', message: '…', fileLine: null }],
+    errorsMeaningless: true, forms: [{ kind: 'a' }, { kind: 'b' }], kinds: [{ kind: 'a', count: 1 }],
+    hint: 'hint', scanned: 428, channels: 1, size: 92384, recordCount: 428, staleLog: false,
+  };
+  const min = minifyReceipt(full, 'errors');
+  assert(min.receipt === 'min', '没收成 min 骨架');
+  assert(JSON.stringify(min).length < JSON.stringify(full).length, 'min 没比 full 小');
+  for (const k of ['ok', 'count', 'kindCounts', 'errors', 'file']) assert(k in min, 'min 少了结论字段：' + k);
+  eq(min.errorsMeaningless, true, 'min 档丢了 errorsMeaningless（会把过期日志当零报错）');
+  assert(!('forms' in min), 'min 档不该再带 forms（那是固定文档）');
+  // deploy / sim 两个骨架也要有各自的决策字段
+  const dep = minifyReceipt({ ok: true, op: 'deploy', dest: 'd.lua', bytes: 10, sha256: 'A'.repeat(64), syntax: { ok: true }, lint: { problems: [] }, reconcile: { match: false, liveBytes: 10, embeddedBytes: 11 }, checklist: ['a'] }, 'deploy');
+  for (const k of ['ok', 'dest', 'bytes', 'sha256_12', 'syntax_ok', 'match', 'live_bytes', 'embed_bytes']) assert(k in dep, 'deploy min 少字段：' + k);
+  eq(dep.sha256_12.length, 12, 'sha 该截 12 位（决策够用、省字节）');
+  const sim = minifyReceipt({ ok: true, op: 'bind', bound: true, run: { controlCount: 10, logs: ['x'], logCount: 1 }, source: { bytes: 99 } }, 'sim');
+  for (const k of ['ok', 'bound', 'controlCount', 'logs', 'liveBytes']) assert(k in sim, 'sim min 少字段：' + k);
+  // ★ 非名单 op：原样返回（默认行为不变的另一种表现）—— 用 inspect（不需要日志目录）
+  const i1 = await code.execute({ op: 'inspect' });
+  const i2 = await code.execute({ op: 'inspect', receipt: 'min' });
+  eq(JSON.stringify(i2).length, JSON.stringify(i1).length, '非名单 op 被套了骨架（应原样返回）');
+  return 'errors 骨架 ' + JSON.stringify(full).length + ' → ' + JSON.stringify(min).length + ' B · 三种骨架字段齐 · 非名单 op 原样';
+});
+
 await check('★ P0-1（《上下文瘦身设计》）`gen saveTo`：生成物落盘、回执只留摘要；**不给时行为一字节不变**', async () => {
   const { TOOLS } = await import('../index.js');
   const g = TOOLS.find((t) => t.name === 'miliastra_gen');

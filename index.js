@@ -266,6 +266,63 @@ function deployNextStep(ms, rec, destPath) {
   return tail + chain;
 }
 
+/**
+ * ★★ P0-2（《上下文瘦身设计》2026-10-07）：**`receipt:"min"` —— 精简骨架档**。
+ *
+ * 与 `summaryOnly` 的**区别**（两个参数都要在 description 里互相点名，防撞车）：
+ *   · `summaryOnly` = **去掉体积**（拿掉逐条明细 / 正文），**保留原来的字段与结论**；
+ *   · `receipt:"min"` = **换一副骨架**（只留"这一轮决策必需"的那一小撮字段），字段名也按骨架来。
+ * ⇒ 结论字段（`ok` / `bytes` / `sha` / `match` / `errors`）**一个都不能少**，否则 AI 就得再调一次。
+ *
+ * ⚠️ **不给 `receipt` 时行为一字节不变**（默认 `"full"`）。
+ *
+ * @param {any} res 工具的完整回执
+ * @param {'deploy'|'sim'|'errors'} kind 哪一类骨架
+ */
+export function minifyReceipt(res, kind) {
+  if (!res || typeof res !== 'object') return res;
+  const pick = (o, keys) => { /** @type {Record<string, any>} */ const r = {}; for (const k of keys) if (o[k] !== undefined) r[k] = o[k]; return r; };
+  if (kind === 'deploy') {
+    const rec = res.reconcile || {};
+    /** @type {Record<string, any>} */
+    const out = {
+      receipt: 'min', ok: res.ok,
+      ...pick(res, ['op', 'dest', 'selectedFile', 'pickedBy', 'src', 'bytes', 'backup', 'fixedBackup', 'error']),
+      sha256_12: typeof res.sha256 === 'string' ? res.sha256.slice(0, 12) : null,
+      syntax_ok: res.syntax ? res.syntax.ok === true : null,
+      lint_error: res.lint && Array.isArray(res.lint.problems) ? res.lint.problems.length : 0,
+      live_bytes: rec.liveBytes == null ? null : rec.liveBytes,
+      embed_bytes: rec.embeddedBytes == null ? null : rec.embeddedBytes,
+      match: rec.match === undefined ? null : rec.match,
+      prodUnchanged: res.prodUnchanged === undefined ? null : res.prodUnchanged,
+      knownPitCount: res.knownPitCount === undefined ? null : res.knownPitCount,
+    };
+    if (Array.isArray(res.checklist)) out.checklist = res.checklist;   // P3-7 的短句清单（有就带上）
+    return out;
+  }
+  if (kind === 'sim') {
+    const run = res.run || {};
+    return {
+      receipt: 'min', ok: res.ok,
+      ...pick(res, ['op', 'bound', 'fresh', 'scriptCount', 'error']),
+      controlCount: run.controlCount == null ? null : run.controlCount,
+      logCount: run.logCount == null ? (Array.isArray(run.logs) ? run.logs.length : null) : run.logCount,
+      logs: Array.isArray(run.logs) ? run.logs.slice(0, 40) : null,
+      liveBytes: res.source && res.source.bytes != null ? res.source.bytes : null,
+      nextStep: res.nextStep || null,
+    };
+  }
+  if (kind === 'errors') {
+    return {
+      receipt: 'min', ok: res.ok,
+      ...pick(res, ['op', 'file', 'count', 'returned', 'truncated', 'runsAffected', 'kindCounts', 'errors', 'error', 'hint']),
+      // `errorsMeaningless` 必须带上：**不清档就会把"过期日志"当"零报错"**（今天修过的那个坑）
+      errorsMeaningless: res.errorsMeaningless === undefined ? null : res.errorsMeaningless,
+    };
+  }
+  return res;
+}
+
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
 export { TOOLS };
 
@@ -1855,6 +1912,7 @@ const TOOLS = [  {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects', 'lint-ui', 'preflight'], description: '默认 inspect。`dir` 给 op=rects / op=lint-ui / op=preflight。' },
+        receipt: { type: 'string', enum: ['full', 'min'], description: '默认 full。`min` = **精简骨架档**（换一小撮决策必需字段）；与 `summaryOnly` 不重叠：那个是「去掉体积、保留原字段」，这个是「换骨架」。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
@@ -3013,6 +3071,7 @@ const TOOLS = [  {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics', 'errors', 'run-analysis'], description: '默认 tail。' },
+        receipt: { type: 'string', enum: ['full', 'min'], description: '默认 full。`min` = **精简骨架档**（换一小撮决策必需字段）；与 `summaryOnly` 不重叠：那个是「去掉体积、保留原字段」，这个是「换骨架」。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep/runs/errors：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
@@ -3952,6 +4011,7 @@ const TOOLS = [  {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。' },
+        receipt: { type: 'string', enum: ['full', 'min'], description: '默认 full。`min` = **精简骨架档**（换一小撮决策必需字段）；与 `summaryOnly` 不重叠：那个是「去掉体积、保留原字段」，这个是「换骨架」。' },
         /*
          * ⚠️ 这个 `all` **同时服务两个 op** —— 写成两个键会**静默覆盖**（JS 对象字面量后者胜），
          * 于是其中一个说明永远不会到达 AI（2026-09-24 被 ESLint 的 `no-dupe-keys` 抓到，见 `tools/lint.mjs`）。
@@ -5055,4 +5115,28 @@ function makeHandler() {
       sendJson(res, (e && e.status) || 500, { ok: false, error: (e && e.message) || String(e) });
     }
   };
+}
+
+
+const MIN_KIND = { miliastra_code: 'deploy', miliastra_sim: 'sim', miliastra_log: 'errors' };
+/** 哪些 op 才吃 `receipt:"min"` 的骨架（其余 op 原样返回 —— 免得把不相干的回执套错骨架）。 */
+const MIN_OPS = { miliastra_code: ['deploy'], miliastra_sim: ['bind'], miliastra_log: ['errors'] };
+/*
+ * 统一包装：`receipt:"min"` 在**工具出口**收口（不去改三个工具内部的大函数 —— 少动一处风险少一处）。
+ * ⚠️ 只有 `args.receipt === 'min'` **且 op 在名单里**才生效；其余一律原样返回（默认行为一字节不变）。
+ * ⚠️ 这段必须放在 `TOOLS` **定义之后**（放前面会 TDZ：`Cannot access 'TOOLS' before initialization`，本轮踩过）。
+ */
+for (const t of TOOLS) {
+  const kind = MIN_KIND[t.name];
+  if (!kind || typeof t.execute !== 'function') continue;
+  const ops = MIN_OPS[t.name] || [];
+  const inner = t.execute;
+  // ⚠️ 必须显式标 `any`：每个工具的 `execute` 签名各不同（TS 会按各自回执推断参数形状），
+  //    直接赋一个 (args, ctx) 函数会 TS2322/TS2554（本轮踩过）。
+  t.execute = /** @type {any} */ (async (args) => {
+    const res = await inner(args);   // ⚠️ 只传 args：我们的工具 execute 都只声明一个参数（传 ctx 会 TS2554）
+    const op = args && args.op ? String(args.op) : null;
+    const want = !!(args && args.receipt === 'min' && (op === null || ops.includes(op)));
+    return want ? minifyReceipt(res, kind) : res;
+  });
 }
