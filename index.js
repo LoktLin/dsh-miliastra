@@ -74,7 +74,7 @@ import { atomicWriteFile } from './lib/fsx.mjs';
 import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS, TITLE } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
-import { resolveLevel } from './lib/shared.mjs';
+import { CLIENT_CONTROL_NAME, STRUCTURAL_NAME, classifyControls, resolveLevel } from './lib/shared.mjs';
 import { ASSET_TOOL } from './lib/tools/asset.mjs';
 import { colorMode, blobsFromGrid } from './lib/measure.mjs';
 import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
@@ -897,9 +897,7 @@ function pickedFields(pick) {
 }
 
 /** 结构对象（不是客户端控件）：容器、布局、各种 HierarchyRoot，以及内置布局控件。 */
-const STRUCTURAL_NAME = /客户端控件容器|布局|HierarchyRoot|小地图|技能区|队伍信息|生命值条|摇杆|退出按钮|语音|选项卡|聊天按钮|网络状态|挣扎按钮|提示队列/;
 /** 客户端控件类型名（官方《客户端控件和客户端脚本》「四、相关的界面控件资产」枚举）。 */
-const CLIENT_CONTROL_NAME = /^(容器节点|文本框|文本视窗|图片|界面动效|全屏界面动效|预设按钮|按键提示|光标检测区域|网格视窗|模板引用控件)$/;
 
 /**
  * 子树的**深度**（根 = 0；叶子回 0）。贪婪扫（`op=clientui kind:"all"`）用。
@@ -917,24 +915,6 @@ function maxDepthOf(node) {
  * ⚠️ 「无父节点」只是**必要**条件，不是充分条件：
  *    容器节点 的独立记录通常是客户端控件容器的画布根节点（画布实例，不可创建）。
  */
-function classifyControls(clientUI) {
-  const standalone = clientUI.filter((r) => r.parent == null);
-  const likelyTemplates = standalone.filter((r) => CLIENT_CONTROL_NAME.test(r.name));
-  const likelyContainers = standalone.filter((r) => r.name === '容器节点');
-  const structural = standalone.filter((r) => STRUCTURAL_NAME.test(r.name)).map((r) => ({ id: r.id, name: r.name }));
-  /*
-   * ★ E6（2026-09-29 实战反馈）：`likelyTemplates` 里混进了**容器节点**，与 `likelyContainers` 重叠 ⇒
-   *   调用方看着像"4 个候选模板"，其中两个其实不能当控件模板用。
-   *   ⇒ 每条给 `role`（container / control），并把重叠**点名**（不删字段：同一批记录两种用途，删了会丢信息）。
-   */
-  const roleOf = (r) => (likelyContainers.some((c) => c.id === r.id) ? 'container' : 'control');
-  const withRole = (list) => list.map((r) => Object.assign({}, r, { role: roleOf(r) }));
-  const overlapIds = likelyTemplates.filter((r) => likelyContainers.some((c) => c.id === r.id)).map((r) => r.id);
-  const roleNote = overlapIds.length
-    ? '⚠️ 有 ' + overlapIds.length + ' 条同时在 likelyTemplates 与 likelyContainers 里（' + overlapIds.join(', ') + '）—— 它们是**容器节点**，不是可创建的控件模板。看 `role` 字段分辨；容器节点不该当控件模板用（控件要 InstantiateClientUIControl，容器由创作者在画布上摆）。多个候选形态相同时：让创作者点名，或删掉多余的那些。'
-    : null;
-  return { standalone, likelyTemplates: withRole(likelyTemplates), likelyContainers: withRole(likelyContainers), structural, roleNote };
-}
 
 /**
  * 「哪些号真的能被创建」的**一次真机实测记录** —— 必须连**来源关卡**一起说，否则就是假事实。
