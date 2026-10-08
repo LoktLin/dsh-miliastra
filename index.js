@@ -30,8 +30,6 @@ export const inject = [];
  * 与面板（lib/client.js）里，AI 不会因此认不出这是哪套工具。
  */
 
-const STARTED_AT = Date.now();
-
 import fsMod from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import pathMod from 'node:path';
@@ -72,7 +70,7 @@ import { atomicWriteFile } from './lib/fsx.mjs';
 import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS, TITLE, VERSION } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
-import { CLIENT_CONTROL_NAME, STRUCTURAL_NAME, classifyControls, resolveLevel } from './lib/shared.mjs';
+import { CLIENT_CONTROL_NAME, STARTED_AT, STRUCTURAL_NAME, classifyControls, hostStaleness, hostSummary, resolveLevel, sourceInfo } from './lib/shared.mjs';
 import { CODE_TOOL, scanErrorLog } from './lib/tools/code.mjs';
 import { MAP_TOOL, pickedFields } from './lib/tools/map.mjs';
 import { LOG_TOOL } from './lib/tools/log.mjs';
@@ -1248,49 +1246,13 @@ function shotsSummary() {
  * 判据两条，任一成立即算陈旧：① 源码 `package.json` 的版本 ≠ 载入的 `VERSION`；
  * ② `index.js` 的 mtime 晚于进程启动时刻。**只报事实与下一步，不猜「你改了什么」。**
  */
-export function hostStaleness({ sourceVersion, sourceMtimeMs, loadedVersion, startedAtMs }) {
-  const versionNewer = !!(sourceVersion && loadedVersion && String(sourceVersion) !== String(loadedVersion));
-  const mtimeNewer = !!(sourceMtimeMs && startedAtMs && sourceMtimeMs > startedAtMs);
-  const deltaMin = mtimeNewer ? Math.max(1, Math.round((sourceMtimeMs - startedAtMs) / 60000)) : 0;
-  const stale = versionNewer || mtimeNewer;
-  const why = [
-    versionNewer ? `源码 v${sourceVersion} ≠ 载入的 v${loadedVersion}` : null,
-    mtimeNewer ? `index.js 比启动晚约 ${deltaMin} 分钟` : null,
-  ].filter(Boolean).join('，');
-  return {
-    stale, versionNewer, mtimeNewer, deltaMin,
-    hint: stale
-      ? `源码比 Host 快照新（${why}）→ Host 半边（工具 / 路由 / 系统提示）的改动要**重启 dsh web** 才生效；只改 lib/client.js 刷新页面即可`
-      : null,
-  };
-}
 
 /** 读本包源码的版本与 mtime（读不到只返 null 字段，**绝不抛** —— 面板要能照常显示）。 */
-function sourceInfo() {
-  try {
-    const dir = pathMod.dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(fsMod.readFileSync(pathMod.join(dir, 'package.json'), 'utf8'));
-    const st = fsMod.statSync(pathMod.join(dir, 'index.js'));
-    return { sourceVersion: pkg.version, sourceMtimeMs: st.mtimeMs, sourceMtime: new Date(st.mtimeMs).toISOString() };
-  } catch (e) {
-    return { sourceVersion: null, sourceMtimeMs: null, error: (e && e.message) || String(e) };
-  }
-}
 
 /**
  * Host 自身的状态（`/miliastra/status` 与 `miliastra_health` **共用这一份**）。
  * 含「源码是不是比这个快照新」—— 判据只有一份，免得两处各写一套然后漂移。
  */
-function hostSummary() {
-  const info = sourceInfo();
-  return {
-    version: VERSION,
-    startedAt: new Date(STARTED_AT).toISOString(),
-    pid: process.pid,
-    uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
-    source: { ...info, ...hostStaleness({ ...info, loadedVersion: VERSION, startedAtMs: STARTED_AT }) },
-  };
-}
 
 async function selfStatus() {
   let current = null;
@@ -1493,3 +1455,6 @@ export { clientUiHint, CLIENTUI_EVIDENCE } from './lib/tools/map.mjs';
 
 /** 阶段 3：这些符号已搬进 `lib/tools/code.mjs`，这里**再导出**以免破坏既有引用。 */
 export { runWorkspaceGates, collectLuaFilesForRects } from './lib/tools/code.mjs';
+
+/** 阶段 3：`hostStaleness` 已搬进 `lib/shared.mjs`，这里**再导出**（`tests/smoke.mjs` 等既有引用不断）。 */
+export { hostStaleness };
