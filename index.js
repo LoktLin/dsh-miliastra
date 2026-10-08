@@ -74,6 +74,7 @@ import { atomicWriteFile } from './lib/fsx.mjs';
 import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS, TITLE } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
+import { resolveLevel } from './lib/shared.mjs';
 import { ASSET_TOOL } from './lib/tools/asset.mjs';
 import { colorMode, blobsFromGrid } from './lib/measure.mjs';
 import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
@@ -478,20 +479,6 @@ export function playPageSource(html, stamp, session) {
 /* ---------------------------------------------------------------- 公共解析 */
 
 /** 定位关卡：显式 level 参数 > 当前（最近改动、有活文件）。 */
-function resolveLevel(q) {
-  const levels = scanLevels();
-  if (q && String(q).trim()) {
-    const hit = findLevel(levels, q);
-    if (!hit) {
-      const avail = levels.map((l) => `${l.brand}/${l.levelId}[${l.luaFiles.map((f) => f.name).join(',') || '无脚本'}]`);
-      throw new Error(`找不到关卡 "${q}"。现有：${avail.join('  ') || '（一个都没扫到）'}`);
-    }
-    return hit;
-  }
-  const cur = pickCurrent(levels);
-  if (!cur) throw new Error(`在 ${localLowRoot()} 下没扫到任何关卡目录。确认原神/千星编辑器开过图，或用参数指定。`);
-  return cur;
-}
 
 /**
  * 地图存档里嵌的**脚本名候选**（`file` 优先、缺了用 `name`，再各补一个 `<名>.lua`）。
