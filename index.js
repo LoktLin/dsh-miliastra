@@ -2184,7 +2184,9 @@ const TOOLS = [  {
         if (guard) return guard;
       }
       const lv = resolveLevel(args.level);
-      if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——说明还没在编辑器里挂客户端脚本。`);
+      if (!lv.luaDir) return fail(ReceiptCode.NOT_FOUND, `关卡 ${lv.levelId} 没有 external_lua_file 目录——说明还没在编辑器里挂客户端脚本。`, {
+        nextStep: '这条码是机器可读的分类；具体原因看 `error` 文案 —— 按它指的地方改参数或环境后重跑。',
+      });
       const pick = chooseLua(lv, args.file);
       const target = pick ? pick.picked : null;
       // ⚠️ 写盘 op（deploy）会**重新**用 pickLiveFile 定目标（见下面那一段）；其余 op 用这里的 A1 口径
@@ -2232,7 +2234,9 @@ const TOOLS = [  {
         };
       }
       if (op === 'read') {
-        if (!destPath) throw new Error('没找到可读的活文件 —— 先用 miliastra_health 看这台机器上有哪些关卡与 .lua。');
+        if (!destPath) return fail(ReceiptCode.NOT_FOUND, '没找到可读的活文件 —— 先用 miliastra_health 看这台机器上有哪些关卡与 .lua。', {
+  nextStep: '先用 `miliastra_health {brief:true}` 看这台机器上有哪些关卡与 .lua；或显式传 level= 指定另一张图。',
+});
         const fs = await import('node:fs');
         const info = inspect(destPath);
         const text = fsMod.readFileSync(destPath, 'utf8');
@@ -2247,7 +2251,9 @@ const TOOLS = [  {
         };
       }
       if (op === 'backups') {
-        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
+        if (!destPath) return fail(ReceiptCode.NOT_FOUND, '没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。', {
+  nextStep: '先用 `miliastra_health {brief:true}` 看这台机器上有哪些关卡与 .lua；或显式传 level= 指定另一张图。',
+});
         const r = listBackups(destPath, { backupDir: args.backupDir });
         return {
           ok: true, op, dest: destPath, ...picked, backupDir: r.dir,
@@ -2264,7 +2270,9 @@ const TOOLS = [  {
         };
       }
       if (op === 'backup') {
-        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
+        if (!destPath) return fail(ReceiptCode.NOT_FOUND, '没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。', {
+  nextStep: '先用 `miliastra_health {brief:true}` 看这台机器上有哪些关卡与 .lua；或显式传 level= 指定另一张图。',
+});
         const r = backupFile(destPath, { backupDir: args.backupDir });
         return {
           ok: r.ok, op, dest: destPath, ...picked, ...r,
@@ -2273,7 +2281,9 @@ const TOOLS = [  {
         };
       }
       if (op === 'restore') {
-        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
+        if (!destPath) return fail(ReceiptCode.NOT_FOUND, '没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。', {
+  nextStep: '先用 `miliastra_health {brief:true}` 看这台机器上有哪些关卡与 .lua；或显式传 level= 指定另一张图。',
+});
         /*
          * ★★ P0 修复（使用反馈 2026-10-02 第 2 条 —— **真实事故**：还原 0 字节的 `背景层 bg.lua` 时没传 `file`，
          *   工具按 `.gil` 挂载名挑目标，把 **表现 view.lua 覆盖成 3936 B**，靠 safetyBackup + 镜像才修回）。
@@ -2352,7 +2362,9 @@ const TOOLS = [  {
             };
           }
         }
-        if (!args.source) throw new Error('op=deploy 需要 source（要投进去的本地文件绝对路径）。');
+        if (!args.source) return fail(ReceiptCode.BAD_PARAM, 'op=deploy 需要 source（要投进去的本地文件绝对路径）。', {
+  nextStep: '`source` 要**本地文件的绝对路径**（要投进沙箱的那份）；source 与 file 一起给最稳。',
+});
         /*
          * ★ P0-1（2026-09-26）：**写盘路径只认名字**，不按「最近改动」猜。
          *
@@ -2486,7 +2498,9 @@ const TOOLS = [  {
               const dst = pathMod.resolve(String(raw));
               const item = { path: dst, ok: false, bytes: null, sha256_12: null, error: null };
               try {
-                if (!liveSha) throw new Error('读不到活文件（' + destPath + '）');
+                if (!liveSha) return fail(ReceiptCode.NOT_FOUND, '读不到活文件（' + destPath + '）', {
+  nextStep: '确认活文件还在（换图会换目录）；用 miliastra_health 重新定位。',
+});
                 fsMod.copyFileSync(destPath, dst);              // 二进制拷贝（不经过文本层）
                 const st = fsMod.statSync(dst);
                 const mSha = hexOf(dst);
@@ -2606,7 +2620,9 @@ const TOOLS = [  {
         return runLintUiOp({ dir: lv.luaDir, scope: 'level', args, level: lv });
       }
       if (op === 'fixbom') {
-        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
+        if (!destPath) return fail(ReceiptCode.NOT_FOUND, '没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。', {
+  nextStep: '先用 `miliastra_health {brief:true}` 看这台机器上有哪些关卡与 .lua；或显式传 level= 指定另一张图。',
+});
         const r = stripBomFile(destPath, { backupDir: args.backupDir });
         return {
           ok: r.ok, op, level: { levelId: lv.levelId }, ...picked, ...r,
@@ -2615,7 +2631,9 @@ const TOOLS = [  {
         };
       }
       if (op === 'levels') {
-        if (!destPath) throw new Error('没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。');
+        if (!destPath) return fail(ReceiptCode.NOT_FOUND, '没找到活文件路径 —— 路径随账号/换图变化，先用 miliastra_health 定位（或直接给 source）。', {
+  nextStep: '先用 `miliastra_health {brief:true}` 看这台机器上有哪些关卡与 .lua；或显式传 level= 指定另一张图。',
+});
         const src = fsMod.readFileSync(destPath, 'utf8');
         const nameHint = args.nameHint ? String(args.nameHint) : 'LEVELS';
         const ex = extractLevelTable(src, { nameHint });
@@ -4265,7 +4283,9 @@ const TOOLS = [  {
       if (op === 'collect') {
         const lv = resolveLevel(args.level);
         const file = (listGia(lv.logDir || '', 1)[0] || {}).path;
-        if (!file) throw new Error('没有日志文件——先试玩一局。');
+        if (!file) return fail(ReceiptCode.NOT_FOUND, '没有日志文件——先试玩一局。', {
+  nextStep: '`.gia` 只在脚本 print 过、且**一局结束后**才落盘 ⇒ 先试玩一局再 collect。',
+});
         const gia = readGia(file);
         const tag = String(args.tag || 'PROBE');
         const { records } = filterRecords(gia.records.filter((r) => r.message), { tag, limit: Number.isFinite(args.limit) ? args.limit : 400 });
@@ -4297,7 +4317,9 @@ const TOOLS = [  {
       }
       if (op === 'deploy') {
         const lv = resolveLevel(args.level);
-        if (!lv.luaDir) throw new Error(`关卡 ${lv.levelId} 没有 external_lua_file 目录——先在编辑器里挂一个客户端脚本。`);
+        if (!lv.luaDir) return fail(ReceiptCode.NOT_FOUND, `关卡 ${lv.levelId} 没有 external_lua_file 目录——先在编辑器里挂一个客户端脚本。`, {
+  nextStep: '在编辑器里把客户端脚本挂到关卡上，再回来看活文件目录。',
+});
         const chosen = chooseLua(lv, args.file);
         const dest = chosen && chosen.picked ? chosen.picked.path : lv.luaDir + '\\' + (lv.levelId + '_probe.lua');
         const now = new Date();
