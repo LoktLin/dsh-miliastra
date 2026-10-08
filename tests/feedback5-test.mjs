@@ -205,6 +205,37 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
+await check('★ P0-1（《上下文瘦身设计》）`gen saveTo`：生成物落盘、回执只留摘要；**不给时行为一字节不变**', async () => {
+  const { TOOLS } = await import('../index.js');
+  const g = TOOLS.find((t) => t.name === 'miliastra_gen');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-saveto-'));
+  const base = { op: 'text-gradient', text: '原神千星', colors: ['#FFCC33', '#37FFFF'], controlName: '标题' };
+  const full = await g.execute({ ...base });
+  assert(typeof full.lua === 'string' && full.lua.length > 0, '不给 saveTo 时**必须**仍回正文（默认行为不许变）');
+  const slim = await g.execute({ ...base, saveTo: path.join(d, 'out.lua') });
+  assert(slim.saved === true, 'saveTo 没生效：' + JSON.stringify(slim).slice(0, 160));
+  eq('lua' in slim, false, '给了 saveTo 还回正文（那就没省上下文）');
+  eq(typeof slim.luaBytes, 'number', '`luaBytes`（生成物字节数）该保留 —— 设计文档要求摘要里带它（是数字，不是正文）');
+  const file = path.join(d, 'out.lua');
+  const st = fs.statSync(file);
+  eq(st.size, slim.bytes, '盘上文件字节 ≠ 回执 bytes');
+  assert(typeof slim.sha256 === 'string' && slim.sha256.length === 64, '缺 sha256（要能核对落盘的就是生成的那份）');
+  assert(JSON.stringify(slim).length < 1500, '摘要档回执该 <1.5 KB，实得 ' + JSON.stringify(slim).length);
+  assert(JSON.stringify(slim).length < JSON.stringify(full).length, '摘要档竟没比全量小');
+  // 最大的一档（vfx-lua 默认回执实测 ~67 KB）—— 用 saveTo 之后必须也只剩摘要
+  const vfxFull = await g.execute({ op: 'vfx-lua', preset: 'hit-spark', templateIndex: 1073741868, container: 1073741866 });
+  const vfxSlim = await g.execute({ op: 'vfx-lua', preset: 'hit-spark', templateIndex: 1073741868, container: 1073741866, saveTo: path.join(d, 'vfx.lua') });
+  if (typeof vfxFull.lua === 'string' && vfxFull.lua.length > 2000) {
+    assert(vfxSlim.saved === true && !('lua' in vfxSlim), 'vfx-lua 的 saveTo 没生效');
+    assert(JSON.stringify(vfxSlim).length < JSON.stringify(vfxFull).length / 4, 'vfx-lua 摘要档没显著变小');
+  }
+  fs.rmSync(d, { recursive: true, force: true });
+  return '全量 ' + JSON.stringify(full).length + ' B（带正文）→ 摘要 ' + JSON.stringify(slim).length + ' B · 盘上字节与回执一致 · vfx-lua 全量 ' + JSON.stringify(vfxFull).length + ' B → 摘要 ' + JSON.stringify(vfxSlim).length + ' B';
+});
+
 await check('★ #6 模板审计 `op=audit-template`（《插件调用优化方向》第 6 条）：子树 / 同父重名 / id 存在性 / **图源已逆出**', async () => {
   const { TOOLS } = await import('../index.js');
   const t = TOOLS.find((x) => x.name === 'miliastra_map');

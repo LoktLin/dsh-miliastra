@@ -1374,6 +1374,43 @@ function autoHandoverFromGil(args = {}) {
   return { mode: null, controlName: '', templateIndex: null, from: null, candidates };
 }
 
+/**
+ * ★★ P0-1（《上下文瘦身设计》2026-10-07）：**生成物落盘，不进回执**。
+ *
+ * 现状痛点：`miliastra_gen op=vfx-lua` 默认回执里 `lua` 是**整条生成物全文**（实测一次 ~67 KB 进上下文）。
+ * `saveTo`（**绝对路径**）给了 ⇒ 把正文写盘（`atomicWriteFile`，原子写）、回执只留摘要：
+ * `{ saved, path, bytes, lines, sha256, savedField, nextStep }`，**不再回正文**。
+ * ⚠️ **不给 `saveTo` 时行为一字节不变**（仍回正文）—— 这是本项的红线。
+ * ⚠️ 四个 op 统一支持（`vfx-lua` / `pixel-art` / `text-gradient` / `struct-json`）：这里在 `genOp` 外统一包一层，
+ *   不去改各生成器（少动一处风险少一处）。只落**字符串**型正文（`data` 是对象时不落、原样回）。
+ *
+ * @param {any} res `genOp()` 的产物
+ * @param {string|undefined} saveTo 绝对路径
+ */
+export function applySaveTo(res, saveTo) {
+  if (!saveTo || !res || res.ok !== true) return res;
+  const TEXT_KEYS = ['lua', 'json', 'struct', 'text'];
+  let key = null;
+  for (const k of TEXT_KEYS) { if (typeof res[k] === 'string' && res[k]) { key = k; break; } }
+  if (!key) return res;
+  const text = res[key];
+  const abs = pathMod.resolve(String(saveTo));
+  atomicWriteFile(abs, text);
+  const out = { ...res };
+  delete out[key];
+  return {
+    ...out,
+    saved: true,
+    path: abs,
+    savedField: key,
+    bytes: Buffer.byteLength(text, 'utf8'),
+    lines: text.split('\n').length,
+    sha256: createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex').toUpperCase(),
+    nextStep: '生成物已落盘（不进回执）⇒ 要部署走 `miliastra_code op=deploy`（**必须显式给 level + file**），'
+      + '部署后 **存盘 → 试玩 → `miliastra_map op=script` 看 match:true**。',
+  };
+}
+
 export function genOp(args = {}) {
   const op = String(args.op || 'text-gradient');
   if (op === 'text-gradient') {
@@ -4118,6 +4155,10 @@ const TOOLS = [  {
       properties: {
         op: { type: 'string', enum: ['text-gradient', 'struct-json', 'pixel-art', 'vfx-lua'], description: '默认 text-gradient。' },
         output: { type: 'string', enum: ['lua', 'data', 'struct'], description: '默认 lua（回执给可部署的 Lua + `luaBytes`/`lines`）；`data` = 只要数据；`struct` 只有 pixel-art 用。' },
+        /* ★ P0-1（《上下文瘦身设计》）：**生成物落盘、不进回执** ——
+         *   原默认回执里 `lua` 是**整条生成物全文**（实测一次 ~67 KB 进上下文）。给 `saveTo` 后回执只留摘要（<1 KB）；
+         *   **不给时行为一字节不变**。四个 op 统一支持（在 `genOp` 外统一包一层）。 */
+        saveTo: { type: 'string', description: '生成物**落盘**到这个绝对路径（原子写）⇒ 回执只回摘要、不回正文。不给则行为不变。' },
         assetId: { type: 'string', description: 'op=pixel-art：图源 —— `miliastra_asset` 的素材 id（或前缀）。与 `source` 二选一。' },
         source: { type: 'string', description: 'op=pixel-art：图源 —— 图片**绝对路径**（**不抓网图**）。' },
         cols: { type: 'number', description: 'op=pixel-art：网格列数（格）。只给一边就按比例推另一边。' },
@@ -4168,7 +4209,7 @@ const TOOLS = [  {
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
     async execute(args = {}) {
-      return genOp(args);
+      return applySaveTo(genOp(args), args.saveTo);
     },
   },
 
