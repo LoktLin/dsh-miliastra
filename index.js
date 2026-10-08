@@ -3605,6 +3605,36 @@ const TOOLS = [  {
           if (out.errors && out.errors.length) out.errorsOmitted = out.errors.length;
           out.errors = null;
         }
+        /*
+         * ★★ 2026-10-08（本轮实测的覆盖缺口）：**同一句连刷 N 次**必须自己报出来。
+         *   实测：某图一局 3862 条里 **2358 条**是同一句平台告警
+         *   （客户端控件生命周期处于创建或销毁时，无法调用DestroyClientUIControl），
+         *   而它**既不在 8 种错误形态里、也没有 [...] 标签** ⇒ op=errors / op=tags / 按 tag 的 grep **全都捞不到**，
+         *   只能靠调用方自己想到去 grep。⇒ 这里扫**全量记录**做去重计数，把"淹没型"日志显式报出来。
+         *   ⚠️ 只增字段（logFlood），不动既有字段；阈值 20 条才报（少于这个数不算"淹没"）。
+         */
+        {
+          const counts = new Map();
+          const firstAt = new Map();
+          for (const rec of pool) {
+            const msg = String((rec && rec.message) || '').trim();
+            if (!msg) continue;
+            counts.set(msg, (counts.get(msg) || 0) + 1);
+            if (!firstAt.has(msg)) firstAt.set(msg, (rec && rec.time) || null);
+          }
+          const total = pool.length;
+          const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
+            .map(([message, count]) => ({ message: message.slice(0, 200), count, firstAt: firstAt.get(message) }));
+          if (top.length && top[0].count >= 20) {
+            out.logFlood = {
+              top, records: total,
+              share: Number((top[0].count / Math.max(1, total)).toFixed(3)),
+              note: '**同一句连刷**（logFlood.top[0]）—— 平台级重复告警就是这样把 .gia 撑到几百 KB 的。'
+                + '这类句子**不在** op=errors 的 8 种形态里、往往也**没有 [...] 标签**'
+                + '（⇒ op=tags / grep tag= 捞不到）⇒ 看这里，别只看 count。',
+            };
+          }
+        }
         return out;
       }
 
@@ -5474,22 +5504,36 @@ function makeHandler() {
 
 
 const MIN_KIND = { miliastra_code: 'deploy', miliastra_sim: 'sim', miliastra_log: 'errors' };
-/** 哪些 op 才吃 `receipt:"min"` 的骨架（其余 op 原样返回 —— 免得把不相干的回执套错骨架）。 */
+/** 哪些 op 才吃 receipt:"min" 的骨架（其余 op 原样返回 —— 免得把不相干的回执套错骨架）。 */
 const MIN_OPS = { miliastra_code: ['deploy'], miliastra_sim: ['bind'], miliastra_log: ['errors'] };
 /*
- * 统一包装：`receipt:"min"` 在**工具出口**收口（不去改三个工具内部的大函数 —— 少动一处风险少一处）。
- * ⚠️ 只有 `args.receipt === 'min'` **且 op 在名单里**才生效；其余一律原样返回（默认行为一字节不变）。
- * ⚠️ 这段必须放在 `TOOLS` **定义之后**（放前面会 TDZ：`Cannot access 'TOOLS' before initialization`，本轮踩过）。
+ * ★★ 工具出口统一收口（2026-10-08）
+ *
+ * ① receipt:"min" 骨架档（只对名单里的 op 生效）；
+ * ② ★ **任何工具都不许把异常抛给调用方** —— 抛出去会**打断调用方一整轮**（本仓红线；其余 18 条 op 早已是回执形态）。
+ *    实测（tmp/_plugin-audit.mjs 系统审计）：**10 条 op 会抛**（找不到关卡 / 目录不存在 / 裸 ENOENT / 未知 op…）。
+ *    这里统一接住 ⇒ {ok:false, code:'TOOL_THREW', error, tool, op, nextStep}；
+ *    **各处消息文案一个字不改**（信息量不减，只把"形式"换成回执）。想要更精确的 code，再在该 op 里单独 return。
  */
 for (const t of TOOLS) {
+  if (typeof t.execute !== 'function') continue;
   const kind = MIN_KIND[t.name];
-  if (!kind || typeof t.execute !== 'function') continue;
   const ops = MIN_OPS[t.name] || [];
   const inner = t.execute;
-  // ⚠️ 必须显式标 `any`：每个工具的 `execute` 签名各不同（TS 会按各自回执推断参数形状），
-  //    直接赋一个 (args, ctx) 函数会 TS2322/TS2554（本轮踩过）。
   t.execute = /** @type {any} */ (async (args) => {
-    const res = await inner(args);   // ⚠️ 只传 args：我们的工具 execute 都只声明一个参数（传 ctx 会 TS2554）
+    let res;
+    try {
+      res = await inner(args);
+    } catch (e) {
+      const op = args && args.op ? String(args.op) : null;
+      return {
+        ok: false, tool: t.name, op, code: 'TOOL_THREW',
+        error: (e && e.message) || String(e),
+        nextStep: '这条错误的**文案本身**就是给你的信息（多半是参数指错了地方：关卡号 / 路径 / op 名）。'
+          + '改对参数重跑即可；如果你确认参数没问题，那就是插件 bug —— 把 tool / op / error 三个字段报出来。',
+      };
+    }
+    if (!kind) return res;
     const op = args && args.op ? String(args.op) : null;
     const want = !!(args && args.receipt === 'min' && (op === null || ops.includes(op)));
     return want ? minifyReceipt(res, kind) : res;
