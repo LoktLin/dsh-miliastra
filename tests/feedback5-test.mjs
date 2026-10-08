@@ -205,6 +205,41 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
+await check('★ P1-3（《上下文瘦身设计》）`runWorkspaceGates`：跑工作区两道门禁；**找不到工具就报错、绝不静默放行**', async () => {
+  const { runWorkspaceGates, TOOLS } = await import('../index.js');
+  const code = TOOLS.find((t) => t.name === 'miliastra_code');
+  const props = Object.keys((code.parameters || {}).properties || {});
+  assert(props.includes('gates'), '缺 gates 参数（P1-3）');
+  assert(props.includes('sync'), '缺 sync 参数（P1-3）');
+  // 工作区外：**判不了 ⇒ 报错**（不是"通过"）—— 这是"宁可失败也不写盘"的那条纪律
+  const outside = runWorkspaceGates(process.execPath);
+  eq(outside.ok, false, '工作区外的 source 竟判成通过');
+  eq(outside.code, 'GATES_NO_TOOLS', '该给 GATES_NO_TOOLS：' + outside.code);
+  assert(/宁可失败/.test(outside.error), '错误里该说清为什么不放行：' + outside.error);
+  // 不存在的 source：明确报错
+  const missing = runWorkspaceGates('C:\\definitely\\not\\here.lua');
+  eq(missing.ok, false, '不存在的 source 竟判成通过');
+  // 真工作区里挑一个文件（扫到哪个算哪个，**不写死地图**）：能给出门禁结论
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const caseRoot = path.resolve(process.cwd(), '..', '..', '案子');
+  let file = null;
+  if (fs.existsSync(caseRoot)) {
+    for (const map of fs.readdirSync(caseRoot)) {
+      const codeDir = path.join(caseRoot, map, '2.代码');
+      if (!fs.existsSync(codeDir)) continue;
+      const hit = fs.readdirSync(codeDir).find((n) => /\.lua$/i.test(n));
+      if (hit) { file = path.join(codeDir, hit); break; }
+    }
+  }
+  if (!file) return 'GATES_NO_TOOLS 与"文件不存在"两条都对（本机没找到工作区 .lua ⇒ 跳过真跑那条）';
+  const r = runWorkspaceGates(file);
+  assert(r.gates && typeof r.gates.scope.exit === 'number', '该回 gates.scope.exit');
+  assert(typeof r.gates.style.exit === 'number', '该回 gates.style.exit');
+  assert(r.ok === (r.gates.scope.exit === 0 && r.gates.style.exit === 0), 'ok 与两道门的 exit 不自洽');
+  return '工作区外 ⇒ GATES_NO_TOOLS · 真文件 ⇒ scope/style 结论自洽（ok=' + r.ok + '）';
+});
+
 await check('★ P0-2（《上下文瘦身设计》）`receipt:"min"`：精简骨架档 —— 结论字段全在、**非名单 op 一字节不变**', async () => {
   const { TOOLS, minifyReceipt } = await import('../index.js');
   const log = TOOLS.find((t) => t.name === 'miliastra_log');

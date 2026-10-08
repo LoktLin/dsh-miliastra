@@ -35,6 +35,7 @@ const TITLE = '千星奇域';
 const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import pathMod from 'node:path';
 import { fileURLToPath } from 'node:url';
 /** 本包目录（`index.js` 所在那一层）—— 浏览器试玩页与它的产物都从这儿取。 */
@@ -264,6 +265,65 @@ function deployNextStep(ms, rec, destPath) {
     + ' → **② 让人点试玩** → **③ `miliastra_map op=script` 看 `match:true`**（false = 他试的是旧代码，别急着查脚本）。';
   const tail = ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
   return tail + chain;
+}
+
+/**
+ * ★★ P1-3（《上下文瘦身设计》2026-10-07）：**跑工作区那两道门禁**（`check-lua-scope` + `check-lua-style`）。
+ *
+ * 为什么下沉：AI 每轮照抄「`check-lua-scope` → `check-lua-style` → `deploy`」四步 ⇒ 合并成一次调用。
+ * 口径：
+ *   · 显式拿 **source 文件**当参数（不用 `--map`，避免"扫了哪几张图"的歧义）；
+ *   · 工程根 = 从 source 往上找含 `tools/check-lua-scope.mjs` 的目录（最多 6 层）；
+ *   · **找不到工具就报错**（`code:"GATES_NO_TOOLS"`），**绝不静默放行**（"判不了"不等于"通过"）；
+ *   · 任一道 exit≠0 ⇒ `ok:false`，并把该门的**输出尾部**回放出来（人/ AI 都能直接看）。
+ *
+ * @param {string} source 要部署的本地文件绝对路径
+ * @param {{levelId?: string}} [lv]
+ */
+export function runWorkspaceGates(source, lv) {
+  const abs = pathMod.resolve(String(source || ''));
+  if (!abs || !fsMod.existsSync(abs)) return { ok: false, code: 'GATES_NO_SOURCE', error: 'source 不存在：' + JSON.stringify(abs) };
+  let root = pathMod.dirname(abs);
+  let found = null;
+  for (let i = 0; i < 6; i += 1) {
+    const p = pathMod.join(root, 'tools', 'check-lua-scope.mjs');
+    if (fsMod.existsSync(p)) { found = { root, scope: p, style: pathMod.join(root, 'tools', 'check-lua-style.mjs') }; break; }
+    const up = pathMod.dirname(root);
+    if (up === root) break;
+    root = up;
+  }
+  if (!found) {
+    return {
+      ok: false, code: 'GATES_NO_TOOLS',
+      error: '从 source 往上 6 层没找到 `tools/check-lua-scope.mjs` ⇒ **判不了**，按「宁可失败也不写盘」处理。'
+        + '要么把 source 放进工作区（`案子/<地图>/2.代码/…`），要么别用 `gates:true`（用 `withGates` 走插件内置检查）。',
+    };
+  }
+  const run = (cmd, cmdArgs) => {
+    try {
+      const out = execFileSync(process.execPath, [cmd, ...cmdArgs], {
+        cwd: found.root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 8 * 1024 * 1024, timeout: 120000,
+      });
+      return { exit: 0, tail: String(out).slice(-600) };
+    } catch (e) {
+      const tail = String((e && (e.stdout || e.stderr)) || (e && e.message) || '').slice(-600);
+      return { exit: e && typeof e.status === 'number' ? e.status : 1, tail };
+    }
+  };
+  const scope = run(found.scope, [abs]);
+  const style = fsMod.existsSync(found.style) ? run(found.style, [abs, '--summary']) : { exit: 0, tail: '（本工作区没有 check-lua-style.mjs，跳过）' };
+  const gates = {
+    root: found.root, levelId: (lv && lv.levelId) || null,
+    scope: { exit: scope.exit, tail: scope.tail },
+    style: { exit: style.exit, tail: style.tail },
+  };
+  if (scope.exit === 0 && style.exit === 0) return { ok: true, gates };
+  return {
+    ok: false, code: 'GATES_FAILED',
+    error: '工作区门禁没过：`check-lua-scope` exit=' + scope.exit + ' · `check-lua-style --summary` exit=' + style.exit
+      + '（两者的输出尾部在 `gates` 里）⇒ **没有写盘**。',
+    gates,
+  };
 }
 
 /**
@@ -1913,6 +1973,8 @@ const TOOLS = [  {
       properties: {
         op: { type: 'string', enum: ['read', 'deploy', 'inspect', 'backups', 'backup', 'restore', 'fixbom', 'levels', 'rects', 'lint-ui', 'preflight'], description: '默认 inspect。`dir` 给 op=rects / op=lint-ui / op=preflight。' },
         receipt: { type: 'string', enum: ['full', 'min'], description: '默认 full。`min` = **精简骨架档**（换一小撮决策必需字段）；与 `summaryOnly` 不重叠：那个是「去掉体积、保留原字段」，这个是「换骨架」。' },
+        gates: { type: 'boolean', description: 'op=deploy：部署前跑**工作区**那两道门禁（check-lua-scope + check-lua-style），**没过就不写盘**。与 `withGates`（插件内置检查）分工不同，可同时用。' },
+        sync: { type: 'array', items: { type: 'string' }, description: 'op=deploy：部署成功后把活文件**二进制同步**到这些镜像绝对路径，并逐个 SHA 复验（只写不删；失败回 ok:false + deployOk:true）。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（如 1073741833，选的是**哪张图**；不是玩法里的第几关 —— 那个用 `stage`）；省略=当前关卡。' },
         file: {
           type: 'string',
@@ -2248,6 +2310,25 @@ const TOOLS = [  {
             };
           }
         }
+        /*
+         * ★★ P1-3（《上下文瘦身设计》）：`gates:true` ⇒ **部署前跑工作区那两道门禁**
+         *   （`tools/check-lua-scope.mjs` + `tools/check-lua-style.mjs --summary`，显式拿 source 当参数），
+         *   **任何一道非 0 退出就不写盘**。工程根从 `source` 往上找 `tools/check-lua-scope.mjs`（**找不到就报错，绝不静默放行**）。
+         *   ⚠️ 与 `withGates` 的分工：`withGates` = **插件内置**检查（语法/作用域/全局写审计，不依赖工作区）；
+         *      `gates` = **工作区那套门禁**（各图自己的判据）。两个都给了就都跑，任一不过都不写盘。
+         */
+        if (args.gates === true) {
+          const g = runWorkspaceGates(args.source, lv);
+          if (g.ok !== true) {
+            return {
+              ok: false, op, code: g.code || 'GATES_FAILED',
+              level: { levelId: lv.levelId }, dest: destPath, ...pickedFields(wpick),
+              error: g.error, gates: g.gates || null,
+              nextStep: '先修掉不过的那道门（上面 `gates.<门>.tail` 是它的输出尾部），再原样重跑 deploy；**没有写盘**。',
+            };
+          }
+          args = { ...args, _gatesPassed: g.gates };
+        }
         const r = deployFile(args.source, destPath, {
           backupDir: args.backupDir,
           noBackup: args.noBackup === true,
@@ -2268,6 +2349,10 @@ const TOOLS = [  {
         // ⚠️ 写指纹失败**不影响部署成败**，只降级成一条 warning。
         let fp = null;
         let rec = null;
+        /** @type {Array<any>|null} P1-3：镜像同步结果（`sync:[…]` 给了才有） */
+        let syncResults = null;
+        /** @type {any} P1-3：四方 SHA 对照（source / live / mirror[] / embed） */
+        let shas = null;
         /*
          * ★★ 2026-10-04（《插件调用优化方向》第 2 条「改产物 vs 改源」防呆）：
          *   真事故是「grep 定位到改动点，改的其实是**构建产物**」⇒ 下次 build 静默覆盖，白干。
@@ -2286,6 +2371,49 @@ const TOOLS = [  {
           }
           // 部署完立刻对账：地图里嵌的是不是刚投进去这版（不然「可以试玩了」是句空话）
           rec = reconcileWithGil(lv, destPath);
+          /*
+           * ★★ P1-3（《上下文瘦身设计》）：`sync:[镜像绝对路径]` ⇒ **部署成功后二进制同步镜像 + SHA 复验**。
+           *   为什么要下沉：AI 每轮照抄一段 PowerShell（取三方 SHA → Copy-Item → 再复验）≈30 次。
+           *   口径：**只写镜像、不删**；写完**逐个复验** sha(live)==sha(mirror)；**任一失败就 `ok:false`**
+           *   （`deployOk:true` 说明"活文件其实已经写成功了"，不让人误判）。
+           */
+          if (Array.isArray(args.sync) && args.sync.length) {
+            const list = [];
+            const hexOf = (p) => createHash('sha256').update(fsMod.readFileSync(p)).digest('hex').toUpperCase();
+            let liveSha = null;
+            try { liveSha = hexOf(destPath); } catch (e) { liveSha = null; }
+            for (const raw of args.sync) {
+              const dst = pathMod.resolve(String(raw));
+              const item = { path: dst, ok: false, bytes: null, sha256_12: null, error: null };
+              try {
+                if (!liveSha) throw new Error('读不到活文件（' + destPath + '）');
+                fsMod.copyFileSync(destPath, dst);              // 二进制拷贝（不经过文本层）
+                const st = fsMod.statSync(dst);
+                const mSha = hexOf(dst);
+                item.bytes = st.size;
+                item.sha256_12 = mSha.slice(0, 12);
+                item.ok = mSha === liveSha;
+                if (!item.ok) item.error = '镜像 sha 与活文件不一致（拷贝后复验失败）';
+              } catch (e) { item.error = (e && e.message) || String(e); }
+              list.push(item);
+            }
+            syncResults = list;
+          }
+          /*
+           * ★ `shas`：**四方对照**（源码 / 活文件 / 镜像[] / 地图里嵌的）—— 以前只有两列（`reconcile`）。
+           *   与 `miliastra_health op=sha` 用的是**同一套含义**（去 BOM 的活文件 sha 用于和嵌入值比）。
+           */
+          {
+            const hexOf = (p) => { try { return createHash('sha256').update(fsMod.readFileSync(p)).digest('hex').toUpperCase(); } catch (e) { return null; } };
+            shas = {
+              source: hexOf(args.source),
+              live: hexOf(destPath),
+              mirror: (syncResults || []).map((x) => ({ path: x.path, sha256: x.sha256_12 ? x.sha256_12 + '…' : null, ok: x.ok })),
+              embed: rec && rec.embeddedSha256 ? rec.embeddedSha256 : null,
+              embedEqualsLive: rec && rec.match !== undefined ? rec.match : null,
+              note: '`live` = 活文件原始 sha；与 `embed`（地图里嵌的那份，**去 BOM**）比用 `embedEqualsLive`（= `reconcile.match`）。',
+            };
+          }
         }
         // 这份活文件**在这个关卡里挂过没有**（GIL 里的**已挂载集合** ↔ 本次的文件名；拿不到就 known:false，不猜）
         const gi = gilScriptInfo(lv);
@@ -2349,6 +2477,10 @@ const TOOLS = [  {
             atLocal: (fp.record || {}).atLocal || null,
           } : null,
           reconcile: rec,
+          /* ★ P1-3：四方 SHA 对照 + 工作区门禁结论 + 镜像同步结果（都只在给了对应参数时才有值） */
+          ...(shas ? { shas } : {}),
+          ...(syncResults ? { syncResults } : {}),
+          ...(args._gatesPassed ? { gates: args._gatesPassed } : {}),
           restoreWith: r.fixedBackup
             ? restoreCommand(null, destPath)
             : (r.backup ? restoreCommand(r.backup, destPath) : null),
