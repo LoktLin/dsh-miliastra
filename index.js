@@ -3376,7 +3376,11 @@ const TOOLS = [  {
           if (any) dir = any.logDir;
         }
       }
-      if (!dir) throw new Error(`关卡 ${lv.levelId} 没有关联的 Beyond_Debug_Log 目录。`);
+      if (!dir) return fail(ReceiptCode.NOT_FOUND, `关卡 ${lv.levelId} 没有关联的 Beyond_Debug_Log 目录。`, {
+
+        nextStep: '先在编辑器里挂一个客户端脚本并试玩一局（日志目录随关卡创建）；或显式传 level= 指定另一张图。',
+
+      });
       if (op === 'sessions') {
         const files = listGia(dir, Number.isFinite(args.limit) ? args.limit : 40);
         return { ok: true, op, dir, count: files.length, files };
@@ -3384,7 +3388,11 @@ const TOOLS = [  {
       const file = args.file
         ? (args.file.includes('\\') ? args.file : dir + '\\' + args.file)
         : (listGia(dir, 1)[0] || {}).path;
-      if (!file) throw new Error('该目录下没有 .gia 日志文件——先在编辑器里试玩一局。');
+      if (!file) return fail(ReceiptCode.NOT_FOUND, '该目录下没有 .gia 日志文件——先在编辑器里试玩一局。', {
+
+        nextStep: '`.gia` 只在脚本真的 print 过、且**一局结束后**才落盘 ⇒ 先试玩一局再看。',
+
+      });
       /*
        * ★ `readGia` 自己**没兜住"文件不存在"**（2026-09-30 实测）：`.gia` 被清理/轮转后，
        *   `op=errors`（以及同路的 tail/grep/runs）会让 `ENOENT` 栈冒到调用方，
