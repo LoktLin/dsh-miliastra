@@ -71,7 +71,7 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
-import { simOp, disposeSimAll, simRuntimeInfo } from './lib/sim.mjs';
+import { simOp, disposeSimAll, simRuntimeInfo, applyBootPatch } from './lib/sim.mjs';
 import { textGradient, STYLE_CHOICES } from './lib/textgradient/gradient.mjs';
 import { textGradientLua } from './lib/textgradient/lua.mjs';
 import { structJson } from './lib/structvar/build.mjs';
@@ -265,6 +265,66 @@ function deployNextStep(ms, rec, destPath) {
     + ' → **② 让人点试玩** → **③ `miliastra_map op=script` 看 `match:true`**（false = 他试的是旧代码，别急着查脚本）。';
   const tail = ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
   return tail + chain;
+}
+
+/**
+ * ★★ P1-4（《上下文瘦身设计》2026-10-07）：把 `boot` 落到 `op=bind` 的**脚本副本**上。
+ *
+ * 口径（**永不写真源**）：
+ *   · `scripts:[{path, source|sourceFrom}]` 或顶层 `source` 都支持；
+ *   · 有 `sourceFrom` ⇒ **读进内存**转成内联 `source`（原文件一个字节不动）；
+ *   · 逐份调 `applyBootPatch()`，把 `patched` 汇总成 `probe:{path, patched[], notes[], unsupported[], bytesBefore, bytesAfter}`。
+ * 返回 `{args, probe}` —— `args` 是**改过的副本**，只交给模拟器用。
+ *
+ * @param {any} args `miliastra_sim` 的参数（`op=bind`）
+ */
+export function patchSimBindBoot(args) {
+  const boot = args.boot || {};
+  const touch = (spec) => {
+    const src = typeof spec.source === 'string' ? spec.source : null;
+    const from = String(spec.sourceFrom || spec.from || '').trim();
+    let text = src;
+    let file = String(spec.path || spec.file || '') || null;
+    if (text === null || text === '') {
+      if (!from) throw new Error('`boot` 要能拿到源码：每份脚本给 `source`（内联）或 `sourceFrom`（绝对路径）。');
+      const abs = pathMod.resolve(from);
+      text = fsMod.readFileSync(abs, 'utf8');
+      file = abs;
+    }
+    const r = applyBootPatch(text, boot);
+    return {
+      spec: { ...spec, source: r.source, ...(spec.sourceFrom ? { sourceFrom: undefined } : {}) },
+      info: {
+        path: file, bytesBefore: Buffer.byteLength(text, 'utf8'), bytesAfter: Buffer.byteLength(r.source, 'utf8'),
+        patched: r.patched, notes: r.notes, unsupported: r.unsupported,
+      },
+    };
+  };
+  const out = { ...args };
+  const probe = { patched: [], notes: [], unsupported: [], files: [] };
+  if (Array.isArray(args.scripts) && args.scripts.length) {
+    out.scripts = args.scripts.map((s) => {
+      const t = touch(s || {});
+      probe.files.push(t.info);
+      probe.patched.push(...t.info.patched.map((x) => ({ ...x, path: t.info.path })));
+      probe.notes.push(...t.info.notes);
+      probe.unsupported.push(...t.info.unsupported);
+      return t.spec;
+    });
+  } else if (typeof args.source === 'string' || args.sourceFrom) {
+    const t = touch({ path: args.file, source: args.source, sourceFrom: args.sourceFrom });
+    out.source = t.spec.source;
+    out.sourceFrom = undefined;
+    probe.files.push(t.info);
+    probe.patched.push(...t.info.patched.map((x) => ({ ...x, path: t.info.path })));
+    probe.notes.push(...t.info.notes);
+    probe.unsupported.push(...t.info.unsupported);
+  } else {
+    throw new Error('`boot` 要配合 `source` / `sourceFrom` / `scripts[]` 用（没拿到任何源码）。');
+  }
+  return { args: out, probe: { ...probe, patchedCount: probe.patched.length, nextStep: probe.unsupported.length
+    ? '⚠️ `complete` 那项**没有做**（见 `unsupported`）—— 需要玩法自己的数据形状，本插件不猜。'
+    : '探针副本已改好（**真源未动**）⇒ 直接看 `run.logs`。' } };
 }
 
 /**
@@ -4144,6 +4204,7 @@ const TOOLS = [  {
       properties: {
         op: { type: 'string', enum: ['controls', 'hud', 'state', 'patch', 'handover', 'bind', 'play', 'verify', 'cases', 'frames', 'shot', 'keys', 'export', 'import', 'load', 'save', 'reset'], description: '默认 state。' },
         receipt: { type: 'string', enum: ['full', 'min'], description: '默认 full。`min` = **精简骨架档**（换一小撮决策必需字段）；与 `summaryOnly` 不重叠：那个是「去掉体积、保留原字段」，这个是「换骨架」。' },
+        boot: { type: 'object', description: 'op=bind：**探针改写**（只改内存副本、真源不动）。`{cur:数字}` 改 `local cur = N`；`mode:"build"` 注释掉 `registerCursor(` 并把启动入口换成 `buildLevel()`；`complete:true` **本插件不猜玩法数据形状**，会如实回 `unsupported`。改了什么见回执 `probe.patched`。' },
         /*
          * ⚠️ 这个 `all` **同时服务两个 op** —— 写成两个键会**静默覆盖**（JS 对象字面量后者胜），
          * 于是其中一个说明永远不会到达 AI（2026-09-24 被 ESLint 的 `no-dupe-keys` 抓到，见 `tools/lint.mjs`）。
@@ -4219,6 +4280,23 @@ const TOOLS = [  {
        *   **已有 `ok` 的不动**（尤其别把 `false` 盖成 `true`）。
        */
       let simR;
+      /*
+       * ★★ P1-4（《上下文瘦身设计》）：`boot` ⇒ **只改内存副本**再交给模拟器（**真源一个字节都不动**）。
+       *   `sourceFrom`（路径形态）要被"读出来再改"—— 所以先读进内存转成内联 `source`，
+       *   这样永远不回写真源（作者的红线：「改写对源码副本做」）。改了什么逐条记在 `probe.patched`。
+       */
+      let bootProbe = null;
+      if (args && args.boot != null && args.op === 'bind') {
+        try {
+          const patched = patchSimBindBoot(args);
+          args = patched.args;
+          bootProbe = patched.probe;
+        } catch (e) {
+          return { ok: false, op: 'bind', code: 'BOOT_PATCH_FAILED', error: (e && e.message) || String(e),
+            nextStep: '`boot` 只支持 `{cur:数字, mode:"build"|"select"|"title", complete:bool}`；' 
+              + '`complete` 需要玩法自己的数据形状（见 `unsupported` 说明），本插件**不猜**。' };
+        }
+      }
       try {
         simR = await simOp(args, {});
       } catch (e) {
@@ -4246,7 +4324,9 @@ const TOOLS = [  {
         }
       }
 
-      return (simR && typeof simR === "object" && !Array.isArray(simR) && simR.ok === undefined) ? { ok: true, ...simR } : simR;
+      const simOut = (simR && typeof simR === "object" && !Array.isArray(simR) && simR.ok === undefined) ? { ok: true, ...simR } : simR;
+      /* ★ P1-4：`boot` 改了什么，逐条透出去（`真源未动` 这件事也写在 probe.nextStep 里） */
+      return bootProbe && simOut && typeof simOut === 'object' ? { ...simOut, probe: bootProbe } : simOut;
     },
   },
 

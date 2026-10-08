@@ -205,6 +205,32 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
+await check('★ P1-4（《上下文瘦身设计》）`sim bind boot`：探针改写**只改内存副本** —— cur/mode 生效、complete 如实报 unsupported、**真源不动**', async () => {
+  const { applyBootPatch } = await import('../lib/sim.mjs');
+  const { patchSimBindBoot, TOOLS } = await import('../index.js');
+  const props = Object.keys((TOOLS.find((t) => t.name === 'miliastra_sim').parameters || {}).properties || {});
+  assert(props.includes('boot'), 'sim 缺 boot 参数');
+  const original = ['local cur = 1', 'local function boot()', '  showTitle()', '  registerCursor(c, 0)', 'end', 'return boot'].join('\n');
+  const pure = applyBootPatch(original, { cur: 5, mode: 'build', complete: true });
+  assert(/local cur = 5/.test(pure.source), 'cur 没改');
+  assert(/-- \[boot\].*registerCursor/.test(pure.source), 'registerCursor 没被注释（模拟器没这个控件，真跑会抛错打死 tick）');
+  assert(/buildLevel\(\)/.test(pure.source), '启动入口没换成 buildLevel()');
+  eq(pure.unsupported.length, 1, '`complete` 该如实报 unsupported（**不许猜玩法数据形状**）');
+  eq(pure.patched.length, 3, 'patched 该逐条记下改了什么');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'miliastra-boot-'));
+  const file = path.join(d, 'probe.lua');
+  fs.writeFileSync(file, original, 'utf8');
+  const r = patchSimBindBoot({ op: 'bind', sourceFrom: file, boot: { cur: 5, mode: 'build', complete: true } });
+  eq(fs.readFileSync(file, 'utf8'), original, '**真源被改了**（红线：只改内存副本）');
+  assert(/local cur = 5/.test(r.args.source), 'bind 那条路没把补丁落到副本上');
+  eq(r.probe.patched.length, 3, 'probe.patched 数量不对');
+  fs.rmSync(d, { recursive: true, force: true });
+  return '纯函数 3 处补丁 · 走 bind 也 3 处 · **真源逐字节未动** · complete 如实 unsupported';
+});
+
 await check('★ P1-3（《上下文瘦身设计》）`runWorkspaceGates`：跑工作区两道门禁；**找不到工具就报错、绝不静默放行**', async () => {
   const { runWorkspaceGates, TOOLS } = await import('../index.js');
   const code = TOOLS.find((t) => t.name === 'miliastra_code');
