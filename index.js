@@ -2545,6 +2545,18 @@ const TOOLS = [  {
             ? restoreCommand(null, destPath)
             : (r.backup ? restoreCommand(r.backup, destPath) : null),
           nextStep: r.ok ? deployNextStep(ms, rec, destPath) : null,
+          /*
+           * ★★ P3-7（《上下文瘦身设计》2026-10-07）：**`checklist[]` 短句数组** —— 让 AI **引用**而不是每轮复述
+           *   （实测那套"存盘 → 试玩 → 对账"话术被手写 ~60 次）。三步与 `nextStep` 说的是同一件事，
+           *   这里给**可引用的数组形态**（`nextStep` 是给人读的长句）。
+           */
+          ...(r.ok ? {
+            checklist: [
+              '编辑器里**存一次盘**（游戏跑的是存盘时嵌进 `.gil` 的那份，不是活文件）',
+              '**重新开一局**试玩（热更不生效）',
+              '`miliastra_map op=script` 看 `match:true`（false = 试的是旧代码）',
+            ],
+          } : {}),
         };
       }
       if (op === 'rects') {
@@ -3264,6 +3276,7 @@ const TOOLS = [  {
       properties: {
         op: { type: 'string', enum: ['sessions', 'tail', 'grep', 'tags', 'runs', 'metrics', 'errors', 'run-analysis'], description: '默认 tail。' },
         receipt: { type: 'string', enum: ['full', 'min'], description: '默认 full。`min` = **精简骨架档**（换一小撮决策必需字段）；与 `summaryOnly` 不重叠：那个是「去掉体积、保留原字段」，这个是「换骨架」。' },
+        explain: { type: 'boolean', description: 'op=errors：回那 8 条「错误形态」固定解释（默认只给 `formsCount`，省上下文）。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡（用它对应的日志目录）。' },
         file: { type: 'string', description: 'op=tail/grep/runs/errors：日志文件名或绝对路径；省略=最新那个。' },
         tag: { type: 'string', description: '正文子串过滤，例如 [P5D]、就绪、首错。' },
@@ -3431,7 +3444,14 @@ const TOOLS = [  {
           channels: found.channels,
           kindCounts: found.kindCounts,
           kinds,
-          forms: ERROR_FORMS.map((f) => ({ kind: f.kind, what: ERROR_KIND_LABELS[f.kind] || null })),
+          /*
+           * ★★ P2-6（《上下文瘦身设计》2026-10-07）：`forms[]`（8 条"错误形态"解释）是**固定文档**，
+           *   每次回执都带 ⇒ 实测 **578 B/次**。改成 **`explain:true` 才回**（默认只给 `formsCount`）。
+           *   ⚠️ 结论字段（`count`/`kindCounts`/`errors`/`file`）**一个不删**；要那 8 条解释传 `explain:true`。
+           */
+          ...(args.explain === true
+            ? { forms: ERROR_FORMS.map((f) => ({ kind: f.kind, what: ERROR_KIND_LABELS[f.kind] || null })) }
+            : { formsCount: ERROR_FORMS.length, formsNote: '要 8 条「错误形态」解释传 `explain:true`（固定文档，默认不占上下文）。' }),
           errors: found.errors,
           summaryOnly: slim,
         };

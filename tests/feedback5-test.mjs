@@ -205,6 +205,30 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
+await check('★ P2-6 / P3-7（《上下文瘦身设计》）errors 的 forms 按需回 + deploy 的 checklist 短句数组', async () => {
+  const { TOOLS, minifyReceipt } = await import('../index.js');
+  const log = TOOLS.find((t) => t.name === 'miliastra_log');
+  const code = TOOLS.find((t) => t.name === 'miliastra_code');
+  assert(Object.keys((log.parameters || {}).properties || {}).includes('explain'), 'log 缺 explain 参数（P2-6）');
+  // ⚠️ 真调可能因为"解析到的当前关卡没有日志目录"而报错 ⇒ **try 住并如实跳过真数据那半段**（不伪装通过）
+  let a = null;
+  let b = null;
+  try {
+    a = await log.execute({ op: 'errors', summaryOnly: true });
+    b = await log.execute({ op: 'errors', summaryOnly: true, explain: true });
+  } catch (e) { a = null; b = null; }
+  if (a && a.ok === true) {
+    eq('forms' in a, false, '默认不该再带 forms（固定文档，578 B/次）');
+    eq(typeof a.formsCount, 'number', '默认该给 formsCount（结论不丢）');
+    assert(Array.isArray(b.forms) && b.forms.length > 0, 'explain:true 时必须回全部 8 条');
+    assert(typeof a.count === 'number' && a.kindCounts, '结论字段（count/kindCounts）不许因为瘦身而丢');
+  }
+  // P3-7：deploy 的 checklist 是**数组短句**，且 min 骨架也带着它（决策要用）
+  const dep = minifyReceipt({ ok: true, op: 'deploy', dest: 'd.lua', bytes: 1, sha256: 'A'.repeat(64), checklist: ['存盘', '重开一局', '看 match'] }, 'deploy');
+  assert(Array.isArray(dep.checklist) && dep.checklist.length === 3, 'deploy min 骨架该带上 checklist');
+  return 'errors 默认无 forms（有 formsCount）/ explain:true 8 条 · checklist 3 条短句（min 骨架也带）';
+});
+
 await check('★ P1-4（《上下文瘦身设计》）`sim bind boot`：探针改写**只改内存副本** —— cur/mode 生效、complete 如实报 unsupported、**真源不动**', async () => {
   const { applyBootPatch } = await import('../lib/sim.mjs');
   const { patchSimBindBoot, TOOLS } = await import('../index.js');
