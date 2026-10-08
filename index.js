@@ -71,6 +71,8 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
+import { minifyReceipt, withFallbackCode } from './lib/receipt.mjs';
+import { MIN_KIND, MIN_OPS } from './lib/constants.mjs';
 import { colorMode, blobsFromGrid } from './lib/measure.mjs';
 import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
 import { simOp, disposeSimAll, simRuntimeInfo, applyBootPatch } from './lib/sim.mjs';
@@ -426,62 +428,7 @@ export function runWorkspaceGates(source, lv) {
   };
 }
 
-/**
- * ★★ P0-2（《上下文瘦身设计》2026-10-07）：**`receipt:"min"` —— 精简骨架档**。
- *
- * 与 `summaryOnly` 的**区别**（两个参数都要在 description 里互相点名，防撞车）：
- *   · `summaryOnly` = **去掉体积**（拿掉逐条明细 / 正文），**保留原来的字段与结论**；
- *   · `receipt:"min"` = **换一副骨架**（只留"这一轮决策必需"的那一小撮字段），字段名也按骨架来。
- * ⇒ 结论字段（`ok` / `bytes` / `sha` / `match` / `errors`）**一个都不能少**，否则 AI 就得再调一次。
- *
- * ⚠️ **不给 `receipt` 时行为一字节不变**（默认 `"full"`）。
- *
- * @param {any} res 工具的完整回执
- * @param {'deploy'|'sim'|'errors'} kind 哪一类骨架
- */
-export function minifyReceipt(res, kind) {
-  if (!res || typeof res !== 'object') return res;
-  const pick = (o, keys) => { /** @type {Record<string, any>} */ const r = {}; for (const k of keys) if (o[k] !== undefined) r[k] = o[k]; return r; };
-  if (kind === 'deploy') {
-    const rec = res.reconcile || {};
-    /** @type {Record<string, any>} */
-    const out = {
-      receipt: 'min', ok: res.ok,
-      ...pick(res, ['op', 'dest', 'selectedFile', 'pickedBy', 'src', 'bytes', 'backup', 'fixedBackup', 'error']),
-      sha256_12: typeof res.sha256 === 'string' ? res.sha256.slice(0, 12) : null,
-      syntax_ok: res.syntax ? res.syntax.ok === true : null,
-      lint_error: res.lint && Array.isArray(res.lint.problems) ? res.lint.problems.length : 0,
-      live_bytes: rec.liveBytes == null ? null : rec.liveBytes,
-      embed_bytes: rec.embeddedBytes == null ? null : rec.embeddedBytes,
-      match: rec.match === undefined ? null : rec.match,
-      prodUnchanged: res.prodUnchanged === undefined ? null : res.prodUnchanged,
-      knownPitCount: res.knownPitCount === undefined ? null : res.knownPitCount,
-    };
-    if (Array.isArray(res.checklist)) out.checklist = res.checklist;   // P3-7 的短句清单（有就带上）
-    return out;
-  }
-  if (kind === 'sim') {
-    const run = res.run || {};
-    return {
-      receipt: 'min', ok: res.ok,
-      ...pick(res, ['op', 'bound', 'fresh', 'scriptCount', 'error']),
-      controlCount: run.controlCount == null ? null : run.controlCount,
-      logCount: run.logCount == null ? (Array.isArray(run.logs) ? run.logs.length : null) : run.logCount,
-      logs: Array.isArray(run.logs) ? run.logs.slice(0, 40) : null,
-      liveBytes: res.source && res.source.bytes != null ? res.source.bytes : null,
-      nextStep: res.nextStep || null,
-    };
-  }
-  if (kind === 'errors') {
-    return {
-      receipt: 'min', ok: res.ok,
-      ...pick(res, ['op', 'file', 'count', 'returned', 'truncated', 'runsAffected', 'kindCounts', 'errors', 'error', 'hint']),
-      // `errorsMeaningless` 必须带上：**不清档就会把"过期日志"当"零报错"**（今天修过的那个坑）
-      errorsMeaningless: res.errorsMeaningless === undefined ? null : res.errorsMeaningless,
-    };
-  }
-  return res;
-}
+
 
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
 export { TOOLS };
@@ -5503,17 +5450,12 @@ function makeHandler() {
 }
 
 
-const MIN_KIND = { miliastra_code: 'deploy', miliastra_sim: 'sim', miliastra_log: 'errors' };
-/** 哪些 op 才吃 receipt:"min" 的骨架（其余 op 原样返回 —— 免得把不相干的回执套错骨架）。 */
-const MIN_OPS = { miliastra_code: ['deploy'], miliastra_sim: ['bind'], miliastra_log: ['errors'] };
 /*
- * ★★ 工具出口统一收口（2026-10-08）
- *
- * ① receipt:"min" 骨架档（只对名单里的 op 生效）；
- * ② ★ **任何工具都不许把异常抛给调用方** —— 抛出去会**打断调用方一整轮**（本仓红线；其余 18 条 op 早已是回执形态）。
- *    实测（tmp/_plugin-audit.mjs 系统审计）：**10 条 op 会抛**（找不到关卡 / 目录不存在 / 裸 ENOENT / 未知 op…）。
- *    这里统一接住 ⇒ {ok:false, code:'TOOL_THREW', error, tool, op, nextStep}；
- *    **各处消息文案一个字不改**（信息量不减，只把"形式"换成回执）。想要更精确的 code，再在该 op 里单独 return。
+ * 工具出口统一收口（2026-10-08）：
+ *   ① 任何工具都**不许把异常抛给调用方** ⇒ 转成 {ok:false, code:TOOL_THREW, tool, op, error, nextStep}；
+ *   ② 失败档 **code 兜底**（withFallbackCode）；
+ *   ③ `receipt:"min"` 骨架档（只对 MIN_OPS 名单里的 op 生效）。
+ * 常量与骨架实现分别在 `lib/constants.mjs` / `lib/receipt.mjs`（本文件只调用）。
  */
 for (const t of TOOLS) {
   if (typeof t.execute !== 'function') continue;
@@ -5533,20 +5475,13 @@ for (const t of TOOLS) {
           + '改对参数重跑即可；如果你确认参数没问题，那就是插件 bug —— 把 tool / op / error 三个字段报出来。',
       };
     }
-    /*
-     * ★★ 2026-10-08 统一回执契约：**失败档必带 code**。
-     *   实测（`tests/audit-test.mjs`）：28 条失败路径里绝大多数**没有** `code`（只有这几天新加的才有）
-     *   ⇒ 调用方只能靠正则中文判断错因。这里做**结构性兜底**：`ok:false` 且没 `code` 时补 `'FAILED'`。
-     *   ⚠️ 有精确 code 的一律不动（`MEASURE_DECODE_FAILED` / `SAVE_FAILED` / `GATES_NO_TOOLS` /
-     *      `PRECHECK_*` / `RESTORE_TARGET_MISMATCH` / `TOOL_THREW`…）；`'FAILED'` 的含义是
-     *      "这条路径还没细分 code，请看 `error` 文案" —— **不是**"失败原因未知"。
-     */
-    if (res && typeof res === 'object' && res.ok === false && !res.code) {
-      return { ...res, code: 'FAILED' };
-    }
+    res = withFallbackCode(res);
     if (!kind) return res;
     const op = args && args.op ? String(args.op) : null;
     const want = !!(args && args.receipt === 'min' && (op === null || ops.includes(op)));
     return want ? minifyReceipt(res, kind) : res;
   });
 }
+
+/** 供本地自测脚本读取（`minifyReceipt` 仍从这里可拿，测试依赖此出口）。 */
+export { minifyReceipt };
