@@ -70,16 +70,16 @@ import { atomicWriteFile } from './lib/fsx.mjs';
 import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS, TITLE, VERSION } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
-import { CLIENT_CONTROL_NAME, STARTED_AT, STRUCTURAL_NAME, classifyControls, hostStaleness, hostSummary, resolveLevel, sourceInfo } from './lib/shared.mjs';
+import { CLIENT_CONTROL_NAME, HttpError, PREFIX, STARTED_AT, STRUCTURAL_NAME, classifyControls, hostStaleness, hostSummary, resolveLevel, sleep, sourceInfo } from './lib/shared.mjs';
 import { ECHO_TOOL } from './lib/tools/echo.mjs';
 import { KB_TOOL } from './lib/tools/kb.mjs';
 import { HEALTH_TOOL } from './lib/tools/health.mjs';
-import { CODE_TOOL, scanErrorLog } from './lib/tools/code.mjs';
-import { MAP_TOOL, pickedFields } from './lib/tools/map.mjs';
+import { CODE_TOOL } from './lib/tools/code.mjs';
+import { MAP_TOOL } from './lib/tools/map.mjs';
 import { LOG_TOOL } from './lib/tools/log.mjs';
-import { PROBE_TOOL, chooseLua, gilScriptInfo, MOUNTED_ON_NOTE } from './lib/tools/probe.mjs';
-import { SHOT_TOOL, pathBasenameOf, PREFIX } from './lib/tools/shot.mjs';
-import { PLAYTEST_TOOL, clampNum, waitForPlaytestStart, sleep, HttpError } from './lib/tools/playtest.mjs';
+import { PROBE_TOOL } from './lib/tools/probe.mjs';
+import { SHOT_TOOL } from './lib/tools/shot.mjs';
+import { PLAYTEST_TOOL } from './lib/tools/playtest.mjs';
 import { SIM_TOOL } from './lib/tools/sim.mjs';
 import { GEN_TOOL, genOp } from './lib/tools/gen.mjs';
 import { ASSET_TOOL } from './lib/tools/asset.mjs';
@@ -837,10 +837,10 @@ export { genOp, applySaveTo, autoHandoverFromGil, ledgerHit, withLedgerNote, pix
 export { patchSimBindBoot } from './lib/tools/sim.mjs';
 
 /** 阶段 3：这些符号已搬进 `lib/tools/playtest.mjs`，这里**再导出**以免破坏既有引用。 */
-export { sleep, HttpError } from './lib/tools/playtest.mjs';
+
 
 /** 阶段 3：这些符号已搬进 `lib/tools/shot.mjs`，这里**再导出**以免破坏既有引用。 */
-export { PREFIX } from './lib/tools/shot.mjs';
+
 
 /** 阶段 3：这些符号已搬进 `lib/tools/map.mjs`，这里**再导出**以免破坏既有引用。 */
 export { clientUiHint, CLIENTUI_EVIDENCE } from './lib/tools/map.mjs';
@@ -850,3 +850,6 @@ export { runWorkspaceGates, collectLuaFilesForRects } from './lib/tools/code.mjs
 
 /** 阶段 3：`hostStaleness` 已搬进 `lib/shared.mjs`，这里**再导出**（`tests/smoke.mjs` 等既有引用不断）。 */
 export { hostStaleness };
+
+/** 阶段 3：这些共享符号已搬进 `lib/shared.mjs`，这里为本文件的既有导出**再导出**。 */
+export { HttpError, PREFIX, sleep };
