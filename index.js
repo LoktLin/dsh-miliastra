@@ -3401,7 +3401,7 @@ const TOOLS = [  {
             + ' —— 日志目录里的 `.gia` 会随会话轮转或被清理；换一个 `file`，或省略 `file` 用**最新那份**。',
         };
       }
-      if (!gia.ok) return { ok: false, op, file, error: gia.error };
+      if (!gia.ok) return { ok: false, op, code: ReceiptCode.FAILED, file, error: gia.error };
       const withMsg = gia.records.filter((r) => r.message);
       /*
        * ★ 「这份 .gia 是不是本次会话的」（反馈 A2 ②）：本局没有 `.gia` 时，这里取到的是**上一局**的文件，
@@ -3465,7 +3465,7 @@ const TOOLS = [  {
 
       if (runQ && !pool.length) {
         return {
-          ok: false, op, file,
+          ok: false, op, code: ReceiptCode.FAILED, file,
           error: '这个文件里没有 instance 含 "' + runQ + '" 的记录。先用 op=runs 看有哪些局（instance / epochSec）。',
         };
       }
@@ -3640,8 +3640,8 @@ const TOOLS = [  {
         const withIdx = src.map((r, i) => ({ ...r, i }));
         let cmdRe = null;
         let uiRe = null;
-        try { cmdRe = new RegExp(args.pattern || '命令|点击|按下|Invoke|Pressed', 'i'); } catch (e) { return { ok: false, op, error: 'pattern 不是合法正则：' + ((e && e.message) || e) }; }
-        try { uiRe = new RegExp(args.tag || '渲染|显形|收起|SetVisible|界面层|覆盖层|更新', 'i'); } catch (e) { return { ok: false, op, error: 'tag 不是合法正则：' + ((e && e.message) || e) }; }
+        try { cmdRe = new RegExp(args.pattern || '命令|点击|按下|Invoke|Pressed', 'i'); } catch (e) { return { ok: false, op, code: ReceiptCode.BAD_PARAM, error: 'pattern 不是合法正则：' + ((e && e.message) || e) }; }
+        try { uiRe = new RegExp(args.tag || '渲染|显形|收起|SetVisible|界面层|覆盖层|更新', 'i'); } catch (e) { return { ok: false, op, code: ReceiptCode.BAD_PARAM, error: 'tag 不是合法正则：' + ((e && e.message) || e) }; }
         const paired = pairCommandsWithUi(withIdx, { cmdRe, uiRe, window: clampNum(args.limit, 12, 1, 200) });
         return {
           ok: true, op, file, size: gia.size, recordCount: gia.recordCount,
@@ -3690,7 +3690,7 @@ const TOOLS = [  {
       const fromRaw = args.from == null ? '' : String(args.from).trim().toLowerCase();
       if (fromRaw && fromRaw !== 'end' && fromRaw !== 'head') {
         return {
-          ok: false, op, file,
+          ok: false, op, code: ReceiptCode.FAILED, file,
           error: 'from 只能是 "end"（从尾部取，默认）或 "head"（从头取），收到：' + JSON.stringify(args.from),
         };
       }
@@ -3698,7 +3698,7 @@ const TOOLS = [  {
       const lastN = Number.isFinite(args.last) ? Math.max(0, Math.round(args.last)) : null;
       const take = lastN == null ? limit : lastN;
       const { records, error } = filterRecords(pool, { tag: args.tag, pattern: args.pattern, limit: take, fromEnd: !fromHead });
-      if (error) return { ok: false, op, file, error };
+      if (error) return { ok: false, op, code: ReceiptCode.FAILED, file, error };
       /*
        * ★ 2026-09-30 修：`matched` 以前写的是 `records.length` —— 而 `records` **已经是截断后的窗口**，
        *   于是它恒等于「本次返回几条」，**不是命中总数**：我用 `limit:1` 查「命中」时它回 `matched: 1`，
