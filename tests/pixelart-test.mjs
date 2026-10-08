@@ -45,7 +45,15 @@ const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 const eq = (a, b, msg) => assert(JSON.stringify(a) === JSON.stringify(b), `${msg || '不相等'}：期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}`);
 function throws(fn, mustInclude, msg) {
   let err = null;
-  try { fn(); } catch (e) { err = (e && e.message) || String(e); }
+  /*
+   * ★ 2026-10-08：工具出口已统一"失败回 {ok:false} 回执、不抛异常"（红线）⇒
+   *   本助手同时接受两种"拒绝"形态：**抛异常** 或 **回执 ok:false**（把 error 当成错误文案）。
+   *   断言意图不变：**坏输入必须被明确拒绝，且文案里要有该有的关键词**。
+   */
+  try {
+    const r = fn();
+    if (r && typeof r === 'object' && r.ok === false) err = String(r.error || r.code || '（ok:false）');
+  } catch (e) { err = (e && e.message) || String(e); }
   assert(err !== null, (msg || '应当报错') + '，但没报错');
   if (mustInclude) assert(err.includes(mustInclude), `错误文案里没有「${mustInclude}」：${err}`);
   return err;
@@ -436,7 +444,10 @@ t('`TOOLS` 里真的有 `op=pixel-art`，且 description 写了「静态不加 E
 });
 
 t('未知 op **明确报错**（不静默回落成默认 op）', async () => {
-  const err = await genExec({ op: 'pixel-art-typo' }).then(() => null, (e) => (e && e.message) || String(e));
+  // 2026-10-08：出口不抛异常 ⇒ 回执的 ok:false + error 也算「明确报错」
+  const err = await genExec({ op: 'pixel-art-typo' }).then(
+    (r) => (r && r.ok === false ? String(r.error || r.code || '') : null),
+    (e) => (e && e.message) || String(e));
   assert(err !== null, '应当报错');
   assert(/没有这个 op/.test(err) && /pixel-art/.test(err), '报错要列出支持的 op：' + err);
   return err.slice(0, 40);

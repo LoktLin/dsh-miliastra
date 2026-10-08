@@ -186,7 +186,10 @@ await check('P0-1 集成：写盘路径按 basename 命中（回执 dest / destB
     const srcOther = path.join(tmpRoot, '另一个.lua');
     fs.writeFileSync(srcOther, '-- 谁都不该被这个覆盖\n', 'utf8');
     let msg = null;
-    try { await codeTool.execute({ op: 'deploy', level: '1073741906', source: srcOther }, {}); } catch (e) { msg = e.message; }
+    try {
+      const __r = await codeTool.execute({ op: 'deploy', level: '1073741906', source: srcOther }, {});
+      if (__r && __r.ok === false) msg = String(__r.error || __r.code || '');
+    } catch (e) { msg = e.message; }
     assert(msg && /拒绝部署/.test(msg), '对不上时没拒绝：' + msg);
     assert(Buffer.compare(fs.readFileSync(path.join(lv.luaDir, '表现 view.lua')), beforeView) === 0, 'view 被写坏了');
     assert(Buffer.compare(fs.readFileSync(path.join(lv.luaDir, '交互 input.lua')), beforeInput) === 0, 'input 被写坏了');
@@ -676,7 +679,10 @@ await check('N-1 集成：`op=rects dir=<工程目录>` 出「文件:行号 + �
   assert(slim.pairsChecked.length === r.pairsChecked.length && slim.near.length === r.near.length, 'summaryOnly 把差异列表也去掉了：' + JSON.stringify({ p: slim.pairsChecked.length, n: slim.near.length }));
   assert(JSON.stringify(slim).length < JSON.stringify(r).length, 'summaryOnly 没省到体积');
   let msg = null;
-  try { await codeTool.execute({ op: 'rects', dir: path.join(tmpRoot, '不存在') }, {}); } catch (e) { msg = e.message; }
+  try {
+    const __r = await codeTool.execute({ op: 'rects', dir: path.join(tmpRoot, '不存在') }, {});
+    if (__r && __r.ok === false) msg = String(__r.error || __r.code || '');
+  } catch (e) { msg = e.message; }
   assert(msg && /存在的目录/.test(msg), '目录不存在时没报错指路：' + msg);
   return `${r.counts.rects} 个矩形 / 近似 ${r.counts.nearPairs} 对 / 点名差异 ${JSON.stringify(p.delta)}；summaryOnly 省了 ${(1 - JSON.stringify(slim).length / JSON.stringify(r).length).toFixed(2)}`;
 });

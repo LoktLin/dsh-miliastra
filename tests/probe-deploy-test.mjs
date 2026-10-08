@@ -163,7 +163,10 @@ await check('一个关卡多个活文件：全部列出 / 可按名字选 / 选�
     assert(String(picked.inspected.path).endsWith('甲角色.lua'), '按名字选没生效：' + picked.inspected.path);
 
     let threw = null;
-    try { await code.execute({ op: 'inspect', file: '不存在.lua' }, {}); } catch (e) { threw = e; }
+    try {
+      const __r = await code.execute({ op: 'inspect', file: '不存在.lua' }, {});
+      if (__r && __r.ok === false) threw = { message: String(__r.error || __r.code || '') };
+    } catch (e) { threw = e; }
     assert(threw, '指定不存在的活文件竟然没报错（会悄悄操作别的文件）');
     assert(/现有：/.test(threw.message), '报错里没列出可选项：' + threw.message);
 

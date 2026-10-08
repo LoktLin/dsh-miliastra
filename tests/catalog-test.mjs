@@ -55,14 +55,18 @@ function ok(label, cond, detail) {
 }
 /** 抛错就返回错误消息，不抛返回 null（断言报错口径时用）。 */
 function errOf(fn) {
-  try { fn(); return null; } catch (e) { return (e && e.message) || String(e); }
+  // 2026-10-08：出口已统一「失败回 {ok:false} 回执、不抛异常」⇒ 回执的 error 也算「报错文案」
+  try { const r = fn(); if (r && typeof r === 'object' && r.ok === false) return String(r.error || r.code || 'ok:false'); return null; }
+  catch (e) { return (e && e.message) || String(e); }
 }
 /**
  * 同上，但给 **async** 用（`asset.execute` 是 async：不 await 的话"抛错"变成一个 rejected Promise，
  * 同步 try/catch 抓不到 ⇒ 断言会**静默变成 null 而假过/假红**）。这条注释是踩出来的。
  */
 async function errOfAsync(fn) {
-  try { await fn(); return null; } catch (e) { return (e && e.message) || String(e); }
+  // 2026-10-08：同上（async 版）
+  try { const r = await fn(); if (r && typeof r === 'object' && r.ok === false) return String(r.error || r.code || 'ok:false'); return null; }
+  catch (e) { return (e && e.message) || String(e); }
 }
 /** 回执里有没有 `undefined` 值（JSON 会把它整键删掉 ⇒ 必须自己走一遍）。 */
 function hasUndefined(v, seen = new Set()) {

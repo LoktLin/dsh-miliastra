@@ -551,8 +551,11 @@ await check('工具层：从工具走一遍 add → list → get → stats → r
   assert(stats.ok === true && stats.count >= 1, '工具层 stats 不对');
   const rebuild = await t.execute({ op: 'rebuild' });
   assert(rebuild.ok === true && rebuild.records >= 1, '工具层 rebuild 不对');
-  const bad = await t.execute({ op: '不存在的op' }).then(() => null, (e) => e);
-  assert(bad && /没有这个 op/.test(bad.message), '不认识的 op 该明确报错（而不是静默当 list）：' + (bad && bad.message));
+  // ★ 2026-10-08：出口不抛异常了 ⇒ 同时接受「抛」与「回执 ok:false」两种形态
+  const badR = await t.execute({ op: '不存在的op' })
+    .then((r) => r, (e) => ({ ok: false, error: (e && e.message) || String(e) }));
+  assert(badR && badR.ok === false && /没有这个 op/.test(String(badR.error || badR.code)),
+    '不认识的 op 该明确报错（而不是静默当 list）：' + JSON.stringify(badR && (badR.error || badR.code)));
   return 'add/list/get/stats/rebuild 都对；未知 op 明确报错';
 });
 

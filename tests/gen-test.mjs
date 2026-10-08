@@ -64,7 +64,15 @@ const eq = (a, b, msg) => assert(JSON.stringify(a) === JSON.stringify(b), `${msg
 /** 断言某次调用**报错**（而不是静默回一个坏结果）。 */
 function throws(fn, mustInclude, msg) {
   let err = null;
-  try { fn(); } catch (e) { err = (e && e.message) || String(e); }
+  /*
+   * ★ 2026-10-08：工具出口已统一"失败回 {ok:false} 回执、不抛异常"（红线）⇒
+   *   本助手同时接受两种"拒绝"形态：**抛异常** 或 **回执 ok:false**（把 error 当成错误文案）。
+   *   断言意图不变：**坏输入必须被明确拒绝，且文案里要有该有的关键词**。
+   */
+  try {
+    const r = fn();
+    if (r && typeof r === 'object' && r.ok === false) err = String(r.error || r.code || '（ok:false）');
+  } catch (e) { err = (e && e.message) || String(e); }
   assert(err !== null, (msg || '应当报错') + '，但没报错');
   if (mustInclude) assert(err.includes(mustInclude), `错误文案里没有「${mustInclude}」：${err}`);
   return err;
@@ -518,7 +526,10 @@ t('工具层：spelling 可切换（写出 struct_type，回执说清读了哪�
 
 t('工具层：未知 op **明确报错**（不静默回落成默认 op）', async () => {
   let err = null;
-  try { await gen.execute({ op: 'tween-lua' }, {}); } catch (e) { err = (e && e.message) || String(e); }
+  try {
+    const __r = await gen.execute({ op: 'tween-lua' }, {});
+    if (__r && __r.ok === false) err = String(__r.error || __r.code || '');
+  } catch (e) { err = (e && e.message) || String(e); }
   assert(err !== null, '未知 op 必须报错');
   assert(err.includes('tween-lua') && err.includes('text-gradient'), '错误要点名收到的 op 与支持的 op：' + err);
   // 反向：不传 op 时按默认 op 走（这条也钉住，免得"报错"改成"什么都报错"）
@@ -733,7 +744,8 @@ t('★ lua 的 summaryOnly：只去 Lua 正文，`nextStep` / 统计 / 警告必
 
 t('output 只认 lua / data（写错要报错，不静默回落）', async () => {
   let err = null;
-  try { await gen.execute({ op: 'text-gradient', output: 'json' }, {}); } catch (e) { err = (e && e.message) || String(e); }
+  // 2026-10-08：出口不抛异常 ⇒ 回执 ok:false 的 error 也算「报错文案」
+  try { const r = await gen.execute({ op: 'text-gradient', output: 'json' }, {}); if (r && r.ok === false) err = String(r.error || r.code || ''); } catch (e) { err = (e && e.message) || String(e); }
   assert(err && err.includes('lua') && err.includes('data'), '要报出合法取值：' + err);
   return err.slice(0, 60);
 });
