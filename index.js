@@ -31,7 +31,7 @@ const VERSION = '0.7.2';
  *（smoke 里有 32KB 棘轮）—— 所以这里用短名；完整品牌名仍在系统提示段（renderPromptSection）
  * 与面板（lib/client.js）里，AI 不会因此认不出这是哪套工具。
  */
-const TITLE = '千星奇域';
+
 const STARTED_AT = Date.now();
 
 import fsMod from 'node:fs';
@@ -72,7 +72,8 @@ import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventi
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
 import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
-import { MIN_KIND, MIN_OPS } from './lib/constants.mjs';
+import { MIN_KIND, MIN_OPS, TITLE } from './lib/constants.mjs';
+import { renderJson } from './lib/render.mjs';
 import { colorMode, blobsFromGrid } from './lib/measure.mjs';
 import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
 import { simOp, disposeSimAll, simRuntimeInfo, applyBootPatch } from './lib/sim.mjs';
@@ -96,8 +97,6 @@ import {
   thumbPathFor, resolveShotFile, ensureThumbnail,
   planBurst, burstSummary, BURST_FLOOR_MS, BURST_MAX_COUNT, frameInRun,
 } from './lib/shot.mjs';
-
-const renderJson = (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 1) }];
 
 function lossless(value) {
   if (value === undefined) return null;
@@ -427,8 +426,6 @@ export function runWorkspaceGates(source, lv) {
     gates,
   };
 }
-
-
 
 /** 供本地自测脚本读取（cordis 只认 name / inject / apply，多导出无害）。 */
 export { TOOLS };
@@ -5494,7 +5491,6 @@ function makeHandler() {
     }
   };
 }
-
 
 /*
  * 工具出口统一收口（2026-10-08）：
