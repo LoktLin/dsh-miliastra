@@ -147,6 +147,29 @@ function ownSourceFiles() {
 }
 
 /**
+ * **码规范**检查：除 `lib/receipt.mjs`（枚举定义处）外，包内不许出现 `code: '大写字面量'`。
+ *
+ * 为什么做成绊线：码一散成字面量就必然漂移（同一个含义写成两个码 / 改了码忘了改一处），
+ * 而且调用方没法据此分支。规范见 `lib/receipt.mjs` 顶部《码规范》：失败码 `ReceiptCode.X`、警告码 `WarnCode.X`。
+ * **纯函数**（可单测）：给 `[{path, text}]`，回 `[{code, file, line}]`。
+ * @param {Array<{path: string, text: string}>} files
+ * @returns {Array<{code: string, file: string, line: number}>}
+ */
+export function findLiteralCodes(files) {
+  const out = [];
+  for (const f of files) {
+    if (/(^|\/)lib\/receipt\.mjs$/.test(f.path)) continue;   // 枚举就在这里定义，只有它允许字面量
+    // `tests/**` 也豁免：测试**故意**断言 wire 上的字面量值（断言枚举反而抓不到「值被改了」）—— 那是测试的职责
+    if (/(^|\/)tests\//.test(f.path)) continue;
+    String(f.text || '').split(/\r?\n/).forEach((line, i) => {
+      const m = /code:\s*'([A-Z][A-Z0-9_]+)'/.exec(line);
+      if (m) out.push({ code: m[1], file: f.path, line: i + 1 });
+    });
+  }
+  return out;
+}
+
+/**
  * 跑一次 lint。返回 `{ rules, targets, files, messages, errors, warnings, dead }`。
  * ⚠️ 用**动态 import** 拿 eslint：没装依赖时给一条人话（而不是 `ERR_MODULE_NOT_FOUND` 糊一脸）。
  */
@@ -188,6 +211,7 @@ export async function lintOnce() {
     }
   }
   const dead = findDeadExports(ownSourceFiles());
+  const literalCodes = findLiteralCodes(ownSourceFiles());
   return {
     rules: Object.keys(LINT_RULES),
     targets: LINT_TARGETS,
@@ -196,6 +220,7 @@ export async function lintOnce() {
     errors: messages.filter((m) => m.severity === 2).length,
     warnings: messages.filter((m) => m.severity === 1).length,
     dead,
+    literalCodes,
   };
 }
 
@@ -212,12 +237,16 @@ if (isMain) {
       console.log(`${d.file}:${d.line}  no-unused-export  '${d.name}' 导出了但全包零引用`
         + '（要保留就写进 tools/lint.mjs 的 EXPORT_WHITELIST 并写理由）');
     }
-    if (r.errors || r.dead.length) {
-      console.log(`\n✗ lint 未通过：${r.errors} 条规则命中 + ${r.dead.length} 个死导出`
+    for (const c of r.literalCodes) {
+      console.log(`${c.file}:${c.line}  literal-code  code: '${c.code}' 不许写字面量`
+        + '（失败码用 ReceiptCode.X、警告码用 WarnCode.X；规范见 lib/receipt.mjs 顶部《码规范》）');
+    }
+    if (r.errors || r.dead.length || r.literalCodes.length) {
+      console.log(`\n✗ lint 未通过：${r.errors} 条规则命中 + ${r.dead.length} 个死导出 + ${r.literalCodes.length} 个字面量 code`
         + `（扫了 ${r.files} 个文件，${r.rules.length} 条硬规则）`);
       process.exit(1);
     }
-    console.log(`✓ lint 通过：${r.files} 个文件 / 0 命中 / 0 死导出（${r.rules.length} 条硬规则：变量名拼错、`
+    console.log(`✓ lint 通过：${r.files} 个文件 / 0 命中 / 0 死导出 / 0 字面量 code（${r.rules.length} 条硬规则：变量名拼错、`
       + '键静默覆盖、不可达代码、NaN 比较、typeof 打错、条件式 hook…… 风格类一律不开，好让这条绊线长期是绿的）');
   } catch (e) {
     console.error('✗ ' + ((e && e.message) || e));

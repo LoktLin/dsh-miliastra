@@ -38,6 +38,21 @@
   ④ 工具反过来引用宿主符号（`TOOLS` / `renderPromptSection`）⇒ 改为**直接引用自己**或**依赖注入**，不做反向 import；
   ⑤ `smoke` 的 `[version]` 门禁原本扫 `index.js` 源码找 `const VERSION` ⇒ **门禁跟着结构更新**（改读 `lib/constants.mjs`，不变量不变）。
 
+### 回执 code 规范（**成文 + 由门禁强制**）
+
+- **`lib/receipt.mjs` 顶部新增《码规范》**（写清楚：两类码、命名规则、**什么时候才该新增一个码**）。
+- **两类码分开**（混用是以前最大的问题）：
+  - **失败码** `ReceiptCode`（`{ok:false, code}`）：7 → **21 个**（补 `GATES_NO_TOOLS` / `GATES_NO_SOURCE` / `SAVE_FAILED` /
+    `MEASURE_NO_SOURCE` / `MEASURE_DECODE_FAILED` / `RESTORE_TARGET_MISMATCH` / `PRECHECK_FAILED` / `LEVEL_AMBIGUOUS` /
+    `BOOT_PATCH_FAILED` / `FX_*` …；`GATES_FAILED` 保留为 `GATE_FAILED` 的**兼容旧名**）。
+  - **警告码** `WarnCode`（成功回执的 `warnings[].code`，**不是失败**）：**新增 9 个**（`GRID_DEFAULTED` /
+    `HANDOVER_AUTO_FROM_GIL` / `TEXT_TOO_LONG` / `TRANSPARENT_CELLS_DROPPED` / `UNVERIFIED_SYNTAX` …）。
+- **全仓 26 处字面量 → 枚举引用**（0 处残留）；涉及 `index.js` + `lib/tools/*` + `lib/pixelart` / `lib/structvar` /
+  `lib/textgradient` / `lib/vfx`。
+- **新增门禁**：`tools/lint.mjs` 加 `findLiteralCodes()`（**纯函数**，可单测）⇒ 除 `lib/receipt.mjs`（枚举定义处）
+  与 `tests/**`（测试**故意**断言 wire 上的字面量值）外，**再出现 `code: '大写字面量'` 直接红**。
+  已做**反向验证**：临时塞一个探针码 ⇒ 门禁立刻点名（文件:行号 + 该码）。
+
 ## [0.7.2] - 2026-10-07
 
 ### 其他变更

@@ -67,7 +67,7 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
-import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
+import { ReceiptCode, fail, minifyReceipt, withFallbackCode } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS, TITLE, VERSION } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
 import { CLIENT_CONTROL_NAME, HttpError, PREFIX, STARTED_AT, STRUCTURAL_NAME, classifyControls, hostStaleness, hostSummary, resolveLevel, sleep, sourceInfo } from './lib/shared.mjs';
@@ -813,7 +813,7 @@ for (const t of TOOLS) {
     } catch (e) {
       const op = args && args.op ? String(args.op) : null;
       return {
-        ok: false, tool: t.name, op, code: 'TOOL_THREW',
+        ok: false, tool: t.name, op, code: ReceiptCode.TOOL_THREW,
         error: (e && e.message) || String(e),
         nextStep: '这条错误的**文案本身**就是给你的信息（多半是参数指错了地方：关卡号 / 路径 / op 名）。'
           + '改对参数重跑即可；如果你确认参数没问题，那就是插件 bug —— 把 tool / op / error 三个字段报出来。',
