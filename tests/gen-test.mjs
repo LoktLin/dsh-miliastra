@@ -35,6 +35,7 @@ import {
   renderFrame, textGradient, STYLE_CHOICES,
 } from '../lib/textgradient/gradient.mjs';
 import { luaString, frameToLuaLine, buildTextGradientLua, textGradientLua } from '../lib/textgradient/lua.mjs';
+import { throws } from './_harness.mjs';
 import {
   PARAM_TYPES, TYPE_LABELS, TYPE_KIND, TEXT_LIMIT, STRUCT_ID_LENGTH, SPELLING_KEYS,
   defaultNodeValue, isParamType, paramNode,
@@ -62,21 +63,6 @@ function t(name, fn) { queue.push([name, fn]); }
 const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
 const eq = (a, b, msg) => assert(JSON.stringify(a) === JSON.stringify(b), `${msg || '不相等'}：期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}`);
 /** 断言某次调用**报错**（而不是静默回一个坏结果）。 */
-function throws(fn, mustInclude, msg) {
-  let err = null;
-  /*
-   * ★ 2026-10-08：工具出口已统一"失败回 {ok:false} 回执、不抛异常"（红线）⇒
-   *   本助手同时接受两种"拒绝"形态：**抛异常** 或 **回执 ok:false**（把 error 当成错误文案）。
-   *   断言意图不变：**坏输入必须被明确拒绝，且文案里要有该有的关键词**。
-   */
-  try {
-    const r = fn();
-    if (r && typeof r === 'object' && r.ok === false) err = String(r.error || r.code || '（ok:false）');
-  } catch (e) { err = (e && e.message) || String(e); }
-  assert(err !== null, (msg || '应当报错') + '，但没报错');
-  if (mustInclude) assert(err.includes(mustInclude), `错误文案里没有「${mustInclude}」：${err}`);
-  return err;
-}
 
 const gen = TOOLS.find((x) => x.name === 'miliastra_gen');
 
