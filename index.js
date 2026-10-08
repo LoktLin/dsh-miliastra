@@ -262,7 +262,14 @@ function deployNextStep(ms, rec, destPath) {
    *   "这一次该做什么"，这三步回答"怎么确认游戏里真的跑的是这一版"。
    */
   const chain = '　★ 三步别省：**① 编辑器存盘**（游戏跑的是存盘时嵌进 `.gil` 的那份，不是活文件）'
-    + ' → **② 让人点试玩** → **③ `miliastra_map op=script` 看 `match:true`**（false = 他试的是旧代码，别急着查脚本）。';
+    + ' → **② 让人点试玩** → **③ `miliastra_map op=script` 看 `match:true`**（false = 他试的是旧代码，别急着查脚本）。'
+    /*
+     * ★★ P3-8（《上下文瘦身设计》2026-10-07）：**判据归口** —— 每张图的坐标系 / 验证链 / 坑清单
+     *   以 `案子/<地图>/AGENTS.md` 的「记忆」段为**唯一出处**；回执只**指向**它，AI **引用**而不要每轮复述。
+     *   ⚠️ 插件只知道**关卡 ID**、不知道地图名 ⇒ 给出"怎么认名字"的方法（**不猜**）。
+     */
+    + '　★ 本图的**坐标系 / 验证链 / 坑清单**以 `案子/<地图>/AGENTS.md` 的「记忆」段为**唯一出处**'
+    + '（用关卡 ID 在 `案子/*/AGENTS.md` 的「基本信息」表里认地图名）—— **引用它，别在回复里复述**。';
   const tail = ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
   return tail + chain;
 }
@@ -1959,6 +1966,12 @@ const TOOLS = [  {
           /* ★ `version` 必须给（2026-09-30）：面板顶栏要显示版本号，而旧版 **brief 档没这个字段**
            *   ⇒ 面板只能绕道 `miliastra_echo` 去取（多一次调用，还得解释为什么）。工具该给的字段就给。 */
           version: VERSION,
+          /*
+           * ★★ P3-8（《上下文瘦身设计》2026-10-07）：**判据归口** —— brief 是 AI 每轮第一个调用，
+           *   把"这张图的坐标/验证链/坑清单在哪"一次说清（**只指向，不复述**）。
+           *   ⚠️ 插件只知道关卡 ID、不知道地图名 ⇒ 给认名字的方法，**不猜**。
+           */
+          memoryDoc: '出处：案子/<地图>/AGENTS.md 的「记忆」段（用 levelId 认地图名）',
           current: cur ? { brand: cur.brand, accountId: cur.accountId, levelId: cur.levelId } : null,
           /* ★ E7：「当前关卡」是猜的 —— 判据 / 证据 / 备选 / 歧义警告都摆出来（写盘前请显式传 `level`）
            *   ★ 2026-10-02 压体积：`currentEvidence`（实测 285 B，含一串绝对路径）与 `currentAlternatives`
