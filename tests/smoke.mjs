@@ -342,12 +342,15 @@ for (const [toolName, args] of CASES) {
   const pkgDir = path.resolve(import.meta.dirname, '..');
   const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
   const idx = fs.readFileSync(path.join(pkgDir, 'index.js'), 'utf8');
+  // ★ 2026-10-08（阶段 3 拆文件）：VERSION 常量已搬到 lib/constants.mjs ⇒ 这里跟着改读取位置。
+  //   不变的是**不变量**（VERSION 必须 = package.json 的版本），变的只是它住在哪个文件。
+  const cst = fs.readFileSync(path.join(pkgDir, 'lib/constants.mjs'), 'utf8');
   const readme = fs.readFileSync(path.join(pkgDir, 'README.md'), 'utf8');
-  const mIdx = /const VERSION = '([^']+)'/.exec(idx);
+  const mIdx = /export const VERSION = '([^']+)'/.exec(cst) || /const VERSION = '([^']+)'/.exec(idx);
   const mReadme = /\*\*版本 `([^`]+)`\*\*/.exec(readme);
   const mInstall = /dsh-miliastra@(\d+\.\d+\.\d+)/.exec(readme);
   const bad = [];
-  if (!mIdx) bad.push('index.js 里找不到 `const VERSION`');
+  if (!mIdx) bad.push('lib/constants.mjs（或 index.js）里找不到 `const VERSION`');
   else if (mIdx[1] !== pkg.version) bad.push(`index.js VERSION=${mIdx[1]} ≠ package.json ${pkg.version}`);
   if (!mReadme) bad.push('README 里找不到「**版本 `x.y.z`**」那句');
   else if (mReadme[1] !== pkg.version) bad.push(`README 第一段写的版本=${mReadme[1]} ≠ package.json ${pkg.version}`);
