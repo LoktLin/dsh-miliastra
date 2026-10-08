@@ -1639,7 +1639,21 @@ export function applySaveTo(res, saveTo) {
   if (!key) return res;
   const text = res[key];
   const abs = pathMod.resolve(String(saveTo));
-  atomicWriteFile(abs, text);
+  /*
+   * ⚠️ 2026-10-08 对抗测试实测修：这里原来直接 `atomicWriteFile` —— 路径不可写时**抛异常**，
+   *   被宿主兜底成 `{ok:false, error:"ENOENT…", tool}` ⇒ 调用方只拿到一句裸系统错误、**没有 code / nextStep**，
+   *   也违反本仓红线「失败回 `{ok:false,error}`，**不抛异常**」（其余分支都是 `MEASURE_DECODE_FAILED` 那种形态）。
+   */
+  try {
+    atomicWriteFile(abs, text);
+  } catch (e) {
+    return {
+      ...res, ok: false, saved: false, code: 'SAVE_FAILED', path: abs,
+      error: '`saveTo` 写盘失败：' + ((e && e.message) || String(e)),
+      nextStep: '`saveTo` 要**可写的绝对路径**（父目录必须已存在 —— 本工具不替调用方 mkdir）；'
+        + '不想落盘就把 `saveTo` 去掉（回执仍回正文）。',
+    };
+  }
   const out = { ...res };
   delete out[key];
   return {
@@ -2420,7 +2434,13 @@ const TOOLS = [  {
             gate = runPreflightOp({ dir: pathMod.dirname(pathMod.resolve(String(args.source))), scope: 'dir', args: {}, level: lv });
           } catch (e) { gateErr = (e && e.message) || String(e); }
           const gateCounts = (gate && gate.counts) || null;
-          const gateBad = !!gateErr || !gate || gate.ok !== true || gate.passed === false
+          /*
+           * ⚠️ 2026-10-08 实测修：原来 `|| !gate || gate.ok !== true` 把**"门禁跑不出来/判不了"**也算成没过
+           *   ⇒ 回执自相矛盾（`error 0 条` 却拦下写盘、`passed:null` `counts:null`）。
+           *   现在只认**明确的失败**（`passed === false` 或 error 计数 > 0）；判不了就照写，
+           *   并在回执里如实标 `gatesNote`（**不假装门禁过了**）。
+           */
+          const gateBad = !!gateErr || (gate && gate.passed === false)
             || (gateCounts && Number(gateCounts.error || 0) > 0);
           if (gateBad) {
             return {
