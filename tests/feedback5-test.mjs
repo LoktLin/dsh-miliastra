@@ -291,7 +291,14 @@ await check('★ 贪婪扫 `op=clientui kind:"all"`（作者 2026-10-02）：所
   // schema 侧：`kind` / `limit` 是**已有**参数 ⇒ 贪婪模式不许新增参数（棘轮 34 KB）
   const props = Object.keys((t.parameters && t.parameters.properties) || {});
   assert(props.includes('kind') && props.includes('limit'), '缺 kind/limit');
-  assert(!props.includes('greedy') && !props.includes('root'), '贪婪模式**不该**新增顶层参数（会顶穿 schema 棘轮）');
+  /*
+   * ★ 2026-10-07 前提变了（作者把硬线 34 → 50 KB）：原断言「贪婪模式不该新增顶层参数」**依据是 34 KB 棘轮**，
+   *   而那次真实代价正是 `root` —— **实现好了却因为顶穿棘轮留在代码里 ⇒ AI 看不到 = 调不出来**。
+   *   新纪律：**能力参数一律进 schema**（只有解释性长文才下沉）⇒ 这里翻过来：
+   *   不许为"贪婪扫"另造 `greedy`（复用 `kind`/`limit` ✓），但 **`root` 必须在**。
+   */
+  assert(!props.includes('greedy'), '贪婪扫该复用 `kind`，不该另造 `greedy` 参数');
+  assert(props.includes('root'), '`root`（点名任意控件 id 回子树）是**能力参数**，必须进 schema（2026-10-07 新纪律）');
   const lv = (await import('../lib/locate.mjs')).scanLevels().find((l) => String(l.levelId) === '1073741842' && l.gil);
   if (!lv) return 'schema 侧通过（本机没有 1073741842，跳过真数据那条）';
   const r = await t.execute({ op: 'clientui', level: '1073741842', kind: 'all', limit: 2 });

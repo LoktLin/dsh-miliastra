@@ -779,7 +779,24 @@ for (const [toolName, args] of CASES) {
 
     // ★ P2 schema 体积棘轮（2026-09-24 实测 26.3 KB，其中 miliastra_sim 占 6.1 KB）
     const schemaBytes = JSON.stringify(TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))).length;
-    const LIMIT = 34 * 1024;   // 2026-10-01：新增 miliastra_map op=nodes（读节点图/实体变量）后涨到 32.5 KB ⇒ 声明式放宽 32→34 KB；再加能力前**先把旧说明下沉到 docs**
+    /*
+     * 先例（**声明式放宽**，每次都写清为什么）：
+     *   2026-09-24  26.3 KB（起始实测）
+     *   2026-10-01  32 → 34 KB：新增 `miliastra_map op=nodes` 后涨到 32.5 KB
+     *   2026-10-07  **34 → 50 KB**：作者拍板。理由：**能力必须进 schema** ——
+     *     不在 schema 里 = AI **看不到 = 等于没有**（活例子：`op=clientui` 的 `root` 参数因为顶穿棘轮只能留在代码里，
+     *     结果 AI 自己调不出来）；而"上下文瘦身设计"（saveTo / receipt / gates / sync / boot / measure / explain / checklist）
+     *     预计要 ~1 KB。**对比成本**：schema +8 KB 是"每个会话一次"，而一条 `gen op=vfx-lua` 默认回执就是 67 KB（每次调用）
+     *     ⇒ 用固定的小成本换掉每次的大成本，是理性的。
+     * ★ 纪律随之明确（比阈值更重要）：**op/参数这类"能力"一律进 schema；只有解释性长文允许下沉到技能 / docs**。
+     *   膨胀仍要被看见：超过 **40 KB** 时打一行 `⚠`（不红），超过 50 KB 才红。
+     */
+    const LIMIT = 50 * 1024;
+    const SOFT = 40 * 1024;
+    if (schemaBytes > SOFT && schemaBytes <= LIMIT) {
+      console.log('⚠ schema 体积 ' + (schemaBytes / 1024).toFixed(1) + ' KB —— 已过软线 40 KB（仍绿），'
+        + '该把**解释性长文**下沉到技能 / docs 了；**能力（op/参数）不许省**。');
+    }
     if (schemaBytes > LIMIT) {
       fail += 1;
       failures.push('[ergonomics] 工具 schema 涨到 ' + (schemaBytes / 1024).toFixed(1) + ' KB，超过棘轮上限 '

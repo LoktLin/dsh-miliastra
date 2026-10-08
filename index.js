@@ -2337,6 +2337,9 @@ const TOOLS = [  {
         },
         q: { type: 'string', description: 'op=nodedb：搜节点关键词（中/英/标识符；空格=AND）。不给 q 只回分类清单与计数。' },
         nodeId: { type: 'number', description: 'op=nodedb：按**官方节点 id** 取一条（与 .gil 里的声明号不是一套）。' },
+        /* ★ 2026-10-07：**当初被 34 KB 棘轮拦下的那个参数** —— 实现早就在（`op=clientui` 读 `args.root`），
+         *   但加它会顶穿棘轮 ⇒ 只能留在代码里 ⇒ **AI 看不到 = 调不出来**。硬线放宽到 50 KB 后补回来。 */
+        root: { type: 'number', description: 'op=clientui：点名一个控件 id，回它的**整棵子树**（递归子控件，防环）。' },
         system: { type: 'string', enum: ['Server', 'Client'], description: 'op=nodedb：只看服务端 / 客户端节点。' },
         domain: { type: 'string', description: 'op=nodedb：按分类过滤（Execution / Control / Query / Arithmetic / Trigger …）。' },
         level: { type: 'string', description: '**地图关卡 ID / 品牌**（哪张图）；省略=当前关卡。' },
@@ -2715,6 +2718,8 @@ const TOOLS = [  {
           return {
             ...base,
             standaloneCount: c.standalone.length,
+            /* ★ `root` 与 `summaryOnly` 同时给时必须仍回子树 —— "点名一个 id 只要子树"本来就是最省的用法。 */
+            ...(args.root != null && args.root !== '' ? { subtree: subtreeOf(Number(args.root)) } : {}),
             note: 'summaryOnly：省掉了 `records`（每条控件一行）与 `rendered`（谱系文字），'
               + '只留计数与「可能能动态创建的模板」。要全量就去掉 summaryOnly。',
           };
