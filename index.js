@@ -71,6 +71,7 @@ import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receip
 import { MIN_KIND, MIN_OPS, TITLE, VERSION } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
 import { CLIENT_CONTROL_NAME, STARTED_AT, STRUCTURAL_NAME, classifyControls, hostStaleness, hostSummary, resolveLevel, sourceInfo } from './lib/shared.mjs';
+import { ECHO_TOOL } from './lib/tools/echo.mjs';
 import { KB_TOOL } from './lib/tools/kb.mjs';
 import { HEALTH_TOOL } from './lib/tools/health.mjs';
 import { CODE_TOOL, scanErrorLog } from './lib/tools/code.mjs';
@@ -405,25 +406,7 @@ const TOOLS = [ HEALTH_TOOL,
 
   KB_TOOL,
 
-  {
-    name: 'miliastra_echo',
-    description:
-      '调试用：把 text 原样回显，并带上插件版本与本机存档根目录。'
-      + '**怀疑「插件没生效 / 面板调不通 Host / 工具参数丢了」时先调它** ——'
-      + '返回里带着你传进来的字符串，就不用猜参数到底有没有传到 Host。'
-      + '\n\n**典型调用**：`{"text":"ping"}`',
-    parameters: {
-      type: 'object',
-      properties: { text: { type: 'string', description: '要回显的字符串。' } },
-      required: ['text'],
-      additionalProperties: false,
-    },
-    output: { schema: { type: 'object', additionalProperties: true }, render: renderJson },
-    async execute(args = {}) {
-      const text = String(args.text ?? '');
-      return { ok: true, echoed: text, length: text.length, version: VERSION, localLow: localLowRoot() };
-    },
-  },
+  ECHO_TOOL,
 ];
 
 /* ---------------------------------------------------------------- 插件入口 */
