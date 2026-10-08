@@ -71,6 +71,8 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
+import { colorMode, blobsFromGrid } from './lib/measure.mjs';
+import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
 import { simOp, disposeSimAll, simRuntimeInfo, applyBootPatch } from './lib/sim.mjs';
 import { textGradient, STYLE_CHOICES } from './lib/textgradient/gradient.mjs';
 import { textGradientLua } from './lib/textgradient/lua.mjs';
@@ -272,6 +274,37 @@ function deployNextStep(ms, rec, destPath) {
     + '（用关卡 ID 在 `案子/*/AGENTS.md` 的「基本信息」表里认地图名）—— **引用它，别在回复里复述**。';
   const tail = ms && ms.known === false ? '（**挂没挂过判断不了**：' + ms.note + '）' + base : base;
   return tail + chain;
+}
+
+/**
+ * ★★ P2-5（《上下文瘦身设计》）：**图测量** —— 读图 → 降采样 → 众数色 + 连通块。
+ *
+ * 输出（`summaryOnly` 去掉 `blobs` 明细，只留计数与众数色）：
+ *   `{ ok, op:'measure', source, image:{bytes,w,h,cols,rows}, mode1:{hex,rgb,ratio,…}, blobsCount, blobs[], byKind, note }`
+ * ⚠️ 坐标单位是**采样格**（`cols`×`rows`），不是原图像素 —— 回执里明写（要原图坐标按 `image.w/cols` 换算）。
+ *
+ * @param {string} src 图片绝对路径
+ * @param {{cols?: number, summaryOnly?: boolean}} opts
+ */
+export async function measureImage(src, { cols = 64, summaryOnly = false } = {}) {
+  const buf = fsMod.readFileSync(src);
+  const info = await imageInfo(buf);
+  const rows = Math.max(4, Math.min(512, Math.round(cols * (info.height / Math.max(1, info.width)))));
+  const sampled = await sampleGrid(buf, cols, rows);
+  const mode1 = colorMode(sampled.grid, { levels: 16 });
+  const blobs = blobsFromGrid(sampled.grid, { minArea: 2 });
+  return {
+    ok: true, op: 'measure', source: src,
+    image: { bytes: buf.length, w: info.width, h: info.height, cols, rows },
+    mode1,
+    ...(summaryOnly
+      ? { blobsCount: blobs.count, byKind: blobs.byKind, blobsOmitted: blobs.count }
+      : { blobs: blobs.blobs, blobsCount: blobs.count, byKind: blobs.byKind }),
+    note: '主色 = 量化 16 级/通道后的**众数桶**（代表色取桶内平均）；连通块 = 4 连通、按饱和度分「灰块/饱和块」。'
+      + '坐标单位是**采样格**（' + cols + '×' + rows + '），不是原图像素。**只报数字，不下判决**（好不好看由你判）。',
+    nextStep: '要拿它做 UI：`miliastra_gen op=pixel-art`（像素画）/ `op=vfx-lua`（粒子）都能直接用这张图的素材 id；'
+      + '要精确到原图像素就把 `cols` 调大（上限 512）。',
+  };
 }
 
 /**
@@ -1480,6 +1513,33 @@ function assetOp(args = {}) {
   if (op === 'rebuild') return rebuildIndex({ dir });
   if (op === 'prune') return pruneAssets({ dir, confirm: args.confirm === true });
   if (op === 'stats') return assetStats({ dir });
+  /*
+   * ★★ P2-5（《上下文瘦身设计》2026-10-07）：**图测量** —— 色值众数 + 连通块包围盒。
+   *   代替作者手搓过 2 次的 System.Drawing 逐像素脚本。像素来源 = `lib/pixelart/decode.mjs` 的 `sampleGrid()`
+   *   （**降采样**网格，够回答"主色是什么 / 几块 / 在哪多大"）；纯函数在 `lib/measure.mjs`。
+   *   `source` 认绝对路径；给 `assetId` 的话先用 `op=get out=<路径>` 落盘再量（**不替调用方猜路径**）。
+   */
+  if (op === 'measure') {
+    const src = args.source ? pathMod.resolve(String(args.source)) : '';
+    if (!src || !fsMod.existsSync(src)) {
+      return {
+        ok: false, op, code: 'MEASURE_NO_SOURCE',
+        error: 'op=measure 要 `source` = 图片**绝对路径**（给 `assetId` 的话先用 `op=get out=<路径>` 落盘，再量那份文件）。'
+          + '收到：' + JSON.stringify(args.source || null),
+      };
+    }
+    const cols = Math.max(4, Math.min(512, Math.round(Number(args.cols) || 64)));
+    /*
+     * ★ 红线：**失败回 `{ok:false,error}`，不抛异常**（抛出去会打断调用方一整轮）。
+     *   实测：把非图片文件丢进来时 `imageInfo()`（canvas 库）会 reject。
+     * ⚠️ 这个函数是**同步的**（`assetOp`）⇒ 不能用 `await`，改用 `.catch()`（仍返回 Promise，工具层会 await）。
+     */
+    return measureImage(src, { cols, summaryOnly: args.summaryOnly === true }).catch((e) => ({
+      ok: false, op, code: 'MEASURE_DECODE_FAILED', source: src,
+      error: '读不了这张图（只认 canvas 支持的图片格式：png/jpg/webp…）：' + ((e && e.message) || String(e)),
+      nextStep: '确认 `source` 指向**图片文件**（不是 .txt / .gil）；要量平台素材先用 `op=get out=<路径>` 落盘。',
+    }));
+  }
   /*
    * 后两个是「**平台目录**」通道（只管 id / 名字 / 分类这类目录事实，**不落图片/音频字节**）：
    * `catalog` = 平台图片资源库（1543 条 / 14 类）；`sound-*` = 平台音效库（1997 条 / 7 类）。
@@ -4372,7 +4432,7 @@ const TOOLS = [  {
       properties: {
         op: {
           type: 'string',
-          enum: ['add', 'list', 'get', 'remove', 'rebuild', 'prune', 'stats', 'catalog', 'sound-search', 'sound-get', 'icon-search'],
+          enum: ['add', 'list', 'get', 'remove', 'rebuild', 'prune', 'stats', 'measure', 'catalog', 'sound-search', 'sound-get', 'icon-search'],
           description: '默认 list。add 入库（要 source 或 base64）／get 取回／remove 摘索引／rebuild 重建索引／prune 报告不删／stats 总数与体积；'
             + 'catalog = 查**平台图片资源库**；sound-search = 模糊搜音效；sound-get = 按 id 取单条音效；'
             + 'icon-search = **按语义找图标**（不传参数给分类概览、传 `q` 关键词搜、传 `id` 看单条）。',

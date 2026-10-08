@@ -205,6 +205,40 @@ await check('★ #10 `pairCommandsWithUi`（《插件调用优化方向》第 10
   return '3 条命令 → 2 条配到画面、1 条被点名（窗口 2 行）';
 });
 
+await check('★ P2-5（《上下文瘦身设计》）`asset op=measure`：众数色 + 连通块（纯函数可预期；失败**不抛异常**）', async () => {
+  const { colorMode, blobsFromGrid } = await import('../lib/measure.mjs');
+  const { TOOLS } = await import('../index.js');
+  // 合成网格：左半纯红（饱和）、右半中灰 ⇒ 众数与两块都可预期
+  const grid = [];
+  for (let y = 0; y < 4; y += 1) {
+    const row = [];
+    for (let x = 0; x < 4; x += 1) row.push(x < 2 ? [255, 0, 0, 255] : [128, 128, 128, 255]);
+    grid.push(row);
+  }
+  const cm = colorMode(grid, { levels: 16 });
+  eq(cm.hex, '#FF0000', '众数色不对：' + cm.hex);
+  eq(cm.count, 8, '众数像素数不对');
+  eq(cm.ratio, 0.5, '占比不对');
+  const bl = blobsFromGrid(grid, { minArea: 2 });
+  eq(bl.count, 2, '连通块数不对：' + bl.count);
+  eq(bl.byKind.saturated, 1, '饱和块数不对');
+  eq(bl.byKind.gray, 1, '灰块数不对');
+  const left = bl.blobs.find((b) => b.kind === 'saturated');
+  eq(left.w + 'x' + left.h, '2x4', '左边那块包围盒不对：' + left.w + 'x' + left.h);
+  // 全透明 + 小于 minArea 的噪点都要被丢掉
+  const noisy = [[[0, 0, 0, 0], [255, 255, 0, 255], [255, 255, 0, 255]]];
+  eq(blobsFromGrid(noisy, { minArea: 3 }).count, 0, '噪点该被 minArea 丢掉');
+  eq(colorMode(noisy).count, 2, '全透明像素不该计数');
+  // 工具面：失败必须回 ok:false（**不抛异常** —— 抛出去会打断调用方一整轮）
+  const a = TOOLS.find((t) => t.name === 'miliastra_asset');
+  assert(((a.parameters.properties.op.enum) || []).includes('measure'), 'asset 的 op 枚举里没有 measure');
+  const bad = await a.execute({ op: 'measure', source: 'C:\\definitely\\not\\here.txt' });
+  eq(bad.ok, false, '不存在的文件该回 ok:false');
+  const noSrc = await a.execute({ op: 'measure' });
+  eq(noSrc.code, 'MEASURE_NO_SOURCE', '不给 source 该明确报 code');
+  return '众数 #FF0000/50% · 两块 2x4（饱和+灰）· 噪点与全透明都丢掉 · 失败回 ok:false';
+});
+
 await check('★ P2-6 / P3-7（《上下文瘦身设计》）errors 的 forms 按需回 + deploy 的 checklist 短句数组', async () => {
   const { TOOLS, minifyReceipt } = await import('../index.js');
   const log = TOOLS.find((t) => t.name === 'miliastra_log');
