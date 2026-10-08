@@ -5533,6 +5533,17 @@ for (const t of TOOLS) {
           + '改对参数重跑即可；如果你确认参数没问题，那就是插件 bug —— 把 tool / op / error 三个字段报出来。',
       };
     }
+    /*
+     * ★★ 2026-10-08 统一回执契约：**失败档必带 code**。
+     *   实测（`tests/audit-test.mjs`）：28 条失败路径里绝大多数**没有** `code`（只有这几天新加的才有）
+     *   ⇒ 调用方只能靠正则中文判断错因。这里做**结构性兜底**：`ok:false` 且没 `code` 时补 `'FAILED'`。
+     *   ⚠️ 有精确 code 的一律不动（`MEASURE_DECODE_FAILED` / `SAVE_FAILED` / `GATES_NO_TOOLS` /
+     *      `PRECHECK_*` / `RESTORE_TARGET_MISMATCH` / `TOOL_THREW`…）；`'FAILED'` 的含义是
+     *      "这条路径还没细分 code，请看 `error` 文案" —— **不是**"失败原因未知"。
+     */
+    if (res && typeof res === 'object' && res.ok === false && !res.code) {
+      return { ...res, code: 'FAILED' };
+    }
     if (!kind) return res;
     const op = args && args.op ? String(args.op) : null;
     const want = !!(args && args.receipt === 'min' && (op === null || ops.includes(op)));
