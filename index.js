@@ -71,7 +71,7 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
-import { minifyReceipt, withFallbackCode } from './lib/receipt.mjs';
+import { minifyReceipt, withFallbackCode, ReceiptCode } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS } from './lib/constants.mjs';
 import { colorMode, blobsFromGrid } from './lib/measure.mjs';
 import { imageInfo, sampleGrid } from './lib/pixelart/decode.mjs';
@@ -2343,7 +2343,7 @@ const TOOLS = [  {
               }
             }
             return {
-              ok: false, op: 'deploy', mode: 'multi',
+              ok: false, op: 'deploy', mode: 'multi', code: ReceiptCode.FAILED,
               failedAt: results.length + 1,
               attempted: args.files.map((x) => x && x.file),
               error: String((e && e.message) || e),
@@ -2624,7 +2624,7 @@ const TOOLS = [  {
           //   摆出来。只回一句「没找到」等于让人回去翻 20KB 的代码找变量名。
           const nameCandidates = ex.nameCandidates || [];
           return {
-            ok: false, op, file: destPath, ...picked,
+            ok: false, op, code: ReceiptCode.NOT_FOUND, file: destPath, ...picked,
             error: ex.error, line: ex.line || null, lineText: ex.lineText || null,
             searchedFor: ex.searchedFor || null, constantsFound: (ex.constants || []).length,
             nameCandidates,
