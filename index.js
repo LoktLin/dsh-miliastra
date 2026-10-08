@@ -23,7 +23,6 @@ export const name = 'dsh-miliastra';
 
 export const inject = [];
 
-const VERSION = '0.7.2';
 /*
  * 工具说明的抬头。
  * ⚠️ 它会被拼进**每一个**工具的 description，而 schema 体积是**每个会话都在花的钱**
@@ -71,7 +70,7 @@ import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventi
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
 import { minifyReceipt, withFallbackCode, ReceiptCode, fail } from './lib/receipt.mjs';
-import { MIN_KIND, MIN_OPS, TITLE } from './lib/constants.mjs';
+import { MIN_KIND, MIN_OPS, TITLE, VERSION } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
 import { CLIENT_CONTROL_NAME, STRUCTURAL_NAME, classifyControls, resolveLevel } from './lib/shared.mjs';
 import { CODE_TOOL, scanErrorLog } from './lib/tools/code.mjs';
