@@ -21,6 +21,23 @@
 - **文档**：删掉包内 **4 处「死指针」**（指向本包外 / 已不存在的文件，如 README 里那段「…**不在本包里**，故不作链接…」）。**规则：没有的东西就不写。**
 
 - **验证口径**：每个提交都跑 `lint`（21 条硬规则）+ `typecheck`（我们自己的文件 0 错）+ **全量 `npm test` 37 套件 / 0 失败**；重构全程**行为零改动**（除契约新增的 `code` 字段）。
+### 拆文件（阶段 3）** 完成：12/12 个工具全部外迁，`index.js` 变薄壳
+
+- `index.js`：**4930 → 720 行**（只留 cordis 注册 / `inject` / import / `TOOLS` 数组 / 系统提示段 / 出口收口 / HTTP 路由）。
+- **12 个工具**各自成模块：`lib/tools/{health,code,map,log,playtest,shot,probe,sim,asset,gen,kb,echo}.mjs`
+  （对象 + 各自的调度器/helper，**机械搬移、行为零改动**；每搬一族都跑 `lint` + `typecheck` + 全量 `npm test`）。
+- 新增 **`lib/shared.mjs`**（292 行）：**被多个工具使用的共享 helper**（`resolveLevel` / `classifyControls` / `chooseLua` /
+  `gilScriptInfo` / `pathBasenameOf` / `clampNum` / `sleep` / `waitForPlaytestStart` / `HttpError` / `pickedFields` /
+  `scanErrorLog` / `hostSummary` …）—— **共享符号一律进 `lib/`**，否则工具之间会互相 import（循环依赖 + TDZ 风险）。
+- **跨工具 import = 0 处**（归一化后核验）：工具模块之间不再互相引用，依赖都指向 `lib/`。
+- 新增 **`lib/render.mjs`**（`renderJson`）；`TITLE` / `VERSION` 归 `lib/constants.mjs`（唯一出处）。
+- **踩到并修掉的真问题**（都记在 `docs/dsh-miliastra_架构规划_2026-10-08.md` §9）：
+  ① 纯搬移在**类型层**不一定零改动（独立模块后 `TS2322` 暴露，补显式返回类型注解）；
+  ② 搬函数要**连它的 JSDoc 一起搬**（否则注释留原地挂到别处 ⇒ `TS8024`）；
+  ③ 搬移区间要**卡顶层声明边界**（一个 const 的区间曾跑过头、吞掉后面的提示段）；
+  ④ 工具反过来引用宿主符号（`TOOLS` / `renderPromptSection`）⇒ 改为**直接引用自己**或**依赖注入**，不做反向 import；
+  ⑤ `smoke` 的 `[version]` 门禁原本扫 `index.js` 源码找 `const VERSION` ⇒ **门禁跟着结构更新**（改读 `lib/constants.mjs`，不变量不变）。
+
 ## [0.7.2] - 2026-10-07
 
 ### 其他变更
