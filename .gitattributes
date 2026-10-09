@@ -7,5 +7,8 @@
 *.webp binary
 *.ico binary
 
+# 千星 .gia（两种格式都算）：控件组导出 / 运行时日志 —— 二进制，禁止任何转换
+*.gia binary
+
 # 生成物：diff 里不显示
 package-lock.json -diff
