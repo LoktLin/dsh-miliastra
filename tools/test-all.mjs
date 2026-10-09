@@ -83,6 +83,7 @@ export const SUITES = [
   { name: 'uilint-test（P0-1 UI 门禁 op=lint-ui：**纯夹具**，四条判据 + summaryOnly）', args: ['tests/uilint-test.mjs'] },
   { name: 'audit-test（统一回执契约：任何 op 不许抛异常 + 失败必带 code）', args: ['tests/audit-test.mjs'] },
   { name: 'receipt-contract-test（回执形状：必有 ok / ok:false 必带 error —— 与上一条互补，不重叠）', args: ['tests/receipt-contract-test.mjs'] },
+  { name: 'uigia-test（界面控件组 .gia：wire 往返逐字节 + 槽位唯一性判据 + 隐私清洗）', args: ['tests/uigia-test.mjs'] },
   { name: 'sounds-test（音效库：1997 条目录 + 中英模糊搜索）', args: ['tests/sounds-test.mjs'] },
   { name: 'catalog-test（图片资源库：分类/颜色档/有无图/可渲染 + 三个新 op 的接线）', args: ['tests/catalog-test.mjs'] },
   { name: 'icon-search-test（图标语义检索：三档回执 / 严格诚实口径 / 错误路径 / summaryOnly 只去正文）', args: ['tests/icon-search-test.mjs'] },
