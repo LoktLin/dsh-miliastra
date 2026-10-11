@@ -85,6 +85,7 @@ export const SUITES = [
   { name: 'receipt-contract-test（回执形状：必有 ok / ok:false 必带 error —— 与上一条互补，不重叠）', args: ['tests/receipt-contract-test.mjs'] },
   { name: 'uigia-test（界面控件组 .gia：wire 往返逐字节 + 槽位唯一性判据 + 隐私清洗）', args: ['tests/uigia-test.mjs'] },
   { name: 'uigia-build-test（控件组生成器：逐字节复现真机已验证产物 + 扩容 + 槽位唯一）', args: ['tests/uigia-build-test.mjs'] },
+  { name: 'uigia-op-test（op=gia-check：槽位重复判红 + 参数与体积纪律 + 乱码不抛）', args: ['tests/uigia-op-test.mjs'] },
   { name: 'sounds-test（音效库：1997 条目录 + 中英模糊搜索）', args: ['tests/sounds-test.mjs'] },
   { name: 'catalog-test（图片资源库：分类/颜色档/有无图/可渲染 + 三个新 op 的接线）', args: ['tests/catalog-test.mjs'] },
   { name: 'icon-search-test（图标语义检索：三档回执 / 严格诚实口径 / 错误路径 / summaryOnly 只去正文）', args: ['tests/icon-search-test.mjs'] },
