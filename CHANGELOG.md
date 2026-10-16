@@ -1,5 +1,93 @@
 ## [未发布]
 
+### 第二轮（2026-10-16）· 实测复核后的 1 条回归 + 4 条缺口 + 1 条护栏
+
+来源：`docs/dsh-miliastra_改造需求_02_2026-10-16.md`（AI 侧实测复核第一轮）。
+
+- **§1（P0 回归，我上轮造的）** `bind + boot` 整个失败、报错里塞整份 4400 行正文（回执 379 KB 被丢弃）：
+  `args.source` 一个槽被当成两种语义（老契约=补丁后**正文**、bind 另一条路=**绝对路径**）✗。
+  现在：正文照旧落 `args.source`（老契约保住），路径留在 `sourceFrom`，读的人用 `pathLikeSource()` 判
+  「像不像 .lua 路径」⇒ 两条契约同时成立。护栏：`feedback5-test` + 新增断言。
+- **§2（P1）** `mountTo` 失败回执列的「可用值」**照抄必失败** ✗ ⇒ 回执改印 `n<序号>:<名字>`，
+  解析器 `resolveMountTarget()` 同时认 `名字` / `n<序号>` / `n<序号>:名字` / 树里的 `.gil` id（宽松读、严格报）；
+  **新增回归断言**：把 available 的每个值原样回填**必须命中**（照抄回执不再撞墙）。
+- **§3（P2）** `idx` 丢在 log 的精简字段映射里 ⇒ 默认档看不到（而文案说「一律看 idx」）⇒ 精简档也带 `idx`；`i` 语义不动。
+- **§4（P2）** `parseFileLine` 还剩**全角冒号**一类（`…失败：2901: attempt …` ⇒ 半角规则全不中 ⇒ null）⇒
+  前面全没命中时退回用消息开头的 `[TAG]` 当文件名 + 取它后面第一个冒号后的数字；`stack traceback:` 仍为 null。
+  需求文档那 5 条样本已逐条实测全中。
+- **§5（P3）** `op=read` 的 `head[]` 与 `text` 内容重复（回执 ~2×）⇒ `grep`/`lines` 档只留 `text`（`head` 仅在默认档给）。
+- **§6（P3 通用护栏）** 回执里**任何字段都不许塞整份文件** ⇒ `lib/receipt.mjs` 新增 `truncateLongStrings()`，
+  在 `index.js` 的**回执收口**（`JSON.stringify(lossless(payload))`）统一兜一道：只截**超长字符串**（≤500 字符 + 省略提示），
+  不动键名/结构/类型（刻意窄，免得把形状断言弄红）。实测：5000 字符的 error ⇒ 回执 1119 B，原因与路径都还看得见。
+
+
+## [未发布] 实战改造 §1 / §2 / §4 / §5（来源：`docs/dsh-miliastra_改造需求_2026-10-15.md`）
+
+- **§1（P0）`miliastra_map op=clientui` 的 `root=` 真窄化**：原来 `root` 只把 `subtree` 追加在后面，
+  `records`(实测 2067 条) / `rendered` / `standalone` 照给 ⇒ 回执被截断、要看的那段排最后；
+  现在有 `root` 时走独立分支，只回 `ok/op/path/level/root/subtree/hint`。
+- **§2（P0）`miliastra_sim op=bind` 的 `boot` 探针扫错东西**：`bind` 的 `source` 是绝对路径，探针路却当内联源码 ⇒
+  实际扫那 ~95 字节的路径字符串，`boot:{cur:N}` 静默不生效（回执 `path:null` 即此坑）；
+  现在「无换行 + 以 `.lua` 结尾 + 盘上真有」当路径读，并恒报 `scannedFrom`。
+- **§4（P1）`op=errors` 的 `fileLine.file` 被日志前缀污染**：`挂监听 ok=5 失败=2 首错=色彩调度:2928:` 原来整条当文件名；
+  现在按形态取向（①②③ 栈帧取**第一个**、④ 行内兜底取**最后一个**），并剥掉 `key=value` 前缀；
+  名字**允许含空格**（真机确有 `特效 fx:428:` 这种脚本名）。
+- **§5（P2）日志回执补 `idx`**：`i` = 本次返回数组内下标（切片后重编），`idx` = 文件内绝对下标（不参与切片）；
+  `seqNote` 文案同步说清 —— 实测有人被 `i` 带偏，误判成「grep 切掉了最新的」。
+
+> 本轮未做：§6（固定长警告跨调用折叠 —— 需会话状态）。
+
+### ★ §3（P0 · 能力缺口）`miliastra_sim op=bind treeFromGil` —— 把 `.gil` 的客户端控件树**按嵌套**搬进模拟器
+
+**解决的两个硬伤**（`docs/dsh-miliastra_改造需求_2026-10-15.md` §3 现场）：真图的模板常是**多层嵌套**
+（实测本关：`颜色转盘 → 蓝色方块 + 颜料盘 → 6 个图片子件`，22 个节点），而 `templates:[{guid,kind}]` 只能搭**平铺一层**
+⇒ 脚本 `GetChild` / `FindChild` 全 `nil`、染色与特效**验不了**（只能验"没报错"）；
+另一头 `containerId` 在 `.gil` 里本来带子件（如「光标检测区域」）⇒ 平铺后子件不存在、脚本首帧就
+`error("找不到名为「光标检测区域」的控件")` 停摆。
+
+- **新参数（可选，只增不改）**：`treeFromGil:"<关卡id 或 .gil 绝对路径>"` + `treeOptions:{maxDepth?, includeStructural?}`。
+  不给它时 `op=bind` 的旧行为（平铺 `templates`）**一字不变**；两者**互斥**（同时给 ⇒ `BAD_PARAM` + 指路，不静默挑一个）。
+- **只读**：`.gil` 只 `readFileSync`，绝不写；单测里对夹具做 sha256 前后对照。
+- **复用现成解析**：树来自 `lib/gil.mjs` 的 `clientUi`（与 `op=clientui` **同一份** `#501/#503/#504/#505` 口径），
+  新增的只有纯函数 `clientUiTreeFromGil()`（记录 → 嵌套 plan）+ `GIL_CONTROL_KIND` 官名映射。
+- **引擎侧怎么投**：**一次 `op:'replace'` 把整份客户端模板工程投进去**（不是逐个 `add`）。
+  实测原因：`engine/studio/ui/project.js` 的 `applyPatch()` **每调一次深拷贝整份工程** ⇒ 一个节点一次 patch 是 **O(N²)**：
+  50 次 `add` = 2.5 s、50 次 `set` = 2.9 s，真图那棵 2000+ 节点的树要 **100 秒以上**（跑到 5 分钟没掐掉）；
+  `replace` 只深拷贝一次 ⇒ 同一棵树 **< 1 秒**。
+- **`guid` 只给模板根**（= 该记录的 `#501` = 脚本 `InstantiateClientUIControl` 要的 `prefabIndex`）；
+  子件让引擎自己发号 —— `.gil` 里同一条记录可能既是 A 的根又是 B 的子（实测本关 `ClientUIPrototypeHierarchyRoot`
+  底下也长着 `颜色转盘`），子层照抄 id 当 guid ⇒ 同一 `prefabIndex` 两条注册记录互相顶掉。
+- **回执如实**：`treeFromGil:{ ok, how, path, level, records, templateRoots, built, skipped, unresolved, notInPlan,
+  kindStats, guessedKind, structuralRoots, skippedList, unresolvedList, containerIdInTree, verify, idNote, kindNote, imageIdNote }`，
+  账目 **`records = built + skipped + unresolved + notInPlan`** 算得出来；搭完**逐条自检**
+  （"我打算建的模板 guid/名字" vs "工程里真在的"）⇒ 对不上就 `verify.ok:false` + `missing[]`，绝不假装搭好了。
+- **`kind` 只能靠官名**：`.gil` 的控件记录里**没有**可证的控件类型字段 ⇒ 官名命中就用（11 个官方名），
+  命不中（创作者自定义命名，实测本关 107 个名字里 103 个是自定义的）**退回 `container`** 并标 `kindGuessed`；
+  结构控件（`默认布局`/`HierarchyRoot`/…）默认**不当模板**（`includeStructural:true` 才当）。
+- **`containerId` 不在树里时**：照搭，但回 `containerIdNote` **明说后果**（没带它的子件、脚本 `GetChild` 照样 `nil`）——
+  这正是 §3 那个"首帧 error 停摆"的解药。
+- **`op=controls runtime:true`** 在结果被 `limit` 截断时补 `omittedNote`（默认 200 条，大树用 `limit:0`）。
+- 工具 `description` 补了 `treeFromGil` 的用法与一条典型调用；配方 `last-bind.json` 也记 `treeFromGil`
+  （重启 `dsh web` 后 `last:true` 能把那棵树一起重搭）。
+- 新增套件 `tests/treefromgil-test.mjs`（**40 条断言**，全用**自己现造的合成 `.gil`**，⛔ 不提交任何用户存档；
+  `tools/test-all.mjs` 已登记 ⇒ 套件数 39 → **40**，`docs/面板与活文件安全.md` 的口径同步更新）。
+- 顺带修掉一个连带缺陷：`last:true` 从配方里同时取回 `treeFromGil` 与 `templates` ⇒ 撞上"两者互斥"那条校验、
+  `last:true` **永远失败**；树在时以树为准（配方里 `templates` 只是给面板/审计看的清单）。
+- ⚠️ **并行测试下的一条实测教训**（已修，记在这里免得下次又踩）：新套件里 `keepRunning:true` 留下的
+  Worker 有个 **30FPS 后台时钟**，不收干净就给同机并行的 `sim-test` 加负载 —— 实测本套件一进 `SUITES`，
+  `sim-test` 那两条「`frames:15` 必须正好 15 帧 / 时钟增量 = 15×1/30s」就间歇报 `16 帧 / 0.533s`；
+  把本套件注掉再跑 4 路则 39/39 全绿。⇒ 本套件跑完**自己 `play stop` + `disposeSimAll()`**，全套 40/40。
+
+
+
+### 追加：§7（P2）`miliastra_code op=read` 支持只读一段
+
+- 新增两个**可选**参数（默认行为一字不变）：`grep:"<正则>"` 只回命中行 **±10 行上下文**（多段命中合并相邻区间）、
+  `lines:[起,止]` 只回这一段（1 起闭区间；两者同时给 ⇒ `grep` 优先）。
+- 回执新增 `segment`（`null` / `'grep'` / `'lines'`）、`grepHits`、`grepError`（正则非法时**如实报**并退回默认前 N 行，不装作全量）。
+- 实现在 `lib/codefile.mjs` 的 `readLuaAt`（`op=read` 只转发参数）⇒ 其它调用方一并受益。
+
+
 ### 测试基建：跑得快一点（**覆盖面一个没减**）
 
 - **`tools/test-all.mjs` 支持并行**：默认按核数取一半、**上限 4 路**。实测（同一提交、连跑 3 遍结果一致）：
@@ -333,7 +421,7 @@
     `案子/恐怖-V3/1.策划案/节点图报告/节点图报告-1073741829.md`（3812 行 / 242 KB；关卡 `1073741829` 的地图名 `恐怖-V3` 是插件读 `.gil` 的 `level.name` 得来的）。
   - 回归：新套件 `gilreport-test`（10 → **13** 条：统计 / 骨架 / 总览与统计一致 / 明细 / 竖线转义 / 未确证原样搬 /
     边界 / **CLI 只读** / dry-run / **多账号不猜** / **坐标三口径** / **附录 A 自洽** / **`--check` 四条路径**）。
-- ★ **复核反馈处置（2026-10-02 · `案子/恐怖-V3/1.策划案/节点图报告/节点图报告-1073741829_复核_2026-10-01.md`）**：
+- ★ **复核反馈处置（一份第三方复核清单，6 条）**：
   那份复核我逐条复算，**6 条全部成立**（含它没敢断定的第 5 条），该改的都改了：
   - **坐标口径**（复核 §3.1）：总览 `1115 / 1119` → `**x、y 都有** 1115；任一有 1116（只存了 x 的 1 个）`，
     表下**点名**那个节点（「门_未准备」#4 `多分支` x=-123），`图一览` 表头改「坐标(x,y)」，附录 C 补口径。

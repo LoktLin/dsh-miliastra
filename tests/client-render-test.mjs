@@ -1837,18 +1837,21 @@ check('★ 右键标记颜色（`gridColorToggle` / `gridSelRows` / `gridSelLua`
   const rows = R(g, [{ col: 3, row: 5 }, { col: 0, row: 0 }], 'br', { '3,5': 'gray' });
   assert(rows[0].color === '#d6d7dc' && rows[0].colorName === '灰色', '第 1 行没带上颜色：' + JSON.stringify(rows[0]));
   assert(rows[1].color === null && rows[1].colorName === null, '没标记的行不该编颜色：' + JSON.stringify(rows[1]));
-  // ④ ★ 导出的带色片段 = 作者给的那一串（**逐字节**）
-  const one = Lua([{ ok: true, x: 330, y: 560, color: '#d6d7dc', colorName: '灰色' }]);
+  // ④ ★ 导出的带色片段 = 作者给的那一串（**逐字节**）—— 但**开关打开时**才带（作者 2026-10-09：「默认不复制」）
+  const one = Lua([{ ok: true, x: 330, y: 560, color: '#d6d7dc', colorName: '灰色' }], true);
+  // ★★ 默认（不传开关）= **不带颜色**：只想要坐标时不用管它
+  const def = Lua([{ ok: true, x: 330, y: 560, color: '#d6d7dc', colorName: '灰色' }]);
+  assert(def === '[{x = 330, y = 560 ,colorName = "灰色"}]', '默认应只带 colorName、不带色号（colorName 与 color 无关）：\n' + JSON.stringify(def));
   assert(one === '[{x = 330, y = 560 ,color="#d6d7dc",colorName = "灰色"}]',
     '带色的导出片段与作者给的不一致：\n' + JSON.stringify(one));
   // 混着来：带色的与不带的都对
   const mix = Lua([
     { ok: true, x: 330, y: 560, color: '#d6d7dc', colorName: '灰色' },
     { ok: true, x: 840, y: 540 },
-  ]);
+  ], true);
   assert(mix === '[{x = 330, y = 560 ,color="#d6d7dc",colorName = "灰色"},\n{x = 840, y = 540 }]',
     '混合导出不对：\n' + JSON.stringify(mix));
-  return '色板 8 色（首色=作者的灰）+ 切换/覆盖/清除 + 逐行带色 + **逐字节**导出';
+  return '色板 8 色（首色=作者的灰）+ 切换/覆盖/清除 + **默认不带、打开才带** color + **逐字节**导出';
 });
 
 check('★ 回归：右键标记**不许**把已选中的格踢出列表（作者报「点了一次之后就不让复制了」）', () => {
@@ -1922,11 +1925,14 @@ check('★ 网格图交互（渲染层 + 源码）：左键拖动平移 / 右键
   // ⚠️ React 会把正文里的 `"` 转义成 `&quot;` —— 比对文本前先还原（否则断言永远不匹配）
   const mText = marked.replace(/<[^>]+>/g, ' ').replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
   assert(/fill="#d6d7dc" fill-opacity="0.45"/.test(marked), '标记的格没画成色块：' + (marked.match(/fill="#[0-9a-f]{6}"/gi) || []).join(' '));
-  assert(/1\. 格 \(3, 5\)　右下 \{x = 400, y = 300 ,color="#d6d7dc",colorName = "灰色"\}/.test(mText),
-    '列表行没显示带色片段：' + mText.slice(mText.indexOf('1. 格'), mText.indexOf('1. 格') + 90));
+  // ★ 默认**不带** color（作者 2026-10-09：「默认不复制」）—— 打开那排的 color 胶囊后才带
+  assert(/1\. 格 \(3, 5\)　右下 \{x = 400, y = 300 ,colorName = "灰色"\}/.test(mText),
+    '默认行文本应为「只带 colorName、不带色号」：' + mText.slice(mText.indexOf('1. 格'), mText.indexOf('1. 格') + 90));
+  assert(!/,color="/.test(mText), '开关默认关，渲染里不该出现色号 color=…（colorName 不受影响）');
+  assert(/>color<\/button>/.test(marked), '没找到 color 胶囊按钮（开关没有入口）');
   // ④ 颜色 / 笔刷都进缓存
   assert(/colors: colors, brush: brush/.test(src), '颜色 / 笔刷没有进缓存快照');
-  return '平移(3px 阈值 + 吃掉 click + 滚动) + 右键标记并选上 + 色板 8 块 + 图上色块 + 列表带 color';
+  return '平移(3px 阈值 + 吃掉 click + 滚动) + 右键标记并选上 + 色板 8 块 + 图上色块 + 默认不带 color（有开关）';
 });
 
 check('★ 多选列表与复制按钮（渲染层）：三行 + 四角下拉（默认右下）+ 「复制」「移除」「复制全部」「清空选择」', () => {
@@ -2486,5 +2492,14 @@ if (failures.length) {
   console.log('====== 失败明细 ======');
   for (const f of failures) console.log(' ✗ ' + f);
 }
+
+// ---- 网格计算：网格**不许被列表挤扁**（2026-10-09 作者报：「是格子选择咋越来越小」）----
+check('★ 网格计算：.gridbox 必须 flex:0 0 auto —— 否则同列里列表每长一行就把它挤小一点', () => {
+  const src = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'lib', 'client.js'), 'utf8');
+  assert(/-gridbox\{[^}]*flex:0 0 auto/.test(src), '.gridbox 没有 flex:0 0 auto（会被长高的列表挤扁）');
+  assert(/-col\{display:flex;flex-direction:column/.test(src), '前提变了：-col 不再是 flex 列，这条断言要重写');
+  return 'flex 列 + gridbox 不收缩 ✓';
+});
+
 console.log(`结果：通过 ${pass}，失败 ${fail}`);
 process.exit(fail ? 1 : 0);

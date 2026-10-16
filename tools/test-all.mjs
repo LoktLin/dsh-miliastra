@@ -56,6 +56,8 @@ export const SUITES = [
   { name: 'deploy-test（部署 / 备份 / 指纹 / 原子写）', args: ['tests/deploy-test.mjs'] },
   { name: 'read-source-test（op=read source=<绝对路径>：只读读取）', args: ['tests/read-source-test.mjs'] },
   { name: 'gilnodes-test（节点图 / 实体自定义变量：合成 .gil 逐字段钉住 + 只读）', args: ['tests/gilnodes-test.mjs'] },
+  // ★ 2026-10-15 §3：`op=bind treeFromGil` —— 合成 `.gil` 夹具 + 真搭进模拟器 + 端到端 `GetChild` 命中 + 只读
+  { name: 'treefromgil-test（`.gil` 控件树搬进模拟器：纯函数 / 嵌套 / 失败路径 / 只读）', args: ['tests/treefromgil-test.mjs'] },
   { name: 'kbqa-test（知识库问答：离线蒸馏清单结构/检索/出处 + 在线 op 的纪律与隐私披露）', args: ['tests/kbqa-test.mjs'] },
   { name: 'nodedb-test（官方节点词典：归属 / 搜索 / 与 .gil 的号对不上这条老实说清）', args: ['tests/nodedb-test.mjs'] },
   { name: 'probe-deploy-test（试玩探针渲染 / 部署）', args: ['tests/probe-deploy-test.mjs'] },

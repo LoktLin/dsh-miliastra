@@ -67,7 +67,7 @@ import { extractLevelTable, describeLevels, findCanvas, levelSummary } from './l
 import { collectMetrics, summarizeMil, summarizeLoose, metricsTimeline, conventionHint, slimMil, slimLoose } from './lib/metrics.mjs';
 import { clientProcesses } from './lib/proc.mjs';
 import { atomicWriteFile } from './lib/fsx.mjs';
-import { ReceiptCode, fail, minifyReceipt, withFallbackCode } from './lib/receipt.mjs';
+import { ReceiptCode, fail, minifyReceipt, withFallbackCode, truncateLongStrings } from './lib/receipt.mjs';
 import { MIN_KIND, MIN_OPS, TITLE, VERSION } from './lib/constants.mjs';
 import { renderJson } from './lib/render.mjs';
 import { CLIENT_CONTROL_NAME, HttpError, PREFIX, STARTED_AT, STRUCTURAL_NAME, classifyControls, hostStaleness, hostSummary, resolveLevel, sleep, sourceInfo } from './lib/shared.mjs';
@@ -558,7 +558,9 @@ function readBody(req, limitBytes = 1024 * 1024) {
 }
 
 function sendJson(res, status, payload) {
-  const body = JSON.stringify(lossless(payload), null, 1);
+  /* ★ §6：收口统一兜一道 —— 超长字符串（例如把整份文件塞进 error）在这里被截断，
+ *   免得整条回执被框架丢弃、AI 连原因都看不到（口径见 receipt.mjs 的 truncateLongStrings）。 */
+const body = JSON.stringify(truncateLongStrings(lossless(payload)), null, 1);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
