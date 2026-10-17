@@ -814,14 +814,18 @@ for (const t of TOOLS) {
       res = await inner(args);
     } catch (e) {
       const op = args && args.op ? String(args.op) : null;
-      return {
+      /* ★ 三轮：catch 是**早退**（不经过下面的收口）⇒ 这里也得过一遍截断，否则 throw 的文案同样能撑爆回执 */
+      return truncateLongStrings({
         ok: false, tool: t.name, op, code: ReceiptCode.TOOL_THREW,
         error: (e && e.message) || String(e),
         nextStep: '这条错误的**文案本身**就是给你的信息（多半是参数指错了地方：关卡号 / 路径 / op 名）。'
           + '改对参数重跑即可；如果你确认参数没问题，那就是插件 bug —— 把 tool / op / error 三个字段报出来。',
-      };
+      });
     }
     res = withFallbackCode(res);
+    /* ★ 三轮（P0）：AI 走的是**这道门**（不是 sendJson 那道 HTTP 门）⇒ 护栏必须装在这里。
+     *   放在 minifyReceipt 之前 ⇒ `receipt:"min"` 骨架档也覆盖 ✓；两道门都截也没事（幂等）。 */
+    res = truncateLongStrings(res);
     if (!kind) return res;
     const op = args && args.op ? String(args.op) : null;
     const want = !!(args && args.receipt === 'min' && (op === null || ops.includes(op)));

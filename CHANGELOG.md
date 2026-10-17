@@ -1,4 +1,20 @@
-## [未发布]
+## [0.8.0] - 2026-10-17
+
+### 第三轮（二轮实测复核后的必修 + 3 条小决定）
+
+- **§6 护栏搬到 AI 那道门**（原实现只挂在 HTTP 面板的 `sendJson` 上 ⇒ AI 走的是另一扇门 ✗）：
+  `index.js` 的工具出口在 `withFallbackCode` 之后、`minifyReceipt` 之前过 `truncateLongStrings`；**catch 早退**那条也覆盖。
+- 截断四条规矩：**按字段名**（只截 `error`/`note`/`hint`/`nextStep`/`echoed` 这类文案 ⇒ 探针源码 / 素材 base64 / `read` 的 `text` 一律不动）·
+  **头 + 尾都留**（开头路径与结尾 `（ENOENT）` 都看得见）· **幂等** · **纯函数**（返回新对象，不改入参 —— 有的回执是 `Object.freeze` 的）。
+- `mountTo` 没命中 ⇒ **`mount: null`**；`containerIdNote` 补「这个号在 `.gil` 里根本不存在」的指路。
+
+### 面板（Client）：网格计算 + 存盘状态
+
+- 网格计算页：`color` 胶囊（**默认不带色号**，`colorName` 一直带）· 选中列表固定 190px（不再顶动网格）· `.gridbox` 补 `flex:0 0 auto`（不再越选越小）。
+- 「整体存盘状态」卡文案瘦身：说不清那种 ⇒ **「说不清：N / M 个比不出来 ⇒ 先存一次盘」** + 一句话理由；底部 `.gil` 说明压成一行。**状态机与其余三态一字未动**。
+
+门禁：`lint 0` · `typecheck 0` · `build-sim-play --check 0` · `test:fast` **40 套件 / 40 通过**（1 路跑）。
+
 
 ### 第二轮（2026-10-16）· 实测复核后的 1 条回归 + 4 条缺口 + 1 条护栏
 
